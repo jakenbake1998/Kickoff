@@ -1,0 +1,4 @@
+*.zip
+example-output/
+__pycache__/
+*.pyc
