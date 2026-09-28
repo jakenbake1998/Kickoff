@@ -42,5 +42,6 @@ The full list is in the `jake-editing-rules` skill. The ones code changes most o
 - Sync sequences are 3840x2160, one take per video track, and the song starts at 01:00:00:00. The Edit sequence uses plain nests (not multicam source sequences) with multicam enabled.
 - Label colors: A Iris, B Mango, C Rose, then any other distinct colors.
 - Camera audio stays audible: keep every channel, with the synced scratch channel on top.
-- Output goes in a `Kickoff Exports` folder (older runs used `Premiere Sync`, which is still found).
+- The project XML goes where Jake picks in the window ("Export XML to"). If he picks nothing, it goes at the top of the drive the footage is on (`/Volumes/<drive>`, the window passes `--xml-dir drive`). Footage on the Mac's own disk falls back to `Kickoff Exports`.
+- Reports and the project state file (`kickoff-project.json`) always go in `Kickoff Exports` inside the shoot folder (older runs used `Premiere Sync`, which is still found).
 - Proxy, preview, render, Generations and Exports folders are skipped when scanning.
