@@ -26,7 +26,7 @@ body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--body);-webkit-use
 .titlebar{height:38px;-webkit-app-region:drag;display:flex;align-items:center;justify-content:center;color:var(--muted);font-weight:600;font-size:13px;border-bottom:1px solid var(--line)}
 .native .titlebar{display:none}
 .native main{height:100%}
-main{height:calc(100% - 38px);overflow-y:auto;padding:18px 24px 18px;display:flex;flex-direction:column;gap:14px}
+main{height:calc(100% - 38px);overflow-y:auto;padding:clamp(18px,3vh,36px) 32px 20px;display:flex;flex-direction:column;gap:20px}
 .brand{display:flex;align-items:center;gap:14px}
 .logo{width:48px;height:48px;border-radius:12px;background:var(--accent);display:grid;place-items:center;flex:none}
 .logo svg{width:34px;height:34px}
@@ -175,32 +175,39 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
 button:disabled{opacity:.45;cursor:default;filter:none}
 
 /* music video: song -> sync to -> footage rows */
-.jobs{display:grid;gap:10px}
-.job{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1.35fr) 30px;gap:10px;align-items:stretch}
-.box{border:1.5px dashed color-mix(in srgb,var(--accent) 55%,transparent);border-radius:12px;padding:12px 14px;min-height:92px;
-  background:color-mix(in srgb,var(--accent) 6%,transparent);display:flex;flex-direction:column;justify-content:center;gap:4px;cursor:pointer;min-width:0;
-  transition:background .12s,border-color .12s}
+.jobs{display:grid;gap:14px}
+.job{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1.35fr) 30px;gap:14px;align-items:stretch}
+.job.one{grid-template-columns:minmax(0,1fr) auto minmax(0,1.35fr)}
+/* the two drop boxes are the way in: big, centred, with a large icon */
+.box{border:2px dashed color-mix(in srgb,var(--accent) 60%,transparent);border-radius:16px;padding:22px 24px;min-height:clamp(140px,17.5vh,230px);
+  background:color-mix(in srgb,var(--accent) 7%,transparent);display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;gap:6px;cursor:pointer;min-width:0;transition:background .12s,border-color .12s}
+.box .big{width:60px;height:60px;border-radius:50%;display:grid;place-items:center;margin-bottom:6px;color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.box .big svg{width:28px;height:28px}
+.box .t{font:700 20px/1.2 var(--display)}
+.box.filled .big{background:var(--line)}
 .box:hover,.box.over{background:color-mix(in srgb,var(--accent) 15%,transparent);border-color:var(--accent);border-style:solid}
 .box.filled{border-style:solid;border-color:var(--line);background:var(--panel)}
 .box.filled:hover,.box.filled.over{border-color:var(--accent)}
 .box .k{font-size:13px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:6px}
 .box .k svg{color:var(--accent)}
-.box .v{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.box .v{font-weight:600;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
 .box .v.ph{color:var(--muted);font-weight:500}
-.box .sub{font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chips{display:flex;flex-wrap:wrap;gap:5px}
+.box .sub{font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.chips{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;max-width:100%}
 .chipf{display:inline-flex;align-items:center;gap:2px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 2px 2px 8px;font-size:12.5px;font-weight:600}
 .chipf span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chipf button,.box .clr{border:0;background:none;color:var(--muted);padding:0 6px;font-size:14px;line-height:1.3;border-radius:4px}
 .chipf button:hover,.box .clr:hover{color:var(--ink);background:var(--line)}
-.box .clr{align-self:flex-start;margin-left:-6px;font-size:12px;font-weight:600}
-.syncto{display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--accent);font-size:13px;font-weight:700;gap:2px}
+.box .clr{font-size:12px;font-weight:600;margin-top:2px}
+.syncto{display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--accent);font-size:13.5px;font-weight:700;gap:4px;padding:0 2px}
 .job .rowx{border:0;background:none;color:var(--muted);font-size:17px;padding:0;border-radius:6px;align-self:center;height:30px}
 .job .rowx:hover{color:var(--ink);background:var(--line)}
-.addjob{justify-self:start;background:none;border:1px dashed var(--line);color:var(--muted)}
+.addjob{justify-self:start;background:none;border:1px dashed var(--line);color:var(--muted);padding:7px 14px}
 .addjob:hover{color:var(--ink);border-color:var(--muted)}
 .jobn{font-size:13px;color:var(--muted);font-weight:600;margin-bottom:-4px}
-@media (max-width:560px){.job{grid-template-columns:minmax(0,1fr) 30px}.job .syncto{grid-column:1;flex-direction:row;gap:6px}.job .box.foot{grid-column:1}.job .rowx{grid-row:1;grid-column:2}}
+@media (max-width:560px){.job{grid-template-columns:minmax(0,1fr) 30px}.job .syncto{grid-column:1;flex-direction:row;gap:6px}.job .box.footage{grid-column:1}.job .rowx{grid-row:1;grid-column:2}}
 .batch{display:grid;gap:8px}
 .export{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 8px 8px 14px}
 .export .k{font-size:13px;color:var(--muted);font-weight:600;flex:none}
@@ -232,6 +239,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .empty{color:var(--muted);text-align:center;padding:48px 12px;border:1px dashed var(--line);border-radius:12px}
 /* one screen, no page scroll: long lists scroll inside their own box instead */
 #jobs{max-height:40vh;overflow-y:auto;padding-right:2px}
+#vRun{min-height:0}
+#vRun>*{flex:none}
+#vRun>#hints{flex:0 1 auto;min-height:0;overflow-y:auto}
+/* spare height is shared above the content and above the buttons, so a short screen sits mid-window */
+#vRun>.vtop{margin-top:auto;margin-bottom:-16px;height:0}
 #vHist,#vSet{display:flex;flex-direction:column;gap:12px;flex:1;min-height:0}
 #vHist[hidden],#vSet[hidden]{display:none!important}
 #histList{flex:1;min-height:0;overflow-y:auto;align-content:start}
@@ -382,7 +394,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div class="spane" id="pane-sync" hidden></div>
   </section>
 
-  <section id="vRun" style="display:flex;flex-direction:column;gap:14px;flex:1">
+  <section id="vRun" style="display:flex;flex-direction:column;gap:16px;flex:1">
+  <div class="vtop" aria-hidden="true"></div>
 
   <div class="jobs" id="jobsWrap">
     <div class="jobs" id="jobs"></div>
@@ -653,14 +666,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       sb.className = "box song" + (j.song ? " filled" : "");
       sb.dataset.kind = "song"; sb.dataset.row = i;
       sb.setAttribute("role", "button"); sb.tabIndex = 0;
-      sb.innerHTML = '<div class="k">' + ICON_SONG + ' Song</div>';
+      sb.innerHTML = '<div class="big">' + ICON_SONG + '</div><div class="t">Song</div>';
       var v = document.createElement("div");
       v.className = "v" + (j.song ? "" : " ph");
-      v.textContent = j.song ? base(j.song) : "Drop the song here";
+      v.textContent = j.song ? base(j.song) : "Drop the song here, or click to choose it";
       var sub = document.createElement("div");
       sub.className = "sub";
       sub.textContent = j.song ? parent(j.song) : j.footage.length ? "or leave it: Kickoff looks in the footage's Music folder"
-        : "or click to choose it";
+        : "WAV, AIFF, MP3 or any other audio file";
       sb.append(v, sub);
       if (j.song) {
         var c = document.createElement("button");
@@ -675,10 +688,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       mid.innerHTML = '<span>sync to</span><svg width="22" height="14" viewBox="0 0 22 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 7h19M14 1l6 6-6 6"/></svg>';
       // footage box
       var fb = document.createElement("div");
-      fb.className = "box foot" + (j.footage.length ? " filled" : "");
+      fb.className = "box footage" + (j.footage.length ? " filled" : "");
       fb.dataset.kind = "footage"; fb.dataset.row = i;
       fb.setAttribute("role", "button"); fb.tabIndex = 0;
-      fb.innerHTML = '<div class="k">' + ICON_FOLDER + ' Footage</div>';
+      fb.innerHTML = '<div class="big">' + ICON_FOLDER + '</div><div class="t">Footage</div>';
       if (j.footage.length) {
         var chips = document.createElement("div");
         chips.className = "chips";
@@ -701,10 +714,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       } else {
         var v2 = document.createElement("div");
         v2.className = "v ph";
-        v2.textContent = "Drop the footage here";
+        v2.textContent = "Drop the footage here, or click to choose it";
         var s2 = document.createElement("div");
         s2.className = "sub";
-        s2.textContent = "a whole folder, a day, cards or clips. Only video and audio are used";
+        s2.textContent = "A whole shoot folder, a day, cards or clips";
         fb.append(v2, s2);
       }
       fb.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "footage", row: i }); });
@@ -712,13 +725,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       rx.className = "rowx";
       rx.textContent = "×";
       rx.title = "Remove this music video";
-      rx.hidden = jobs.length === 1 && !j.song && !j.footage.length;
+      rx.hidden = jobs.length === 1;          // one row: its own Remove buttons clear it
       rx.addEventListener("click", function () {
         jobs.splice(i, 1);
         if (!jobs.length) jobs.push({ song: null, footage: [] });
         renderStage();
       });
-      row.append(sb, mid, fb, rx);
+      row.append(sb, mid, fb);
+      if (rx.hidden) row.classList.add("one"); else row.append(rx);
       wrap.appendChild(row);
       if (j.song || j.footage.length) wrap.appendChild(nameField(j.name || "", function (v) { j.name = v; },
         j.footage.length ? projectName(j.footage) : "the footage folder's name"));
