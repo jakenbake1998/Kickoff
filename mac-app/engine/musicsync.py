@@ -77,6 +77,14 @@ def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
+EVENTS = False              # --events: progress as JSON lines on stdout, for the Kickoff window
+
+
+def event(kind, **data):
+    if EVENTS:
+        print("@@kickoff " + json.dumps(dict(data, event=kind)), flush=True)
+
+
 def run(cmd):
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -531,7 +539,7 @@ def offset_track(x, master, coarse, ov0, ov1, win=10.0, hop=2.5):
         c = t + win / 2
         guess = est + slope * hop if pts else est
         off, q = gcc_phat_offset(x, master, guess, t, t + win, search=search)
-        if off is not None and q > 4:
+        if off is not None and q > 7:              # chance peaks run 4-6: talk between passes
             pts.append((c, off, q))
             if len(pts) >= 2:
                 (c0, o0, _), (c1, o1, _) = pts[-2], pts[-1]
@@ -804,7 +812,7 @@ def pass_candidates(tc, off):
     for c, _ in sorted(found.items(), key=lambda kv: -kv[1]):
         if all(abs(c - o) > 5 for o in out):
             out.append(c)
-    return out[:16]
+    return out[:64]        # a long take can hold a dozen passes, each with its chorus copies
 
 
 def find_passes(master, h, t):
@@ -873,7 +881,17 @@ def pass_edges(xs, master, off, first, last, rivals=()):
     n = len(xs) / SR
     starts = [t for t in np.arange(max(0.0, first - 2.0), min(first + 4.0, n - 1.0), 0.1) if hit(t)]
     ends = [t for t in np.arange(max(0.0, last - 4.0), min(last + 3.0, n - 1.0), 0.1) if hit(t)]
-    return (starts[0] + 0.4 if starts else first), (ends[-1] + 0.5 if ends else last)
+    if not starts or not ends:
+        # the landmarks' first or last hit was chance (a drummer noodling between passes lines up
+        # with the song now and then): walk in from that side to where the waveform really matches
+        coarse = [t for t in np.arange(first, max(first, last - 1.0), 0.5) if hit(t)]
+        if not coarse:
+            return first, last
+        if not starts:
+            starts = [t for t in np.arange(max(0.0, coarse[0] - 1.0), coarse[0] + 0.05, 0.1) if hit(t)]
+        if not ends:
+            ends = [t for t in np.arange(coarse[-1], min(coarse[-1] + 1.0, n - 1.0) + 0.05, 0.1) if hit(t)]
+    return starts[0] + 0.4, ends[-1] + 0.5
 
 
 def continues(xs, master, tc, off, a, b):
@@ -1007,10 +1025,14 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                 p["first"], p["last"] = pass_edges(xs, master, p["off"], p["first"], p["last"], rivals)
         known = [p["off"] for p in passes]
         bounds = [0.0] + [v for p in passes for v in (p["first"], p["last"])] + [xs_len]
-        for lo, hi in zip(bounds[::2], bounds[1::2]):
+        gaps = list(zip(bounds[::2], bounds[1::2]))
+        while gaps:                      # a long gap can hold several: search what's left around each
+            lo, hi = gaps.pop()
             sp = stray_song(xs, master, st, h, t, lo, hi, known)
             if sp:
                 passes.append(sp)
+                known.append(sp["off"])
+                gaps += [(lo, sp["first"]), (sp["last"], hi)]
         passes.sort(key=lambda p: p["first"])
     if len(passes) < 2:
         return False
@@ -1030,8 +1052,11 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
         e = p["ev"]
         part = Part(to_video(lo), to_video(hi), confidence=round(e["conf"], 1), aligned=e["A"],
                     runner_up=e["R"])
+        # refine and check over the stretch where this pass's song is heard, not the whole part:
+        # a long take can hold minutes of talk between passes, which would swamp the drift fit
+        hlo, hhi = (max(lo, p["first"] - 0.5), min(hi, p["last"] + 0.5)) if xs is not None else (lo, hi)
         if p["good"]:
-            o, part.drift_ms, part.refine, ov = refine_offset(xs, master, p["off"], lo, hi)
+            o, part.drift_ms, part.refine, ov = refine_offset(xs, master, p["off"], hlo, hhi)
             part.offset = o - aoff
             part.status = "placed"
             if xs is not None:
@@ -1042,11 +1067,11 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
         else:
             part.status = "not placed"
             ambiguous = e["R"] and (e["R"] - e["N"]) > 0.5 * (e["A"] - e["N"])
-            first = repeat_pick(xs, master, p["off"], e["runner_up_offset"], lo, hi) \
+            first = repeat_pick(xs, master, p["off"], e["runner_up_offset"], hlo, hhi) \
                 if ambiguous and st.place_repeats else None
             if first is not None:
                 other = e["runner_up_offset"] if first == p["off"] else p["off"]
-                o, part.drift_ms, part.refine, ov = refine_offset(xs, master, first, lo, hi)
+                o, part.drift_ms, part.refine, ov = refine_offset(xs, master, first, hlo, hhi)
                 part.offset, part.status, part.repeat_alt = o - aoff, "placed", other - aoff
                 part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms, span=ov[1] - ov[0]))
                 part.notes.append("%s: placed at the first copy, also fits at song %.1fs"
@@ -1908,8 +1933,11 @@ def main(argv=None):
                     help="rewrite media paths in the XML, e.g. /mnt/footage=/Volumes/SSD/Shoot "
                          "or /mnt/footage=D:/Shoot (repeatable)")
     ap.add_argument("-j", "--jobs", type=int, default=max(1, min(8, os.cpu_count() or 2)))
+    ap.add_argument("--events", action="store_true", help=argparse.SUPPRESS)   # for the Kickoff window
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
+    global EVENTS
+    EVENTS = args.events
     if args.sync_size == "first":
         args.sync_size = None
     else:
@@ -1960,6 +1988,7 @@ def main(argv=None):
     os.makedirs(args.out, exist_ok=True)
 
     log("Indexing master %s" % args.master)
+    event("stage", text="Listening to the song")
     try:
         master = MasterIndex(load_audio(args.master))
     except RuntimeError as e:
@@ -1970,9 +1999,12 @@ def main(argv=None):
     if not clips:
         sys.exit("error: no video files found in %s" % args.clips)
     log("Probing %d clips" % len(clips))
+    event("stage", text="Reading %d clips" % len(clips))
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         list(ex.map(probe, clips))
 
+    event("start", project=project_name, folder=args.clips, song=os.path.basename(args.master),
+          song_duration=round(master.duration, 2), clips=len(clips), version=VERSION)
     st = Settings(threshold=args.threshold, min_hashes=args.min_landmarks, max_fps=args.max_fps,
                   place_repeats=args.place_repeats)
     log("Matching")
@@ -2001,6 +2033,8 @@ def main(argv=None):
             else:
                 res = "-- " + "; ".join(c.reasons)
             log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, res))
+            event("clip", done=done, total=len(clips), file=c.rel, status=c.status,
+                  passes=len(c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "")
 
     for c in clips:                     # a take with one pass of the song is one Part covering it all
         if c.status == "placed" and not c.split:
@@ -2036,6 +2070,7 @@ def main(argv=None):
         audio_bins[audio_bin(p)].append(Media(p, seq_fps, dur, has_video=False, channels=ch, rate=rate))
     captured = [m.path for m in audio_bins["Captured"]]
 
+    event("stage", text="Writing the Premiere project")
     proj_file = re.sub(r"[^\w .-]+", "_", project_name) + ".xml"
     write_xml(build_project(project_name, clips, cams, seq_fps, preroll, master_media, audio_bins, args),
               os.path.join(args.out, proj_file))
@@ -2056,6 +2091,21 @@ def main(argv=None):
     write_reports(clips, args.out, seq_fps, preroll, args, cam_files, labels, captured)
     log("Wrote sync_report.csv and sync_report.md")
     log("Placed %d of %d clips." % (len(placed), len(clips)))
+    cam_events = []
+    for letter, cl in cams:
+        pl = [(c, p) for c in cl if c.status == "placed" for p in c.parts if p.status == "placed"]
+        spans = sorted([round(p.offset + p.src_in * c.speed, 2),
+                        round(p.offset + p.src_out * c.speed, 2)] for c, p in pl)
+        cam_events.append(dict(letter=letter, name=cam_bin_name(letter, cl[0].model), label=camera_label(letter),
+                               clips=len(cl), synced=sum(c.status == "placed" for c in cl), spans=spans))
+    aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH
+                                for c in clips if c.status != "placed")
+    event("done", project=project_name, out=args.out, xml=os.path.join(args.out, proj_file),
+          report=os.path.join(args.out, "sync_report.md"), song_duration=round(master.duration, 2),
+          clips=len(clips), synced=len(placed), cameras=cam_events,
+          set_aside=[dict(reason=r, count=n) for r, n in aside.most_common()],
+          restarted=sum(1 for c in clips if c.split),
+          check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None))
 
 
 if __name__ == "__main__":

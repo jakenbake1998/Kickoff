@@ -1,0 +1,44 @@
+#!/bin/bash
+# Run by the Kickoff window at launch, in the background: fetch the newest engine, window page and
+# app source from GitHub. The engine applies right away, the window from the next launch. When the
+# app source changed it is recompiled; the new app is swapped in only if it builds.
+# Prints one line for the window's footer when something was updated.
+SUPPORT="$HOME/Library/Application Support/Kickoff"
+APP="$1"
+PY="$SUPPORT/venv/bin/python3"
+BASE="$(cat "$SUPPORT/update-url.txt" 2>/dev/null)"
+[ -n "$BASE" ] || exit 0
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+get() { curl -fsSL --max-time 20 "$BASE/$1" -o "$TMP/$(basename "$1")" 2>/dev/null; }
+changed=""
+
+if get musicsync.py && "$PY" -m py_compile "$TMP/musicsync.py" 2>/dev/null \
+   && ! cmp -s "$TMP/musicsync.py" "$SUPPORT/musicsync.py"; then
+  mv "$TMP/musicsync.py" "$SUPPORT/musicsync.py.upd" && mv "$SUPPORT/musicsync.py.upd" "$SUPPORT/musicsync.py"
+  changed="engine $("$PY" "$SUPPORT/musicsync.py" --version 2>/dev/null)"
+fi
+for f in kickoff-gui-run.sh kickoff-update.sh; do
+  if get "mac-app/$f" && head -1 "$TMP/$f" | grep -q '^#!/bin/bash' && ! cmp -s "$TMP/$f" "$SUPPORT/$f"; then
+    cp "$TMP/$f" "$SUPPORT/$f.upd" && mv "$SUPPORT/$f.upd" "$SUPPORT/$f"
+  fi
+done
+if get mac-app/ui/index.html && grep -q "window.Kickoff" "$TMP/index.html" \
+   && ! cmp -s "$TMP/index.html" "$SUPPORT/ui/index.html"; then
+  cp "$TMP/index.html" "$SUPPORT/ui/index.html.upd" && mv "$SUPPORT/ui/index.html.upd" "$SUPPORT/ui/index.html"
+  changed="${changed:+$changed, }window"
+fi
+if [ -n "$APP" ] && [ -d "$APP/Contents/MacOS" ] && get mac-app/Kickoff.swift \
+   && ! cmp -s "$TMP/Kickoff.swift" "$SUPPORT/Kickoff.swift"; then
+  if xcrun swiftc -O -o "$TMP/Kickoff" "$TMP/Kickoff.swift" -framework Cocoa -framework WebKit >/dev/null 2>&1; then
+    cp "$TMP/Kickoff" "$APP/Contents/MacOS/Kickoff.upd" && mv "$APP/Contents/MacOS/Kickoff.upd" "$APP/Contents/MacOS/Kickoff"
+    codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+    cp "$TMP/Kickoff.swift" "$SUPPORT/Kickoff.swift"
+    changed="${changed:+$changed, }app"
+  fi
+fi
+case "$changed" in
+  *window*|*app*) echo "Updated: $changed. The new window shows next time you open Kickoff." ;;
+  ?*) echo "Updated: $changed" ;;
+esac
+exit 0

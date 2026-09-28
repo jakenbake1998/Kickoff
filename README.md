@@ -119,14 +119,19 @@ camera kept rolling, each pass is found on its own:
 - A take where the song stops and never restarts syncs as one clip, and the report's "Worth a look"
   section flags the stretch where the audio no longer matches.
 
+Long takes work the same way: an action camera left rolling for half an hour, with the song played a
+dozen times and minutes of talk between plays, is cut into one part per play. Each part is checked
+and drift-corrected only over the stretch where its song is heard, so the talk around it can't pull
+the placement off.
+
 Tested with `tests/stress_passes.py 300`: 300 random single, restarted, paused, jumped and
 three-pass takes (600 passes, 3 to 15 dB signal-to-noise, with and without a live drummer). No pass
-was placed at a wrong position. 543 were placed exactly and 39 chorus-only passes at a flagged
-chorus copy. 17 were left unplaced: passes that are mostly repeated chorus with 3 seconds or less
-of anything else, where neither position can be confirmed. One take whose two passes sat only
-0.1 s apart in the song was placed as one clip, 1 frame off. The research thread's independent
-generator (`sync-research/crosscheck_builder.py 60 11`, different layouts, rooms and scoring) also
-finds no wrong placements apart from the flagged chorus copies.
+was placed at a wrong position. 544 were placed exactly and 55 chorus-only passes at a flagged
+chorus copy. One pass was left unplaced. `tests/long_take.py` builds 20 to 27 minute takes with 12
+plays of the song and 30 to 150 seconds of the drummer and room noise between them: on
+ten of them, all 120 plays were placed exactly. The research thread's independent generator
+(`sync-research/crosscheck_builder.py 60 11`, different layouts, rooms and scoring) also finds no
+wrong placements apart from the flagged chorus copies.
 
 ## Repeated chorus
 

@@ -24,8 +24,11 @@ fi
 "$SUPPORT/venv/bin/python3" -m pip install --quiet --upgrade pip
 "$SUPPORT/venv/bin/python3" -m pip install --quiet --upgrade numpy scipy
 cp engine/musicsync.py "$SUPPORT/musicsync.py"
-cp kickoff-run.sh "$SUPPORT/kickoff-run.sh"
-chmod +x "$SUPPORT/kickoff-run.sh"
+cp kickoff-run.sh kickoff-gui-run.sh kickoff-update.sh Kickoff.swift "$SUPPORT/"
+chmod +x "$SUPPORT/kickoff-run.sh" "$SUPPORT/kickoff-gui-run.sh" "$SUPPORT/kickoff-update.sh"
+mkdir -p "$SUPPORT/ui/fonts"
+cp ui/index.html "$SUPPORT/ui/"
+cp ui/fonts/* "$SUPPORT/ui/fonts/"
 # where automatic updates come from (raw files of the GitHub repository)
 echo "https://raw.githubusercontent.com/jakenbake1998/Kickoff/main" > "$SUPPORT/update-url.txt"
 echo "Engine installed."
@@ -45,9 +48,25 @@ fi
 echo "ffmpeg: $(command -v ffmpeg)"
 
 mkdir -p "$HOME/Applications"
-rm -rf "$HOME/Applications/Kickoff.app"
-osacompile -o "$HOME/Applications/Kickoff.app" Kickoff.applescript
+APP="$HOME/Applications/Kickoff.app"
+BUILD="$(mktemp -d)/Kickoff.app"
+mkdir -p "$BUILD/Contents/MacOS" "$BUILD/Contents/Resources"
+echo "Building the Kickoff window..."
+if xcrun swiftc -O -o "$BUILD/Contents/MacOS/Kickoff" Kickoff.swift -framework Cocoa -framework WebKit; then
+  cp Info.plist "$BUILD/Contents/Info.plist"
+  cp icon/AppIcon.icns "$BUILD/Contents/Resources/AppIcon.icns"
+  codesign --force --sign - "$BUILD" >/dev/null 2>&1 || true
+  rm -rf "$APP"
+  mv "$BUILD" "$APP"
+  touch "$APP"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
+else
+  # no Swift compiler: fall back to the plain droplet (folder picker + Terminal)
+  echo "The window couldn't be built on this Mac; installing the simple version instead."
+  rm -rf "$APP"
+  osacompile -o "$APP" Kickoff.applescript
+fi
 echo
 echo "Installed ~/Applications/Kickoff.app"
-echo "Drag it to your Dock, then drop a shoot folder on it."
-open -R "$HOME/Applications/Kickoff.app"
+echo "Drag it to your Dock, then drop a shoot folder on it (or on its window)."
+open "$APP"

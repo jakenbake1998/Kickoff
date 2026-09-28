@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kickoff</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+@font-face{font-family:"Bricolage Grotesque";font-weight:700;src:url(fonts/bricolage-700.woff2) format("woff2")}
+@font-face{font-family:"IBM Plex Sans";font-weight:100 700;src:url(fonts/plex-sans.woff2) format("woff2")}
+:root{
+  --bg:#17191d; --panel:#20242a; --ink:#eef0f3; --muted:#9097a3; --line:#2e333b;
+  --accent:#f0962e; --on-accent:#ffffff; --good:#6fcf97; --warn:#f2c14e; --bad:#ef6b6b;
+  --iris:#7a6cf0; --mango:#f0962e; --rose:#e2708f; --caribbean:#1fb5a4; --forest:#4f9d57;
+  --lavender:#b48ee6; --cerulean:#3d8fe0; --yellow:#e8c547; --magenta:#d946c4; --tan:#c9a57a;
+  --violet:#8c5ce6; --purple:#9b59b6; --blue:#3a6fe0; --teal:#2aa198; --green:#5cb85c; --brown:#9c6b43;
+  --display:"Bricolage Grotesque",ui-rounded,-apple-system,system-ui,sans-serif;
+  --body:"IBM Plex Sans",-apple-system,system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--body);-webkit-user-select:none;user-select:none;cursor:default;overflow:hidden}
+/* the window's title bar is transparent: leave room for the traffic lights, and let it drag */
+.titlebar{height:38px;-webkit-app-region:drag;display:flex;align-items:center;justify-content:center;color:var(--muted);font-weight:600;font-size:13px;border-bottom:1px solid var(--line)}
+.native .titlebar{display:none}
+.native main{height:100%}
+main{height:calc(100% - 38px);overflow-y:auto;padding:22px 24px 24px;display:flex;flex-direction:column;gap:18px}
+.brand{display:flex;align-items:center;gap:14px}
+.logo{width:48px;height:48px;border-radius:12px;background:var(--accent);display:grid;place-items:center;flex:none}
+.logo svg{width:26px;height:26px}
+h1{margin:0;font:700 26px/1 var(--display);letter-spacing:-.01em}
+.tag{color:var(--muted);margin-top:5px}
+
+.drop{border:1.5px dashed color-mix(in srgb,var(--accent) 70%,transparent);border-radius:14px;padding:18px;display:flex;gap:16px;align-items:center;
+  background:color-mix(in srgb,var(--accent) 8%,transparent);transition:background .15s,border-color .15s}
+.drop.idle{cursor:pointer;min-height:150px;justify-content:center;flex-direction:column;text-align:center;gap:8px}
+.drop.idle:hover,.drop.over{background:color-mix(in srgb,var(--accent) 16%,transparent);border-color:var(--accent);border-style:solid}
+.drop svg{flex:none;color:var(--accent)}
+.drop .p{font-weight:600;font-size:15px}
+.drop .s{color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
+kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding:0 5px;color:var(--muted)}
+
+.prog{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.prog i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.prog.busy i{width:30%;animation:slide 1.2s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+.status{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:12.5px;margin-top:-10px}
+.status span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status span:last-child{font-variant-numeric:tabular-nums;flex:none}
+
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.stat b{display:block;font:700 26px/1.1 var(--display);font-variant-numeric:tabular-nums}
+.stat span{font-size:12px;color:var(--muted)}
+
+.cams{display:grid;gap:9px}
+.cam{display:grid;grid-template-columns:minmax(90px,150px) 1fr 52px;gap:12px;align-items:center;font-size:13px}
+.cam .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:7px}
+.lane{position:relative;height:18px;border-radius:4px;background:var(--panel);border:1px solid var(--line);overflow:hidden}
+.lane i{position:absolute;top:3px;bottom:3px;border-radius:2px;opacity:.75}
+.cam em{font-style:normal;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.axis{display:grid;grid-template-columns:minmax(90px,150px) 1fr 52px;gap:12px;font-size:11px;color:var(--muted);margin-top:-4px}
+.axis div{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
+
+.list{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;display:grid;gap:5px}
+.list div{display:flex;justify-content:space-between;gap:12px}
+.list span:last-child{color:var(--muted);text-align:right}
+.list .h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+
+.error{border:1px solid color-mix(in srgb,var(--bad) 60%,transparent);background:color-mix(in srgb,var(--bad) 10%,transparent);border-radius:10px;padding:12px 14px;display:grid;gap:4px}
+.error b{color:var(--bad)}
+.error p{margin:0;font-family:var(--mono);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
+
+.btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:auto;padding-top:4px}
+button{font:600 13.5px var(--body);padding:9px 16px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+button:hover{border-color:var(--muted)}
+button.pri{background:var(--accent);color:var(--on-accent);border-color:transparent}
+button.pri:hover{filter:brightness(1.08)}
+button.quiet{background:none;border-color:transparent;color:var(--muted);margin-left:auto}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+details{font-size:12.5px;color:var(--muted)}
+summary{cursor:pointer;width:max-content}
+pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+  font:11.5px/1.5 var(--mono);color:#c9ced6;white-space:pre-wrap;-webkit-user-select:text;user-select:text}
+.foot{font-size:11.5px;color:var(--muted);display:flex;justify-content:space-between;gap:10px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="titlebar" id="title">Kickoff</div>
+<main>
+  <div class="brand">
+    <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-2-5H5z"/><path d="M3 9v10a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9"/><path d="M8 4l2 5M13 4l2 5"/></svg></div>
+    <div><h1>Kickoff</h1><div class="tag">Drop a shoot folder. Get a Premiere project.</div></div>
+  </div>
+
+  <div class="drop idle" id="drop" role="button" tabindex="0" aria-label="Choose a shoot folder">
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    <div><div class="p" id="dropTitle">Drop a shoot folder here</div><div class="s" id="dropSub">or click to choose one &nbsp;<kbd>⌘O</kbd></div></div>
+  </div>
+
+  <div class="list" id="hints">
+    <div class="h">What it builds</div>
+    <div><span>Every clip synced to the song by its audio</span><span>A Cam_Sync, B Cam_Sync&hellip;</span></div>
+    <div><span>Takes where the song restarted, split into passes</span><span>own tracks</span></div>
+    <div><span>Your bins, Breakup and Edit sequences, label colors</span><span>one .xml</span></div>
+    <div><span>Sync sequences in 4K, every clip scaled to fit</span><span>3840x2160</span></div>
+  </div>
+
+  <div id="run" hidden>
+    <div style="display:grid;gap:18px">
+      <div class="prog" id="prog"><i id="bar"></i></div>
+      <div class="status"><span id="stage">Starting</span><span id="count"></span></div>
+    </div>
+  </div>
+
+  <div class="stats" id="stats" hidden>
+    <div class="stat"><b id="sSynced">0</b><span>clips synced</span></div>
+    <div class="stat"><b id="sCams">0</b><span id="sCamsL">cameras</span></div>
+    <div class="stat"><b id="sAside">0</b><span>set aside</span></div>
+  </div>
+
+  <div id="camsWrap" hidden>
+    <div class="cams" id="cams"></div>
+  </div>
+
+  <div class="list" id="aside" hidden></div>
+  <div class="error" id="error" hidden><b id="errTitle">Kickoff hit an error</b><p id="errText"></p></div>
+
+  <details id="details" hidden><summary>Details</summary><pre class="log" id="log"></pre></details>
+
+  <div class="btns" id="btnsDone" hidden>
+    <button class="pri" id="bOpen">Open in Premiere</button>
+    <button id="bReport">Show report</button>
+    <button id="bReveal">Show in Finder</button>
+    <button class="quiet" id="bNew">New folder</button>
+  </div>
+  <div class="btns" id="btnsRun" hidden>
+    <button class="quiet" id="bCancel">Stop</button>
+  </div>
+  <div class="btns" id="btnsErr" hidden>
+    <button class="pri" id="bRetry">Try again</button>
+    <button class="quiet" id="bNew2">New folder</button>
+  </div>
+  <div class="foot" id="foot"><span id="ver"></span><span id="upd"></span></div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var post = function (msg) {
+    try { window.webkit.messageHandlers.kickoff.postMessage(msg); } catch (e) { console.log("bridge", msg); }
+  };
+  var CAM_COLORS = { Iris: "--iris", Mango: "--mango", Rose: "--rose", Caribbean: "--caribbean", Forest: "--forest",
+    Lavender: "--lavender", Cerulean: "--cerulean", Yellow: "--yellow", Magenta: "--magenta", Tan: "--tan",
+    Violet: "--violet", Purple: "--purple", Blue: "--blue", Teal: "--teal", Green: "--green", Brown: "--brown" };
+  // why a clip was set aside, in plain words, and where it ends up
+  var REASONS = [
+    [/^no audio/, "no audio (slow motion?)", "Footage bins"],
+    [/^slow motion/, "slow motion", "Footage bins"],
+    [/^high frame rate/, "high frame rate", "Footage bins"],
+    [/^no match/, "no match to the song (B-roll?)", "Footage bins"],
+    [/^audio track is silent/, "silent audio", "Footage bins"],
+    [/^ambiguous/, "fits two places in the song", "check report"],
+    [/^confidence/, "unsure match", "check report"],
+    [/^short burst/, "only a false start", "check report"],
+    [/^unreadable/, "can't be read (RED/BRAW?)", "check report"]
+  ];
+  var state = { folder: null, result: null, total: 0, synced: 0, aside: 0, logLines: [] };
+
+  var native = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kickoff);
+  if (native) document.body.classList.add("native");
+  function setTitle(t) { $("title").textContent = t; post({ cmd: "title", text: t }); }
+  function show(id, on) { $(id).hidden = !on; }
+  function plural(n, one, many) { return n + " " + (n === 1 ? one : (many || one + "s")); }
+  function clock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+  function base(p) { return String(p || "").replace(/\/+$/, "").split("/").pop(); }
+
+  function reset() {
+    state = { folder: null, result: null, total: 0, synced: 0, aside: 0, logLines: [] };
+    var d = $("drop");
+    d.className = "drop idle";
+    $("dropTitle").textContent = "Drop a shoot folder here";
+    $("dropSub").innerHTML = "or click to choose one &nbsp;<kbd>⌘O</kbd>";
+    show("hints", true);
+    ["run", "stats", "camsWrap", "aside", "error", "details", "btnsDone", "btnsRun", "btnsErr"].forEach(function (id) { show(id, false); });
+    $("log").textContent = "";
+    setTitle("Kickoff");
+  }
+
+  function started(folder) {
+    reset();
+    state.folder = folder;
+    var d = $("drop");
+    d.className = "drop";
+    $("dropTitle").textContent = base(folder);
+    $("dropSub").textContent = folder;
+    setTitle("Kickoff — " + base(folder));
+    $("prog").className = "prog busy";
+    $("bar").style.width = "";
+    $("stage").textContent = "Checking for updates";
+    $("count").textContent = "";
+    show("hints", false);
+    show("run", true); show("btnsRun", true); show("details", true);
+  }
+
+  function setCounts() {
+    $("sSynced").textContent = state.synced;
+    $("sAside").textContent = state.aside;
+  }
+
+  function onEvent(e) {
+    if (e.event === "stage") {
+      $("stage").textContent = e.text;
+    } else if (e.event === "start") {
+      state.total = e.clips;
+      $("dropSub").textContent = state.folder + " · song: " + e.song;
+      $("stage").textContent = "Syncing " + plural(e.clips, "clip") + " to " + e.song;
+      $("count").textContent = "0 / " + e.clips;
+      $("prog").className = "prog";
+      $("bar").style.width = "0%";
+      $("sCams").textContent = "–";
+      $("sCamsL").textContent = "cameras";
+      show("stats", true);
+      $("ver").textContent = "Engine " + e.version;
+    } else if (e.event === "clip") {
+      if (e.status === "placed") state.synced++; else state.aside++;
+      setCounts();
+      $("bar").style.width = (100 * e.done / e.total).toFixed(1) + "%";
+      $("count").textContent = e.done + " / " + e.total;
+      $("stage").textContent = base(e.file) + (e.status === "placed"
+        ? (e.passes > 1 ? " · song restarted, " + e.passes + " passes" : " · synced")
+        : " · " + e.reason);
+    } else if (e.event === "done") {
+      state.result = e;
+      finish(e);
+    }
+  }
+
+  function finish(e) {
+    $("prog").className = "prog";
+    $("bar").style.width = "100%";
+    $("stage").textContent = "Done. In Premiere the project imports into a bin; drag its contents to the top.";
+    $("count").textContent = e.clips + " / " + e.clips;
+    $("sSynced").textContent = e.synced;
+    $("sAside").textContent = e.clips - e.synced;
+    $("sCams").textContent = e.cameras.length;
+    $("sCamsL").textContent = e.cameras.length === 1 ? "camera" : "cameras";
+    show("stats", true);
+
+    var dur = e.song_duration || 1, cams = $("cams");
+    cams.innerHTML = "";
+    e.cameras.forEach(function (c) {
+      var color = "var(" + (CAM_COLORS[c.label] || "--muted") + ")";
+      var row = document.createElement("div");
+      row.className = "cam";
+      var name = document.createElement("span");
+      name.className = "n";
+      name.title = c.name;
+      name.innerHTML = '<span class="chip"></span>';
+      name.firstChild.style.background = color;
+      name.appendChild(document.createTextNode(c.name));
+      var lane = document.createElement("div");
+      lane.className = "lane";
+      c.spans.forEach(function (s) {
+        var a = Math.max(0, s[0]) / dur, b = Math.min(dur, s[1]) / dur;
+        if (b <= a) return;
+        var i = document.createElement("i");
+        i.style.left = (100 * a).toFixed(2) + "%";
+        i.style.width = (100 * (b - a)).toFixed(2) + "%";
+        i.style.background = color;
+        lane.appendChild(i);
+      });
+      var n = document.createElement("em");
+      n.textContent = c.synced + (c.synced === c.clips ? "" : "/" + c.clips);
+      n.title = c.synced + " of " + c.clips + " clips synced";
+      row.append(name, lane, n);
+      cams.appendChild(row);
+    });
+    var axis = document.createElement("div");
+    axis.className = "axis";
+    axis.innerHTML = "<span></span><div><span>0:00</span><span>song " + clock(dur / 2) + "</span><span>" + clock(dur) + "</span></div><span></span>";
+    cams.appendChild(axis);
+    show("camsWrap", e.cameras.length > 0);
+
+    var list = $("aside");
+    list.innerHTML = "";
+    var rows = [];
+    e.set_aside.forEach(function (r) {
+      var m = REASONS.find(function (x) { return x[0].test(r.reason); });
+      rows.push([r.count + " " + (m ? m[1] : r.reason), m ? m[2] : "check report"]);
+    });
+    if (e.restarted) rows.push([plural(e.restarted, "take") + " where the song restarted, split into passes", "own tracks"]);
+    if (e.check_chorus) rows.push([plural(e.check_chorus, "clip") + " only covering the chorus, placed at the first", "check chorus"]);
+    rows.forEach(function (r) {
+      var d = document.createElement("div");
+      var a = document.createElement("span"), b = document.createElement("span");
+      a.textContent = r[0]; b.textContent = r[1];
+      d.append(a, b);
+      list.appendChild(d);
+    });
+    show("aside", rows.length > 0);
+    show("btnsRun", false);
+    show("btnsDone", true);
+    $("bOpen").focus();
+  }
+
+  function onExit(code) {
+    if (code === 0 && state.result) return;
+    show("btnsRun", false);
+    $("prog").className = "prog";
+    if (code === -15 || code === 15) {        // stopped by the user
+      $("stage").textContent = "Stopped.";
+      $("errTitle").textContent = "Stopped";
+      $("errText").textContent = "Stopped before it finished, so no new project was written. Start it again when you are ready.";
+    } else {
+      $("stage").textContent = "Kickoff hit an error.";
+      $("errTitle").textContent = "Kickoff hit an error";
+      var errs = state.logLines.filter(function (l) { return /^error/.test(l); });
+      if (!errs.length) errs = state.logLines.filter(function (l) { return /Error|error/.test(l); });
+      $("errText").textContent = (errs.length ? errs.slice(-3) : state.logLines.slice(-4)).join("\n") || "exit code " + code;
+      $("details").open = true;
+    }
+    show("error", true);
+    show("btnsErr", true);
+  }
+
+  function onLog(line) {
+    state.logLines.push(line);
+    if (state.logLines.length > 2000) state.logLines.shift();
+    var log = $("log"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+    log.textContent += line + "\n";
+    if (atEnd) log.scrollTop = log.scrollHeight;
+  }
+
+  var running = function () { return !$("btnsRun").hidden; };
+  $("drop").addEventListener("click", function () { if (!running()) post({ cmd: "pick" }); });
+  $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick" }); });
+  $("bOpen").addEventListener("click", function () { post({ cmd: "premiere", path: state.result.xml }); });
+  $("bReport").addEventListener("click", function () { post({ cmd: "report", path: state.result.report }); });
+  $("bReveal").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.xml }); });
+  $("bNew").addEventListener("click", function () { reset(); post({ cmd: "pick" }); });
+  $("bNew2").addEventListener("click", function () { reset(); post({ cmd: "pick" }); });
+  $("bRetry").addEventListener("click", function () { if (state.folder) post({ cmd: "run", folder: state.folder }); });
+  $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
+
+  window.Kickoff = {
+    started: started,
+    event: onEvent,
+    log: onLog,
+    exit: onExit,
+    dragging: function (on) { if (!running()) $("drop").classList.toggle("over", !!on); },
+    info: function (i) {
+      if (i.version) $("ver").textContent = "Engine " + i.version;
+      if (i.update) $("upd").textContent = i.update;
+    },
+    reset: reset
+  };
+  post({ cmd: "ready" });
+})();
+</script>
+</body>
+</html>

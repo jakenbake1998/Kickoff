@@ -12,15 +12,22 @@ Drop a shoot folder on Kickoff and it writes, inside that folder, `Premiere Sync
    command there into Terminal, then run the installer again.
 4. Kickoff.app lands in your home Applications folder. Drag it to the Dock.
 
-Kickoff updates itself: each time it runs it fetches the latest engine from GitHub (it keeps the
-installed one when offline). Running the installer again also updates it.
+Kickoff updates itself from GitHub: the engine before every run, the window each time you open
+the app (the new window shows the next time). Offline, it keeps what's installed. Running the
+installer again also updates it.
 
 ## Use
 
-Drop the shoot folder on Kickoff (or double-click it and pick the folder). A Terminal window shows
-progress; the first time, macOS asks to let Kickoff control Terminal, click OK. When it finishes
-the `Premiere Sync` folder opens. In Premiere: File > Import the `.xml`, then drag the contents of
-the bin it creates up to the top level.
+Open Kickoff and drop the shoot folder on its window (or on the Dock icon, or click the drop area
+to choose one). The window shows each clip as it syncs, then the result: clips synced per camera,
+laid out along the song, and what was set aside and why. **Open in Premiere** opens the project
+XML in Premiere (and selects it in Finder); if Premiere doesn't pick it up, use File > Import on
+it, then drag the contents of the bin it creates up to the top level. **Show report** opens the
+sync report. **Details** shows the engine's log.
+
+The window is built on your Mac by the installer (it uses Apple's Command Line Tools). If that
+build fails, the installer puts in the simple version instead: a folder picker, then a Terminal
+window with progress.
 
 Folder conventions it understands:
 - the song: in a `Music` folder, or named master/song/mix, or the only audio file
