@@ -455,6 +455,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 @keyframes flash{0%{opacity:0}20%{opacity:1}100%{opacity:0}}
 @keyframes introSlide{from{transform:translateX(0)}to{transform:translateX(105%)}}
 @media (prefers-reduced-motion:reduce){#intro{display:none}}
+  .askwrap{position:fixed;inset:0;background:rgba(10,11,13,.62);display:flex;align-items:center;justify-content:center;z-index:60;padding:16px}
+  .askwrap[hidden]{display:none}
+  .ask{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px 26px;max-width:460px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .ask h3{margin:0 0 10px;font-family:var(--display);font-size:22px}
+  .ask p{margin:0 0 10px;line-height:1.45}
+  .ask .hint{color:var(--muted);font-size:14px}
+  .askbtns{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 </style>
 </head>
 <body>
@@ -607,6 +614,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
   <div class="btns" id="btnsRun" hidden>
     <button class="stop" id="bCancel"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor"/></svg>Stop</button>
+  </div>
+  <div class="askwrap" id="askCams" hidden>
+    <div class="ask" role="dialog" aria-modal="true" aria-labelledby="askTitle">
+      <h3 id="askTitle">No sound files</h3>
+      <p>There are no sound recordist's files in what you added. Sync the cameras to each other instead?</p>
+      <p class="hint">By timecode when the cameras have it, otherwise by their scratch audio. A Cam goes on V1, B Cam on V2, and nothing is trimmed.</p>
+      <div class="askbtns"><button class="quiet" id="bAskCancel">Cancel</button><button class="pri" id="bAskCams">Sync cameras together</button></div>
+    </div>
   </div>
   <div class="btns" id="btnsErr" hidden>
     <button class="pri" id="bRetry">Try again</button>
@@ -1079,7 +1094,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     var of = batch && batch.runs.length > 1 ? "Music video " + (batch.i + 1) + " of " + batch.runs.length + " · " : "";
     $("dropTitle").textContent = name;
     var nAudio = paths.filter(isSong).length;
-    $("dropSub").textContent = of + (mode === "narrative" ? (nAudio ? "with " + plural(nAudio, "audio file") : "audio from the folder")
+    var camsRun = batch && batch.runs[batch.i] && batch.runs[batch.i].mode === "cameras";
+    $("dropSub").textContent = of + (mode === "narrative" ? (camsRun ? "the cameras synced to each other" : nAudio ? "with " + plural(nAudio, "audio file") : "audio from the folder")
       : song ? "song: " + base(song) : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
     setTitle("Kickoff — " + name);
     $("prog").className = "prog busy";
@@ -1113,7 +1129,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function songOf(e) { var sg = state.paths.filter(isSong)[0]; return sg ? base(sg) : e.song || ""; }
   var miniEnd = null;              // a run ended while Settings or History was open: "done", "stopped" or "error"
   function updateMini() {
-    var wrap = $("tabsWrap"), live = running(), on = $("vRun").hidden && (live || !!miniEnd);
+    // the results stay one click away from Settings and History until New run
+    var shown = !running() && resultShowing() ? (!$("btnsDone").hidden || !$("batch").hidden ? "done" : "error") : null;
+    var end = miniEnd || shown;
+    var wrap = $("tabsWrap"), live = running(), on = $("vRun").hidden && (live || !!end);
     if (!$("vRun").hidden) miniEnd = null;
     if (on !== wrap.classList.contains("busy")) {
       wrap.classList.toggle("busy", on);
@@ -1127,9 +1146,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     }
     if (!on) return;
     var pct = state.total && state.done ? Math.min(100, 100 * state.done / state.total) : 0;
-    $("miniRun").className = "minirun" + (live ? "" : miniEnd === "done" ? " done" : " fail");
-    $("miniLabel").textContent = live ? "Back to syncing" : miniEnd === "done" ? "Done: see results"
-      : miniEnd === "stopped" ? "Stopped: see why" : "Kickoff hit an error: see why";
+    $("miniRun").className = "minirun" + (live ? "" : end === "done" ? " done" : " fail");
+    $("miniLabel").textContent = live ? "Back to syncing"
+      : end === "done" ? (mode === "setup" ? "Project ready: back to results" : "Sync complete: back to results")
+      : end === "stopped" ? "Stopped: see why" : "Kickoff hit an error: see why";
     $("miniTrack").className = "mtrack" + (live && !pct ? " busy" : "");
     $("miniBar").style.width = live ? (pct ? pct.toFixed(1) + "%" : "") : "100%";
     var left = live ? timeLeft() : "";
@@ -1532,8 +1552,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       }
     }
     todo([e.synced && e.mode !== "narrative" ? "In <b>" + esc(e.edit_name || e.project + "_Edit") + "</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : "",
-          e.mode === "narrative" && e.synced ? "Everything is in <b>" + esc(e.sync_name || e.project + "_Sync") + "</b>: each audio file with its clips over it." : ""]);
-    $("camsHead").textContent = e.mode === "narrative" ? "Where each camera has footage, audio file by audio file" : "Where each camera has footage in the song";
+          e.mode === "narrative" && e.synced ? "Everything is in <b>" + esc(e.sync_name || e.project + "_Sync") + "</b>: " +
+            (e.cams_together ? "each take with A Cam on V1 and the other cameras above." : "each audio file with its clips over it.") : ""]);
+    $("camsHead").textContent = e.mode === "narrative" ? (e.cams_together ? "Where each camera has footage, take by take" : "Where each camera has footage, audio file by audio file") : "Where each camera has footage in the song";
 
     var dur = e.song_duration || 1, cams = $("cams");
     cams.innerHTML = "";
@@ -1641,6 +1662,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function failed(code, stoppedByUser) {
+    var run = batch && batch.runs[batch.i];
+    if (!stoppedByUser && run && run.mode === "narrative" &&
+        state.logLines.some(function (l) { return /sound recordist's audio files/.test(l); })) {
+      show("btnsRun", false);                   // nothing to sync to: ask before anything shows as an error
+      $("askCams").hidden = false;
+      $("bAskCams").focus();
+      return;
+    }
     show("btnsRun", false);
     $("prog").className = "prog";
     if (code === -15 || code === 15) {        // stopped by the user
@@ -1872,6 +1901,20 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     batch = null; reset();
   });
   $("bStart").addEventListener("click", start);
+  $("bAskCams").addEventListener("click", function () {
+    $("askCams").hidden = true;
+    var run = batch && batch.runs[batch.i];
+    if (!run) return;
+    run.mode = "cameras";
+    runNext();
+  });
+  $("bAskCancel").addEventListener("click", function () {
+    $("askCams").hidden = true;
+    $("bBackBoxes").click();
+  });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && !$("askCams").hidden) $("bAskCancel").click();
+  });
   $("bStartOver").addEventListener("click", function () {   // "Nothing new": rebuild the same run from scratch
     if (!state.paths.length || running()) return;
     $("rebuild").checked = true;
