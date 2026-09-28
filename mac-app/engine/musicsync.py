@@ -3568,7 +3568,13 @@ def main(argv=None):
     # and every clip is shifted onto it; otherwise the matching version replaces it.
     song_note, sync_song, shift = "", args.master, None
     if args.master and not args.no_version_check:
-        others = song_versions(args.master, all_audio)
+        # only mixes that line up with the song all the way through count: a same-length file in the
+        # Music folder can be another song altogether
+        shifts = {p: song_shift(args.master, p) for p in song_versions(args.master, all_audio)}
+        for p, sh in shifts.items():
+            if sh is None:
+                log("Not another version of the song (doesn't line up with it): %s" % os.path.basename(p))
+        others = [p for p, sh in shifts.items() if sh is not None]
         if others:
             event("stage", text="Checking which version of the song the cameras match")
             log("Other versions of the song: %s" % ", ".join(os.path.basename(p) for p in others))
@@ -3579,15 +3585,10 @@ def main(argv=None):
             if won and won[0] != args.master and won[1][won[0]] >= 2 and \
                     won[1][won[0]] >= 2 * won[1].get(args.master, 0):
                 sync_song = won[0]
-                shift = song_shift(args.master, sync_song)
+                shift = shifts[sync_song]
                 a, b = os.path.basename(args.master), os.path.basename(sync_song)
-                if shift is not None:
-                    song_note = ("The cameras were shot to %s, not %s. Synced to it and placed on %s, "
-                                 "which lines up with it." % (b, a, a))
-                else:
-                    song_note = ("The cameras were shot to %s, not %s, and the two don't line up, so the "
-                                 "project uses %s." % (b, a, b))
-                    args.master = sync_song
+                song_note = ("The cameras were shot to %s, not %s. Synced to it and placed on %s, "
+                             "which lines up with it." % (b, a, a))
                 log(song_note)
     args.song_note = song_note
 
