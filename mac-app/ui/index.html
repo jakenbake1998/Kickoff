@@ -67,6 +67,45 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .axis{display:grid;grid-template-columns:minmax(90px,150px) 1fr 64px;gap:12px;font-size:11px;color:var(--muted);margin-top:-4px}
 .axis div{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
 
+/* the syncing screen: a big count, where the takes land in the song as they sync, and the last few clips */
+.rhead{display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap}
+.rbig{font:700 52px/1 var(--display);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.rbig small{font:500 20px var(--body);color:var(--muted);letter-spacing:0;margin-left:4px}
+.rnums{display:flex;gap:28px;margin-left:auto;text-align:right;font-size:13px;color:var(--muted)}
+.rnums b{display:block;font:700 26px/1.1 var(--display);color:var(--ink);font-variant-numeric:tabular-nums}
+.rnums .g b{color:var(--good)}.rnums .w b{color:var(--warn)}
+#run.live #count{display:none}
+.livebox{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 20px}
+.livebox h3{margin:0 0 12px;font:600 13.5px var(--body);color:var(--muted)}
+.lanes{display:grid;gap:8px}
+.llane{display:grid;grid-template-columns:minmax(80px,130px) 1fr 70px;gap:12px;align-items:center;font-size:13.5px}
+.llane .n{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llane em{font-style:normal;color:var(--muted);text-align:right;font-size:13px;font-variant-numeric:tabular-nums}
+.ltrack{position:relative;height:22px;border-radius:5px;background:var(--bg);border:1px solid var(--line);overflow:hidden}
+.ltrack i{position:absolute;top:3px;bottom:3px;border-radius:3px;min-width:2px;filter:brightness(1.55)}
+.ltrack i.new{animation:landed 1.6s ease-out}
+@keyframes landed{0%{box-shadow:0 0 0 2px var(--accent);filter:brightness(2.2)}100%{box-shadow:0 0 0 2px transparent}}
+.laxis{display:grid;grid-template-columns:minmax(80px,130px) 1fr 70px;gap:12px;font-size:11px;color:var(--muted);margin-top:6px}
+.laxis div{position:relative;height:14px;font-variant-numeric:tabular-nums}
+.laxis div span{position:absolute;transform:translateX(-50%)}
+.laxis div span:first-child{transform:none}.laxis div span:last-child{transform:translateX(-100%)}
+.feed{display:grid}
+.frow{display:grid;grid-template-columns:16px minmax(70px,110px) minmax(0,1fr) auto;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:13.5px}
+.frow:first-child{border-top:0;padding-top:0}
+.frow .f{font-family:var(--mono);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow .r{color:var(--muted);font-size:13px;text-align:right}
+.frow .ok{color:var(--good);font-weight:700}.frow .no{color:var(--warn);font-weight:700}
+.frow .c{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow.new{animation:rowin .35s ease-out}
+@keyframes rowin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.feed .none{color:var(--muted);font-size:13px}
+.livebox .chip{filter:brightness(1.55)}
+@media (prefers-reduced-motion:reduce){.ltrack i.new,.frow.new{animation:none}}
+/* shorter screens: fewer recent clips, then none, so the run screen still fits without scrolling */
+@media (max-height:1000px){.frow:nth-child(n+4){display:none}.rbig{font-size:44px}}
+@media (max-height:930px){#feedBox{display:none}}
+@media (max-height:820px){.rbig{font-size:36px}.lanes{gap:4px}.ltrack{height:17px}.ltrack i{top:2px;bottom:2px}.livebox{padding:12px 18px}}
+
 .modes{display:grid;gap:8px}
 .seg{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:3px;width:max-content;max-width:100%}
 .seg button{border:0;background:none;padding:6px 14px;border-radius:7px;color:var(--muted);font-weight:600}
@@ -485,8 +524,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <div id="run" hidden>
     <div style="display:grid;gap:18px">
+      <div class="rhead" id="rhead" hidden>
+        <div class="rbig"><span id="rDone">0</span><small>of <span id="rTotal">0</span> clips</small></div>
+        <div class="rnums"><div class="g"><b id="rSynced">0</b>synced</div><div class="w"><b id="rAside">0</b>set aside</div><div><b id="rLeft">&ndash;</b>left</div></div>
+      </div>
       <div class="prog" id="prog"><i id="bar"></i></div>
       <div class="status"><span id="stage">Starting</span><span><span id="count"></span><span id="eta"></span></span></div>
+      <div class="livebox" id="mapBox" hidden><h3>Where the takes land in the song</h3><div class="lanes" id="lanes"></div><div class="laxis"><span></span><div id="laxis"></div><span></span></div></div>
+      <div class="livebox" id="feedBox" hidden><h3>Just now</h3><div class="feed" id="feed"></div></div>
     </div>
   </div>
 
@@ -981,6 +1026,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("stage").textContent = "Checking for updates";
     $("count").textContent = "";
     $("eta").textContent = "";
+    liveReset();
     clearInterval(tick); tick = setInterval(timing, 1000);
     show("run", true); show("btnsRun", true); show("details", true);
     document.querySelector("#vRun > .vtop").style.marginTop = ""; pinned = null;   // the run screen centres as before
@@ -996,6 +1042,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function timing() {
     if (!running() || !state.t0) { clearInterval(tick); tick = null; $("eta").textContent = ""; return; }
     var left = timeLeft();
+    if (live) {
+      $("rLeft").textContent = left ? left.replace(/^about /, "").replace(/ left$/, "").replace("less than a minute", "<1 min") : "\u2013";
+      left = "";
+    }
     $("eta").textContent = clock((Date.now() - state.t0) / 1000) + " elapsed" + (left ? " · " + left : "");
     updateMini();
   }
@@ -1026,6 +1076,94 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       ? state.done + " of " + state.total + (left ? " · " + left : "") : "";
   }
   $("miniRun").addEventListener("click", function () { showView(mode); });
+  // the syncing screen: one lane per camera in its label color, filled in where each clip lands in the
+  // song as it syncs, and the last few clips with where they went or why they were set aside
+  var live = null;
+  function camName(k) { return /^[A-Z]$/.test(k) ? k + " Cam" : k || "Other"; }
+  function camColor(k) { return /^[A-Z]$/.test(k) ? "var(" + (CAM_COLORS[labelFor(k)] || "--muted") + ")" : "var(--muted)"; }
+  function liveReset() {
+    live = null;
+    ["rhead", "mapBox", "feedBox"].forEach(function (id) { show(id, false); });
+    $("run").classList.remove("live");
+    $("rLeft").textContent = "\u2013";
+  }
+  function liveLane(k, n) {
+    var row = document.createElement("div");
+    row.className = "llane";
+    row.innerHTML = '<span class="n"><span class="chip"></span></span><div class="ltrack"></div><em></em>';
+    row.querySelector(".chip").style.background = camColor(k);
+    row.firstChild.title = camName(k);
+    row.firstChild.appendChild(document.createTextNode(camName(k)));
+    $("lanes").appendChild(row);
+    var L = live.lanes[k] = { track: row.querySelector(".ltrack"), em: row.querySelector("em"), n: n, seen: 0, synced: 0 };
+    liveLaneCount(L);
+    return L;
+  }
+  function liveLaneCount(L) { L.em.textContent = L.synced + " of " + Math.max(L.n, L.seen); }
+  function liveStart(e) {
+    var cams = e.cams || {}, keys = Object.keys(cams).sort(), d = e.song_duration || 0;
+    live = { dur: d, lanes: {} };
+    $("lanes").innerHTML = "";
+    keys.forEach(function (k) { liveLane(k, cams[k]); });
+    var ax = $("laxis"), step = d > 600 ? 120 : d > 90 ? 60 : 30, marks = [0];
+    for (var t = step; t < d - step * 0.4; t += step) marks.push(t);
+    ax.innerHTML = "";
+    if (d) marks.concat([d]).forEach(function (t) {
+      var sp = document.createElement("span");
+      sp.style.left = (100 * t / d).toFixed(2) + "%";
+      sp.textContent = clock(t);
+      ax.appendChild(sp);
+    });
+    $("feed").innerHTML = '<div class="none">Clips show up here as they sync.</div>';
+    show("rhead", true); show("mapBox", d > 0 && keys.length > 0); show("feedBox", true);
+    show("stats", false);                        // the big count carries the numbers
+    $("run").classList.add("live");
+    liveCounts();
+  }
+  function liveCounts() {
+    $("rDone").textContent = state.done || 0;
+    $("rTotal").textContent = state.total || 0;
+    $("rSynced").textContent = state.synced;
+    $("rAside").textContent = state.aside;
+  }
+  function liveClip(e) {
+    liveCounts();
+    if (!live) return;
+    var k = e.cam || "", L = live.lanes[k] || liveLane(k, 0), placed = e.status === "placed";
+    L.seen++;
+    if (placed) {
+      L.synced++;
+      if (live.dur) (e.spans || []).forEach(function (sp) {
+        var a = Math.max(0, sp[0]) / live.dur, b = Math.min(live.dur, sp[1]) / live.dur;
+        if (b <= a) return;
+        var i = document.createElement("i");
+        i.className = "new";
+        i.style.left = (100 * a).toFixed(2) + "%";
+        i.style.width = (100 * (b - a)).toFixed(2) + "%";
+        i.style.background = camColor(k);
+        i.title = base(e.file) + ": " + clock(sp[0]) + " to " + clock(sp[1]) + " in the song";
+        L.track.appendChild(i);
+      });
+    }
+    liveLaneCount(L);
+    var m = REASONS.find(function (x) { return x[0].test(e.reason || ""); });
+    var what = !placed ? "set aside: " + (m ? m[1] : e.reason || "didn\u2019t sync")
+      : e.passes > 1 ? "song restarted, " + e.passes + " passes"
+      : e.spans && e.spans.length ? "at " + clock(e.spans[0][0]) + " in the song" : "synced";
+    var row = document.createElement("div");
+    row.className = "frow new";
+    row.innerHTML = '<span class="' + (placed ? "ok" : "no") + '">' + (placed ? "\u2713" : "\u2013") + '</span>'
+      + '<span class="c"><span class="chip"></span></span><span class="f"></span><span class="r"></span>';
+    row.querySelector(".chip").style.background = camColor(k);
+    row.querySelector(".c").appendChild(document.createTextNode(camName(k)));
+    row.querySelector(".f").textContent = base(e.file);
+    row.querySelector(".f").title = e.file;
+    row.querySelector(".r").textContent = what;
+    var feed = $("feed"), none = feed.querySelector(".none");
+    if (none) none.remove();
+    feed.insertBefore(row, feed.firstChild);
+    while (feed.children.length > 5) feed.lastChild.remove();
+  }
   function setCounts() {
     $("sSynced").textContent = state.synced;
     $("sAside").textContent = state.aside;
@@ -1043,6 +1181,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("bar").style.width = "0%";
       $("sCams").textContent = "–";
       show("stats", e.mode !== "setup");
+      if (e.mode !== "setup" && e.clips) liveStart(e); else liveReset();
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start" && e.mode === "setup") {
       var fellBack = state.total > 0;              // it tried the song first and nothing lined up
@@ -1052,6 +1191,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         : "Setting up " + plural(e.clips, "clip") + " (no song to sync to)";
       $("prog").className = "prog busy";
       show("stats", false);
+      liveReset();
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start") {
       state.total = e.clips; state.tClips = Date.now(); state.done = 0;
@@ -1063,11 +1203,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("sCams").textContent = "–";
       $("sCamsL").textContent = "cameras";
       show("stats", true);
+      liveStart(e);
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "clip") {
       if (e.status === "placed") state.synced++; else state.aside++;
       state.done = e.done; state.total = e.total;
       setCounts();
+      liveClip(e);
       updateMini();
       $("bar").style.width = (100 * e.done / e.total).toFixed(1) + "%";
       $("count").textContent = e.done + " / " + e.total;

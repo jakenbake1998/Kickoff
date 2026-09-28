@@ -109,11 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         window.contentView = web
         window.center()
         window.setFrameAutosaveName("KickoffMain")
-        // open at the screen's full height (under the menu bar, above the Dock), wide enough for
-        // the page to fit without scrolling
+        // open at about 1180x1040, big enough that nothing scrolls, centred and kept on the screen
         if let vis = (window.screen ?? NSScreen.main)?.visibleFrame {
-            let w = min(vis.width, max(window.frame.width, 1180))
-            window.setFrame(NSRect(x: vis.midX - w / 2, y: vis.minY, width: w, height: vis.height), display: true)
+            let w = min(vis.width, 1180), h = min(vis.height, 1040)
+            window.setFrame(NSRect(x: vis.midX - w / 2, y: vis.midY - h / 2, width: w, height: h), display: true)
         }
         window.makeKeyAndOrderFront(nil)
 
