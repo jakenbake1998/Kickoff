@@ -273,9 +273,25 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .addbin:hover{color:var(--ink);border-color:var(--muted)}
 .foot{font-size:11.5px;color:var(--muted);display:flex;justify-content:space-between;gap:10px}
 [hidden]{display:none!important}
+/* opening (about 1 s): the logo pops in, winds up, and is kicked off to the right, taking the cover with it
+   to reveal the page */
+#intro{position:fixed;inset:0;z-index:50;background:var(--bg);display:grid;place-items:center;pointer-events:none;
+  box-shadow:-24px 0 40px rgba(0,0,0,.45);animation:introSlide .46s cubic-bezier(.55,0,.25,1) .54s forwards}
+#intro .ilogo{width:92px;height:92px;border-radius:22px;background:var(--accent);display:grid;place-items:center;
+  box-shadow:0 10px 30px color-mix(in srgb,var(--accent) 35%,transparent);animation:introKick 1s linear forwards}
+#intro .ilogo svg{width:50px;height:50px}
+@keyframes introKick{
+  0%{transform:scale(.55);opacity:0;animation-timing-function:cubic-bezier(.3,1.4,.5,1)}
+  24%{transform:scale(1);opacity:1;animation-timing-function:ease-in-out}
+  40%{transform:scale(1)}
+  52%{transform:translateX(-16px) rotate(-12deg);animation-timing-function:cubic-bezier(.5,0,.3,1)}
+  100%{transform:translateX(24px) rotate(28deg)}}
+@keyframes introSlide{from{transform:translateX(0)}to{transform:translateX(105%)}}
+@media (prefers-reduced-motion:reduce){#intro{display:none}}
 </style>
 </head>
 <body>
+<div id="intro" aria-hidden="true"><div class="ilogo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-2-5H5z"/><path d="M3 9v10a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9"/><path d="M8 4l2 5M13 4l2 5"/></svg></div></div>
 <div class="titlebar" id="title">Kickoff</div>
 <main>
   <div class="top">
@@ -1607,6 +1623,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   showView(mode);
   renderHistory();
   post({ cmd: "ready" });
+  (function () {                         // the opening animation leaves once it has played
+    var intro = $("intro"), gone = function () { if (intro.parentNode) intro.parentNode.removeChild(intro); };
+    intro.addEventListener("animationend", function (ev) { if (ev.target === intro) gone(); });
+    setTimeout(gone, 1400);
+  })();
 })();
 </script>
 </body>
