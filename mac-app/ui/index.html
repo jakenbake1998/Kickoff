@@ -10,9 +10,10 @@
 :root{
   --bg:#17191d; --panel:#20242a; --ink:#eef0f3; --muted:#9097a3; --line:#2e333b;
   --accent:#f0962e; --on-accent:#ffffff; --good:#6fcf97; --warn:#f2c14e; --bad:#ef6b6b;
-  --iris:#7a6cf0; --mango:#f0962e; --rose:#e2708f; --caribbean:#1fb5a4; --forest:#4f9d57;
-  --lavender:#b48ee6; --cerulean:#3d8fe0; --yellow:#e8c547; --magenta:#d946c4; --tan:#c9a57a;
-  --violet:#8c5ce6; --purple:#9b59b6; --blue:#3a6fe0; --teal:#2aa198; --green:#5cb85c; --brown:#9c6b43;
+  /* camera colors: Premiere's own label colors, read from Jake's Premiere 26 prefs */
+  --violet:#3e0aae; --iris:#004b67; --caribbean:#2a5507; --lavender:#751187; --cerulean:#05555b; --forest:#3d4a00;
+  --rose:#8c0235; --mango:#893a04; --purple:#6100b7; --blue:#122d9a; --teal:#014e45; --magenta:#840d58;
+  --tan:#6f5a45; --green:#0d5d27; --brown:#5d3b06; --yellow:#6f6619;
   --display:"Bricolage Grotesque",ui-rounded,-apple-system,system-ui,sans-serif;
   --body:"IBM Plex Sans",-apple-system,system-ui,sans-serif;
   --mono:ui-monospace,"SF Mono",Menlo,monospace;
@@ -58,7 +59,7 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .cam .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:7px}
 .lane{position:relative;height:18px;border-radius:4px;background:var(--panel);border:1px solid var(--line);overflow:hidden}
-.lane i{position:absolute;top:3px;bottom:3px;border-radius:2px;opacity:.75}
+.lane i{position:absolute;top:3px;bottom:3px;border-radius:2px}
 .cam em{font-style:normal;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
 .camsHead{display:grid;grid-template-columns:minmax(90px,150px) 1fr 64px;gap:12px;font-size:12px;color:var(--muted);margin-bottom:8px}
 .camsHead span:last-child{text-align:right}
