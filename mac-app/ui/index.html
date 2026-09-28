@@ -93,6 +93,45 @@ details{font-size:12.5px;color:var(--muted)}
 summary{cursor:pointer;width:max-content}
 pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
   font:11.5px/1.5 var(--mono);color:#c9ced6;white-space:pre-wrap;-webkit-user-select:text;user-select:text}
+/* the list of folders to run, before Start */
+.drop.compact{min-height:0;flex-direction:row;justify-content:flex-start;text-align:left;padding:12px 16px;gap:12px}
+.drop.compact svg{width:24px;height:24px}
+.queue{display:grid;gap:6px}
+.qhead{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.qhead .h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.qhead button{padding:3px 8px;font-size:12px}
+.qitem{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:7px 6px 7px 12px}
+.qitem svg{color:var(--accent)}
+.qitem .nm{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qitem .pt{font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qitem .x{border:0;background:none;color:var(--muted);padding:4px 9px;font-size:17px;line-height:1;border-radius:6px}
+.qitem .x:hover{color:var(--ink);background:var(--line)}
+.qnote{font-size:12.5px;color:var(--muted);margin:2px 0 0}
+button:disabled{opacity:.45;cursor:default;filter:none}
+
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.tabs button{padding:5px 12px;font-size:12.5px}
+
+/* history of runs */
+.hist{display:grid;gap:8px}
+.hhead{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.hhead h2{margin:0;font:700 18px/1.2 var(--display)}
+.day{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-top:8px}
+.entry{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;display:grid;gap:4px}
+.entry .r1{display:flex;align-items:baseline;gap:10px;min-width:0}
+.entry time{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12.5px;flex:none;min-width:58px}
+.entry .t{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;flex:none;color:var(--muted);background:var(--line)}
+.badge.good{color:var(--good);background:color-mix(in srgb,var(--good) 14%,transparent)}
+.badge.acc{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.badge.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.badge.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.entry .sum{font-size:13px;padding-left:68px}
+.entry .items{font-size:12px;color:var(--muted);padding-left:68px;overflow-wrap:anywhere}
+.entry .acts{display:flex;gap:6px;flex-wrap:wrap;padding-left:68px;margin-top:4px}
+.entry .acts button{padding:4px 10px;font-size:12px}
+.entry .acts button.del{margin-left:auto;background:none;border-color:transparent;color:var(--muted)}
+.empty{color:var(--muted);text-align:center;padding:48px 12px;border:1px dashed var(--line);border-radius:12px}
 .foot{font-size:11.5px;color:var(--muted);display:flex;justify-content:space-between;gap:10px}
 [hidden]{display:none!important}
 </style>
@@ -100,14 +139,33 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
 <body>
 <div class="titlebar" id="title">Kickoff</div>
 <main>
+  <div class="top">
   <div class="brand">
     <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-2-5H5z"/><path d="M3 9v10a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9"/><path d="M8 4l2 5M13 4l2 5"/></svg></div>
     <div><h1>Kickoff</h1><div class="tag">Drop a shoot folder. Get a Premiere project.</div></div>
   </div>
+  <div class="seg tabs" role="tablist" aria-label="View">
+    <button data-view="run" aria-pressed="true">New run</button>
+    <button data-view="hist" aria-pressed="false">History</button>
+  </div>
+  </div>
+
+  <section id="vHist" class="hist" hidden>
+    <div class="hhead"><h2>History</h2><button class="quiet" id="bClearHist" style="margin-left:0">Clear history</button></div>
+    <div id="histList" class="hist"></div>
+  </section>
+
+  <section id="vRun" style="display:flex;flex-direction:column;gap:18px;flex:1">
 
   <div class="drop idle" id="drop" role="button" tabindex="0" aria-label="Choose a shoot folder">
     <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-    <div><div class="p" id="dropTitle">Drop a shoot folder here</div><div class="s" id="dropSub">or click to choose one &nbsp;<kbd>⌘O</kbd></div></div>
+    <div><div class="p" id="dropTitle">Drop a shoot folder here</div><div class="s" id="dropSub">or cards, one at a time or together &middot; click to choose &nbsp;<kbd>⌘O</kbd></div></div>
+  </div>
+
+  <div class="queue" id="queue" hidden>
+    <div class="qhead"><span class="h" id="qCount">Ready to run</span><button class="quiet" id="bClear" style="margin-left:0">Clear all</button></div>
+    <div class="queue" id="qList"></div>
+    <p class="qnote" id="qNote"></p>
   </div>
 
   <div class="modes" id="modes">
@@ -155,19 +213,23 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
 
   <details id="details" hidden><summary>Details</summary><pre class="log" id="log"></pre></details>
 
+  <div class="btns" id="btnsStart">
+    <button class="pri" id="bStart" disabled>Start</button>
+  </div>
   <div class="btns" id="btnsDone" hidden>
     <button class="pri" id="bOpen">Open in Premiere</button>
     <button id="bReport">Show report</button>
     <button id="bReveal">Show in Finder</button>
-    <button class="quiet" id="bNew">New folder</button>
+    <button class="quiet" id="bNew">New run</button>
   </div>
   <div class="btns" id="btnsRun" hidden>
     <button class="quiet" id="bCancel">Stop</button>
   </div>
   <div class="btns" id="btnsErr" hidden>
     <button class="pri" id="bRetry">Try again</button>
-    <button class="quiet" id="bNew2">New folder</button>
+    <button class="quiet" id="bNew2">New run</button>
   </div>
+  </section>
   <div class="foot" id="foot"><span id="ver"></span><span id="upd"></span></div>
 </main>
 
@@ -204,18 +266,20 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
   function setMode(m) {
     mode = m;
     try { localStorage.setItem("kickoff-mode", m); } catch (e) {}
-    $("rebuild").addEventListener("change", function () { post({ cmd: "rebuild", on: $("rebuild").checked }); });
-  document.querySelectorAll(".seg button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === m)); });
+    document.querySelectorAll(".seg button[data-mode]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === m)); });
     $("modeNote").textContent = MODE_NOTES[m];
     document.querySelectorAll("#hints [data-for]").forEach(function (d) {
       d.hidden = d.dataset.for !== (m === "setup" ? "setup" : "music");
     });
     post({ cmd: "mode", mode: m });
   }
-  document.querySelectorAll(".seg button").forEach(function (b) {
+  document.querySelectorAll(".seg button[data-mode]").forEach(function (b) {
     b.addEventListener("click", function () { setMode(b.dataset.mode); });
   });
-  var state = { folder: null, result: null, total: 0, synced: 0, aside: 0, logLines: [] };
+  $("rebuild").addEventListener("change", function () { post({ cmd: "rebuild", on: $("rebuild").checked }); });
+  var state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
+  var queue = [];                  // folders and songs waiting for Start
+  var history = [];
 
   var native = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kickoff);
   if (native) document.body.classList.add("native");
@@ -224,27 +288,102 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
   function plural(n, one, many) { return n + " " + (n === 1 ? one : (many || one + "s")); }
   function clock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
   function base(p) { return String(p || "").replace(/\/+$/, "").split("/").pop(); }
-
-  function reset() {
-    state = { folder: null, result: null, total: 0, synced: 0, aside: 0, logLines: [] };
-    var d = $("drop");
-    d.className = "drop idle";
-    $("dropTitle").textContent = "Drop a shoot folder here";
-    $("dropSub").innerHTML = "or click to choose one &nbsp;<kbd>⌘O</kbd>";
-    show("hints", true); show("modes", true);
-    ["run", "stats", "camsWrap", "aside", "error", "details", "btnsDone", "btnsRun", "btnsErr"].forEach(function (id) { show(id, false); });
-    $("log").textContent = "";
-    setTitle("Kickoff");
+  function parent(p) { return String(p || "").replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/"; }
+  var AUDIO = /\.(wav|aiff?|bwf|mp3|m4a|flac|aac|caf)$/i;
+  function isSong(p) { return AUDIO.test(p); }
+  function commonFolder(paths) {
+    var parts = paths.map(function (p) { return p.replace(/\/+$/, "").split("/"); });
+    var out = parts[0].slice();
+    parts.forEach(function (q) { var i = 0; while (i < out.length && out[i] === q[i]) i++; out.length = i; });
+    return out.join("/") || "/";
+  }
+  function label(paths) {             // what a run is called: the folder, or "3 folders"
+    var f = paths.filter(function (p) { return !isSong(p); });
+    return f.length === 1 ? base(f[0]) : f.length + " folders";
   }
 
-  function started(folder) {
+  // ---- the list of folders before Start
+  function add(paths) {
+    if (running()) return;
+    if (!$("btnsDone").hidden || !$("btnsErr").hidden) reset();
+    showView("run");
+    (paths || []).forEach(function (p) {
+      if (isSong(p)) queue = queue.filter(function (q) { return !isSong(q); });    // one song
+      if (queue.indexOf(p) < 0) queue.push(p);
+    });
+    renderQueue();
+  }
+
+  function renderQueue() {
+    var list = $("qList");
+    list.innerHTML = "";
+    queue.forEach(function (p, i) {
+      var row = document.createElement("div");
+      row.className = "qitem";
+      row.innerHTML = isSong(p)
+        ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>'
+        : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+      var txt = document.createElement("div");
+      txt.style.minWidth = "0";
+      var nm = document.createElement("div"), pt = document.createElement("div");
+      nm.className = "nm"; pt.className = "pt";
+      nm.textContent = base(p) + (isSong(p) ? "  (song)" : "");
+      pt.textContent = parent(p);
+      pt.title = p;
+      txt.append(nm, pt);
+      var x = document.createElement("button");
+      x.className = "x";
+      x.setAttribute("aria-label", "Remove " + base(p));
+      x.textContent = "×";
+      x.addEventListener("click", function (ev) { ev.stopPropagation(); queue.splice(i, 1); renderQueue(); });
+      row.append(txt, x);
+      list.appendChild(row);
+    });
+    var folders = queue.filter(function (p) { return !isSong(p); }), song = queue.filter(isSong)[0];
+    show("queue", queue.length > 0);
+    show("hints", queue.length === 0);
+    var d = $("drop");
+    d.className = queue.length ? "drop idle compact" : "drop idle";
+    $("dropTitle").textContent = queue.length ? "Drop more folders or cards" : "Drop a shoot folder here";
+    $("dropSub").innerHTML = queue.length ? "or click to add &nbsp;<kbd>⌘O</kbd>"
+      : "or cards, one at a time or together &middot; click to choose &nbsp;<kbd>⌘O</kbd>";
+    $("qCount").textContent = "Ready to run · " + plural(queue.length, "item");
+    var note = "";
+    if (folders.length > 1) note = "Taken together as one project, in " + base(commonFolder(folders)) + ". Cards of a project set up before are added to it.";
+    else if (folders.length === 1) note = "Press Start when everything is in the list.";
+    else if (song) note = "Add the shoot folder or cards to sync to this song.";
+    if (song && folders.length) note += " Syncing to " + base(song) + ".";
+    $("qNote").textContent = note;
+    $("bStart").disabled = folders.length === 0;
+    $("bStart").textContent = folders.length > 1 ? "Start with " + folders.length + " folders" : "Start";
+  }
+
+  function reset() {
+    state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
+    show("modes", true);
+    ["run", "stats", "camsWrap", "aside", "error", "details", "btnsDone", "btnsRun", "btnsErr"].forEach(function (id) { show(id, false); });
+    show("btnsStart", true);
+    $("log").textContent = "";
+    setTitle("Kickoff");
+    renderQueue();
+  }
+
+  function started(paths) {
+    if (typeof paths === "string") paths = [paths];      // an older app passes one folder
+    var keep = queue;
     reset();
-    state.folder = folder;
+    queue = keep;
+    state.paths = paths;
+    state.folder = paths.filter(function (p) { return !isSong(p); })[0] || paths[0];
+    state.t0 = Date.now();
+    showView("run");
     var d = $("drop");
     d.className = "drop";
-    $("dropTitle").textContent = base(folder);
-    $("dropSub").textContent = folder;
-    setTitle("Kickoff — " + base(folder));
+    var name = label(paths);
+    $("dropTitle").textContent = name;
+    $("dropSub").textContent = paths.length === 1 ? paths[0] : paths.map(base).join(", ");
+    show("queue", false); show("btnsStart", false);
+    setTitle("Kickoff — " + name);
     $("prog").className = "prog busy";
     $("bar").style.width = "";
     $("stage").textContent = "Checking for updates";
@@ -252,6 +391,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     show("hints", false); show("modes", false);
     if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); }
     show("run", true); show("btnsRun", true); show("details", true);
+    show("hints", false);
   }
 
   function setCounts() {
@@ -264,7 +404,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
       $("stage").textContent = e.text;
     } else if (e.event === "start" && e.add) {
       state.total = e.clips; state.add = e.add;
-      $("dropSub").textContent = state.folder + " · adding to " + e.project;
+      $("dropSub").textContent = label(state.paths) + " · adding to " + e.project;
       $("stage").textContent = "Adding " + plural(e.clips, "new clip") + " to " + e.project;
       $("count").textContent = e.clips ? "0 / " + e.clips : "";
       $("prog").className = e.mode === "setup" ? "prog busy" : "prog";
@@ -275,7 +415,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     } else if (e.event === "start" && e.mode === "setup") {
       var fellBack = state.total > 0;              // it tried the song first and nothing lined up
       state.total = e.clips; state.synced = 0; state.aside = 0; state.setup = true;
-      $("dropSub").textContent = state.folder + " · project setup only";
+      $("dropSub").textContent = label(state.paths) + " · project setup only";
       $("stage").textContent = fellBack ? "Nothing lines up with that song, so this is set up as a regular project"
         : "Setting up " + plural(e.clips, "clip") + " (no song to sync to)";
       $("prog").className = "prog busy";
@@ -283,7 +423,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start") {
       state.total = e.clips;
-      $("dropSub").textContent = state.folder + " · song: " + e.song;
+      $("dropSub").textContent = label(state.paths) + " · song: " + e.song;
       $("stage").textContent = "Syncing " + plural(e.clips, "clip") + " to " + e.song;
       $("count").textContent = "0 / " + e.clips;
       $("prog").className = "prog";
@@ -396,6 +536,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
   }
 
   function finish(e) {
+    record(e.nothing_new ? "nothing" : "done", e);
     $("aside").classList.remove("moves");
     $("bOpen").textContent = "Open in Premiere";
     $("bRetry").hidden = false;
@@ -478,6 +619,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
 
   function onExit(code) {
     if (code === 0 && state.result) return;
+    var stoppedByUser = code === -15 || code === 15;
     show("btnsRun", false);
     $("prog").className = "prog";
     if (code === -15 || code === 15) {        // stopped by the user
@@ -494,7 +636,142 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     }
     show("error", true);
     show("btnsErr", true);
+    record(stoppedByUser ? "stopped" : "error", null, $("errText").textContent);
   }
+
+  // ---- history: one entry per run, kept by the app in Application Support/Kickoff/history.json
+  function record(outcome, e, err) {
+    var entry = {
+      id: String(Date.now()) + Math.random().toString(36).slice(2, 6),
+      at: new Date().toISOString(), secs: Math.round((Date.now() - (state.t0 || Date.now())) / 1000),
+      paths: state.paths, outcome: outcome, mode: e ? e.mode : mode
+    };
+    if (e) {
+      entry.project = e.project; entry.add = e.add || 0; entry.clips = e.clips; entry.synced = e.synced;
+      entry.cameras = (e.cameras || []).map(function (c) { return c.name; });
+      entry.audio = e.audio; entry.xml = e.xml; entry.report = e.report; entry.out = e.out;
+      entry.restarted = e.restarted || 0;
+    }
+    if (err) entry.error = String(err).slice(0, 400);
+    history.unshift(entry);
+    post({ cmd: "history-add", entry: entry });
+    renderHistory();
+  }
+
+  function dayName(d) {
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var k = new Date(d); k.setHours(0, 0, 0, 0);
+    var diff = Math.round((today - k) / 86400000);
+    if (diff === 0) return "Today";
+    if (diff === 1) return "Yesterday";
+    return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric",
+      year: d.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+  }
+
+  function describe(h) {        // [badge text, badge tone, one-line summary]
+    var cams = h.cameras ? plural(h.cameras.length, "camera") : "";
+    var took = h.secs >= 60 ? " · took " + clock(h.secs) : h.secs ? " · took " + h.secs + " s" : "";
+    if (h.outcome === "stopped") return ["Stopped", "warn", "Stopped before it finished; nothing was written" + took];
+    if (h.outcome === "error") return ["Error", "bad", h.error || "Kickoff hit an error"];
+    if (h.outcome === "nothing") return ["Nothing new", "", "Every clip was already in " + (h.project || "the project")];
+    var what = h.mode === "setup" ? plural(h.clips, "clip") + " set up" : h.synced + " of " + plural(h.clips, "clip") + " synced";
+    var parts = [what];
+    if (cams) parts.push(cams);
+    if (h.restarted) parts.push(plural(h.restarted, "take") + " split");
+    if (h.add) return ["Add " + h.add, "acc", parts.join(" · ") + took];
+    return [h.mode === "setup" ? "Set up" : "Synced", "good", parts.join(" · ") + took];
+  }
+
+  function renderHistory() {
+    var list = $("histList");
+    list.innerHTML = "";
+    if (!history.length) {
+      var e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = "No runs yet. Each run shows up here with what went in and how it turned out.";
+      list.appendChild(e);
+      $("bClearHist").hidden = true;
+      return;
+    }
+    $("bClearHist").hidden = false;
+    var lastDay = "";
+    history.forEach(function (h) {
+      var d = new Date(h.at), dn = dayName(d);
+      if (dn !== lastDay) {
+        var hd = document.createElement("div");
+        hd.className = "day";
+        hd.textContent = dn;
+        list.appendChild(hd);
+        lastDay = dn;
+      }
+      var desc = describe(h);
+      var card = document.createElement("div");
+      card.className = "entry";
+      var r1 = document.createElement("div");
+      r1.className = "r1";
+      var t = document.createElement("time");
+      t.textContent = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      var ti = document.createElement("span");
+      ti.className = "t";
+      ti.textContent = h.project || label(h.paths || []);
+      var b = document.createElement("span");
+      b.className = "badge " + desc[1];
+      b.textContent = desc[0];
+      r1.append(t, ti, b);
+      var sum = document.createElement("div");
+      sum.className = "sum";
+      sum.textContent = desc[2];
+      var items = document.createElement("div");
+      items.className = "items";
+      items.textContent = (h.paths || []).length === 1 ? h.paths[0] : (h.paths || []).map(base).join(", ");
+      items.title = (h.paths || []).join("\n");
+      card.append(r1, sum, items);
+      var acts = document.createElement("div");
+      acts.className = "acts";
+      function act(text, fn, cls) {
+        var bt = document.createElement("button");
+        bt.textContent = text;
+        if (cls) bt.className = cls;
+        bt.addEventListener("click", fn);
+        acts.appendChild(bt);
+      }
+      if (h.xml) act(h.add ? "Import into Premiere" : "Open in Premiere", function () { post({ cmd: "premiere", path: h.xml }); });
+      if (h.report) act(h.mode === "setup" ? "Clip list" : "Report", function () { post({ cmd: "report", path: h.report }); });
+      if (h.xml || (h.paths && h.paths.length)) act("Show in Finder", function () { post({ cmd: "reveal", path: h.xml || h.paths[0] }); });
+      if (h.paths && h.paths.length) act("Run again", function () { queue = []; showView("run"); reset(); add(h.paths); });
+      act("Remove", function () {
+        history = history.filter(function (x) { return x.id !== h.id; });
+        post({ cmd: "history-remove", id: h.id });
+        renderHistory();
+      }, "del");
+      card.appendChild(acts);
+      list.appendChild(card);
+    });
+  }
+
+  function showView(v) {
+    show("vRun", v === "run");
+    show("vHist", v === "hist");
+    document.querySelectorAll(".tabs button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.view === v)); });
+    if (v === "hist") renderHistory();
+  }
+  document.querySelectorAll(".tabs button").forEach(function (b) {
+    b.addEventListener("click", function () { showView(b.dataset.view); });
+  });
+  var clearArmed = null;
+  $("bClearHist").addEventListener("click", function () {
+    var bt = $("bClearHist");
+    if (!clearArmed) {                          // two clicks: the window has no confirm dialog
+      bt.textContent = "Click again to clear all";
+      clearArmed = setTimeout(function () { clearArmed = null; bt.textContent = "Clear history"; }, 4000);
+      return;
+    }
+    clearTimeout(clearArmed); clearArmed = null;
+    bt.textContent = "Clear history";
+    history = [];
+    post({ cmd: "history-clear" });
+    renderHistory();
+  });
 
   function onLog(line) {
     state.logLines.push(line);
@@ -504,15 +781,20 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     if (atEnd) log.scrollTop = log.scrollHeight;
   }
 
-  var running = function () { return !$("btnsRun").hidden; };
+  function running() { return !$("btnsRun").hidden; }
   $("drop").addEventListener("click", function () { if (!running()) post({ cmd: "pick" }); });
   $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick" }); });
   $("bOpen").addEventListener("click", function () { post({ cmd: "premiere", path: state.result.xml }); });
   $("bReport").addEventListener("click", function () { post({ cmd: "report", path: state.result.report }); });
   $("bReveal").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.xml }); });
-  $("bNew").addEventListener("click", function () { reset(); post({ cmd: "pick" }); });
-  $("bNew2").addEventListener("click", function () { reset(); post({ cmd: "pick" }); });
-  $("bRetry").addEventListener("click", function () { if (state.folder) post({ cmd: "run", folder: state.folder }); });
+  $("bNew").addEventListener("click", function () { queue = []; reset(); });
+  $("bNew2").addEventListener("click", function () { queue = []; reset(); });
+  $("bRetry").addEventListener("click", function () { if (state.paths.length) post({ cmd: "run", paths: state.paths, folder: state.folder }); });
+  $("bStart").addEventListener("click", function () {
+    if (!running() && queue.some(function (p) { return !isSong(p); }))
+      post({ cmd: "run", paths: queue.slice(), folder: queue.filter(function (p) { return !isSong(p); })[0] });
+  });
+  $("bClear").addEventListener("click", function () { queue = []; renderQueue(); });
   $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
 
   window.Kickoff = {
@@ -520,7 +802,9 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     event: onEvent,
     log: onLog,
     exit: onExit,
-    dragging: function (on) { if (!running()) $("drop").classList.toggle("over", !!on); },
+    add: add,
+    history: function (list) { history = Array.isArray(list) ? list : []; renderHistory(); },
+    dragging: function (on) { if (!running()) { showView("run"); $("drop").classList.toggle("over", !!on); } },
     info: function (i) {
       if (i.version) $("ver").textContent = "Engine " + i.version;
       if (i.update) $("upd").textContent = i.update;
@@ -528,6 +812,8 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     reset: reset
   };
   setMode(mode);
+  renderQueue();
+  renderHistory();
   post({ cmd: "ready" });
 })();
 </script>

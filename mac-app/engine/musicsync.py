@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 
 # ---------------------------------------------------------------- constants
 
@@ -58,6 +58,15 @@ MEDIA_EXT = {".mov", ".mp4", ".mxf", ".m4v", ".mts", ".m2ts", ".avi", ".mkv",
 AUDIO_EXT = {".wav", ".aif", ".aiff", ".bwf", ".mp3", ".m4a", ".flac", ".aac", ".caf"}
 UNREADABLE_EXT = {".r3d", ".braw"}   # ffmpeg cannot decode these containers
 SKIP_DIRS = {"SUB", "THMBNL", "GENERAL", "AVF_INFO", "CACHE", "THMB"}
+# not camera originals: proxies, Premiere's preview renders and auto-saves, renders and exports
+SKIP_DIR_RE = re.compile(r"prox(y|ies)|previews?\b|auto-?save|\brenders?\b|\bgenerations?\b|\bexports?\b|"
+                         r"media cache|^premiere sync$|\.(prproj|fcpbundle|drp)$", re.I)
+CAM_FOLDER = re.compile(r"^(?:(?i:cam(?:era)?)(?:[ _-]+([A-Za-z])|([A-Z]))(?![A-Za-z])|"
+                        r"([A-Za-z])[ _-]*(?i:cam(?:era)?)(?![A-Za-z]))")
+
+
+def skip_dir(name):
+    return name.startswith(".") or name.upper() in SKIP_DIRS or bool(SKIP_DIR_RE.search(name))
 
 NTSC_RATES = {23.976: 24, 29.97: 30, 47.952: 48, 59.94: 60, 119.88: 120}
 
@@ -350,8 +359,7 @@ def find_audio(folder, skip_dirs=()):
     skip = {os.path.abspath(d) for d in skip_dirs}
     out = []
     for root, dirs, files in os.walk(folder):
-        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d.upper() not in SKIP_DIRS
-                         and os.path.abspath(os.path.join(root, d)) not in skip)
+        dirs[:] = sorted(d for d in dirs if not skip_dir(d) and os.path.abspath(os.path.join(root, d)) not in skip)
         out += [os.path.join(root, f) for f in sorted(files)
                 if not f.startswith(".") and os.path.splitext(f)[1].lower() in AUDIO_EXT]
     return out
@@ -398,6 +406,35 @@ def pick_master(folder, audio_files):
     return top[0]
 
 
+MUSIC_DIRS = ("music", "song", "songs", "playback", "master")
+
+
+def song_nearby(folder, levels=3):
+    """The song in a Music folder next to the one dropped, or a level or two up: a card or a day's
+    footage dropped on its own (Shoot/Footage/Day 1) with the song in Shoot/Audio/Music."""
+    d = os.path.abspath(folder)
+    for _ in range(levels):
+        up = os.path.dirname(d)
+        if up == d or up in ("/", "/Volumes", os.path.expanduser("~")):
+            return None
+        d = up
+        found = []
+        for sub in [d] + [os.path.join(d, x) for x in sorted(os.listdir(d)) if os.path.isdir(os.path.join(d, x))]:
+            try:
+                names = sorted(os.listdir(sub))
+            except OSError:
+                continue
+            for x in names:
+                if x.lower() in MUSIC_DIRS and os.path.isdir(os.path.join(sub, x)):
+                    found += find_audio(os.path.join(sub, x))
+        if found:
+            song = pick_master(d, found)
+            if song:
+                log("Song found next to the folder: %s" % song)
+                return song
+    return None
+
+
 def probe_audio(path):
     r = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path])
     info = json.loads(r.stdout or b"{}") if r.returncode == 0 else {}
@@ -411,8 +448,7 @@ def find_clips(clips_dir, master_path, skip_dirs=()):
     skip = {os.path.abspath(d) for d in skip_dirs}
     out = []
     for root, dirs, files in os.walk(clips_dir):
-        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d.upper() not in SKIP_DIRS
-                         and os.path.abspath(os.path.join(root, d)) not in skip)
+        dirs[:] = sorted(d for d in dirs if not skip_dir(d) and os.path.abspath(os.path.join(root, d)) not in skip)
         for f in sorted(files):
             if f.startswith("."):
                 continue
@@ -422,8 +458,11 @@ def find_clips(clips_dir, master_path, skip_dirs=()):
             if os.path.abspath(p) == master_abs:
                 continue
             rel = os.path.relpath(p, clips_dir)
-            parts = rel.replace("\\", "/").split("/")
-            out.append(Clip(path=p, rel=rel, top_folder=parts[0] if len(parts) > 1 else ""))
+            parts = rel.replace("\\", "/").split("/")[:-1]
+            # the camera's folder: one named like "A Cam (Mini LF)" at any depth (Footage/Day 1/...),
+            # else the first folder under the one dropped
+            cam = next((d for d in parts if CAM_FOLDER.match(d)), parts[0] if parts else "")
+            out.append(Clip(path=p, rel=rel, top_folder=cam))
     return out
 
 
@@ -1053,6 +1092,11 @@ def split_passes(clip, master, st, h, t, x, speed, xs):
 
 
 REASON_SHORT = "short burst of song (false start?)"
+REASON_BETWEEN = "between plays of the song"
+STRAY_LONG_S = 20.0   # song this long outside the found passes is a performance, not a false start
+TAIL_KEEP_S = 8.0     # a part carries on this long after its song stops...
+GAP_PART_S = 20.0     # ...and a longer stretch than this after that is a part of its own
+HEAD_KEEP_S = 30.0    # the first part keeps up to this much roll before its song
 
 
 def song_search(xs, master, lo, hi):
@@ -1098,7 +1142,15 @@ def stray_song(xs, master, st, h, t, lo, hi, known):
     if e is None:
         e = dict(A=0, R=0, N=0.0, offset=o, runner_up_offset=o, conf=0.0, strength=0.0)
     good = abs(e["offset"] - o) < 0.1 and accepted(e, st) and last - first >= MIN_PASS_S
-    return dict(off=o, first=first, last=last, ev=e, good=good, stray=True)
+    if not good and last - first >= STRAY_LONG_S:
+        # a whole performance the landmarks miss (a worn tape, the band louder than the playback):
+        # the waveform lining up here, and better than at every other pass, through a third of it
+        # or more is proof enough
+        n = len(np.arange(first, last - 1.0 + 1e-6, 0.5))
+        good = len(wins) >= max(6, n / 3)
+        if good:
+            e = dict(e, offset=o)
+    return dict(off=o, first=first, last=last, ev=e, good=good, stray=last - first < STRAY_LONG_S)
 
 
 def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
@@ -1134,11 +1186,28 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
         gap = b["first"] - a["last"]
         cuts.append(b["first"] - min(0.5, gap / 2) if gap > 0 else (a["last"] + b["first"]) / 2)
     cuts.append(xs_len)
+    # a part runs on past its song only briefly: a long stretch after it becomes a part of its own,
+    # left unplaced, so a play the matcher couldn't hear (the band drowning the playback out) never
+    # rides along at the previous play's song position
+    segs = []
+    for i, p in enumerate(passes):
+        lo, hi = cuts[i], cuts[i + 1]
+        if i == 0 and xs is not None and p["first"] - lo > HEAD_KEEP_S + GAP_PART_S:
+            segs.append((lo, p["first"] - HEAD_KEEP_S, None))
+            lo = p["first"] - HEAD_KEEP_S
+        if xs is not None and hi - p["last"] > TAIL_KEEP_S + GAP_PART_S:
+            segs += [(lo, p["last"] + TAIL_KEEP_S, p), (p["last"] + TAIL_KEEP_S, hi, None)]
+        else:
+            segs.append((lo, hi, p))
     aoff = clip.audio_offset * speed
     to_video = lambda s: min(clip.duration or s, max(0.0, s / speed + clip.audio_offset))
     clip.split = True
-    for i, p in enumerate(passes):
-        lo, hi = cuts[i], cuts[i + 1]
+    for lo, hi, p in segs:
+        if p is None:
+            part = Part(to_video(lo), to_video(hi), status="not placed", reason=REASON_BETWEEN)
+            part.notes.append("no song lines up in this stretch of the take")
+            clip.parts.append(part)
+            continue
         e = p["ev"]
         part = Part(to_video(lo), to_video(hi), confidence=round(e["conf"], 1), aligned=e["A"],
                     runner_up=e["R"])
@@ -1178,15 +1247,16 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                 part.notes.append("this pass likely starts at song %.1fs" % (p["off"] + p["first"]))
         clip.parts.append(part)
     placed = [p for p in clip.parts if p.status == "placed"]
-    clip.notes.append("song restarts in this take: %d passes" % len(clip.parts))
+    clip.notes.append("song restarts in this take: %d passes" % len(passes))
     if placed:
         first = placed[0]
         clip.status = "placed"
         clip.offset, clip.confidence, clip.drift_ms = first.offset, first.confidence, first.drift_ms
         clip.aligned, clip.runner_up, clip.refine = first.aligned, first.runner_up, first.refine
     else:
-        clip.reasons.append(clip.parts[0].reason or REASON_LOW_CONF)
-        clip.confidence = clip.parts[0].confidence
+        heard = [p for p in clip.parts if p.reason != REASON_BETWEEN] or clip.parts
+        clip.reasons.append(heard[0].reason or REASON_LOW_CONF)
+        clip.confidence = heard[0].confidence
     return True
 
 
@@ -1261,13 +1331,14 @@ def accepted(ev, st, extra=0.0):
 # ---------------------------------------------------------------- camera grouping
 
 def camera_letter_hint(clip):
-    if clip.reel_letter:
-        return clip.reel_letter
-    m = re.match(r"^(?:cam(?:era)?[ _-]*([A-Z])|([A-Z])[ _-]*cam(?:era)?|([A-Z])\d{3})$",
-                 clip.top_folder, re.I)
+    """The camera letter the shoot's own folders give ("A Cam (Mini LF)", "Camera B"), else the reel."""
+    m = CAM_FOLDER.match(clip.top_folder)
     if m:
         return (m.group(1) or m.group(2) or m.group(3)).upper()
-    return ""
+    if clip.reel_letter:
+        return clip.reel_letter
+    m = re.match(r"^([A-Z])\d{3}$", clip.top_folder, re.I)
+    return m.group(1).upper() if m else ""
 
 
 def assign_cameras(clips, group_by, prior=None, prior_folders=None):
@@ -1281,7 +1352,9 @@ def assign_cameras(clips, group_by, prior=None, prior_folders=None):
         elif group_by == "model":
             c.camera_key = model
         else:
-            ident = (("serial " + c.serial) if c.serial else ("reel " + c.reel_letter) if c.reel_letter
+            # a folder named for the camera wins: two identical DJIs in C Cam and D Cam stay apart
+            ident = (("folder " + c.top_folder) if CAM_FOLDER.match(c.top_folder)
+                     else ("serial " + c.serial) if c.serial else ("reel " + c.reel_letter) if c.reel_letter
                      else ("folder " + c.top_folder) if c.top_folder else "")
             c.camera_key = model + (" / " + ident if ident else "")
     # clips with no readable model (e.g. an unreadable raw file) join the camera they were filed with
@@ -2008,7 +2081,8 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", metavar="[MASTER] FOLDER",
-                    help="a shoot folder (the song is found inside it), or a master song then a clips folder")
+                    help="a shoot folder (the song is found inside it), or a master song then a clips folder; "
+                         "several folders (cards) are taken together, as one project in the folder that holds them")
     ap.add_argument("--master", help="master song, if it can't be found in the folder automatically")
     ap.add_argument("-o", "--out", help="output folder (default: 'Premiere Sync' inside the folder)")
     ap.add_argument("--name", help="project name (default: the folder name)")
@@ -2062,15 +2136,29 @@ def main(argv=None):
         if not m:
             ap.error("--sync-size needs WxH, e.g. 3840x2160, or 'first'")
         args.sync_size = (int(m.group(1)), int(m.group(2)))
-    if len(args.paths) > 2:
-        ap.error("give a folder, or a master song and a folder")
-    if len(args.paths) == 2:
-        args.master, args.clips = args.paths
-    else:
-        args.clips = args.paths[0]
-    if not os.path.isdir(args.clips):
-        sys.exit("error: %s is not a folder" % args.clips)
-    args.clips = os.path.abspath(args.clips)
+    folders = [os.path.abspath(p) for p in args.paths if os.path.isdir(p)]
+    for p in args.paths:
+        if os.path.isdir(p):
+            continue
+        if not os.path.isfile(p):
+            sys.exit("error: %s is not a folder" % p)
+        if os.path.splitext(p)[1].lower() not in AUDIO_EXT:
+            sys.exit("error: %s is not a folder or a song (audio file)" % p)
+        if args.master and os.path.abspath(args.master) != os.path.abspath(p):
+            sys.exit("error: more than one song given (%s and %s)" % (os.path.basename(args.master), os.path.basename(p)))
+        args.master = p
+    if not folders:
+        sys.exit("error: give a shoot folder (or the card folders) to sync")
+    # several folders (cards dropped together): one project in the folder that holds them all
+    folders = [f for f in folders if not any(f != g and f.startswith(g.rstrip(os.sep) + os.sep) for g in folders)]
+    folders = sorted(set(folders))
+    args.only = folders if len(folders) > 1 else None
+    args.clips = os.path.commonpath(folders) if len(folders) > 1 else folders[0]
+    if args.only and args.clips in ("/", "/Volumes", os.path.expanduser("~")):
+        sys.exit("error: those folders aren't in one shoot folder. Put the cards in one folder, or run them one at a time.")
+    if args.only:
+        log("Taking %d folders together in %s: %s" % (len(folders), args.clips,
+                                                    ", ".join(os.path.relpath(f, args.clips) for f in folders)))
     out_given = bool(args.out)
     args.out = os.path.abspath(args.out or os.path.join(args.clips, "Premiere Sync"))
     state, restrict = (None, None) if args.rebuild else load_state(args, out_given)
@@ -2089,9 +2177,12 @@ def main(argv=None):
     if state:
         return add_cards(args, state, restrict)
 
-    audio_files = find_audio(args.clips, [args.out])
+    all_audio = find_audio(args.clips, [args.out])
+    audio_files = [p for p in all_audio if inside(p, args.only)]
     if args.mode != "setup" and not args.master:
-        args.master = pick_master(args.clips, audio_files)
+        # the song can sit outside the cards dropped (Audio/Music next to them): look everywhere
+        args.master = pick_master(args.clips, audio_files) or (pick_master(args.clips, all_audio) if args.only else None) \
+            or song_nearby(args.clips)
         if not args.master and args.mode == "music":
             names = "\n  ".join(os.path.relpath(p, args.clips) for p in audio_files) or "(no audio files)"
             sys.exit("error: can't tell which file is the song. Put it in a 'Music' folder or pass "
@@ -2125,9 +2216,9 @@ def main(argv=None):
             sys.exit("error: can't read master: %s" % e)
         log("  %.1f s, %d landmarks" % (master.duration, len(master.h)))
 
-    clips = find_clips(args.clips, args.master, [args.out])
+    clips = [c for c in find_clips(args.clips, args.master, [args.out]) if inside(c.path, args.only)]
     if not clips:
-        sys.exit("error: no video files found in %s" % args.clips)
+        sys.exit("error: no video files found in %s" % ", ".join(args.only or [args.clips]))
     log("Probing %d clips" % len(clips))
     event("stage", text="Reading %d clips" % len(clips))
     with cf.ThreadPoolExecutor(args.jobs) as ex:
@@ -2315,6 +2406,12 @@ def rel_key(path, root):
     return os.path.relpath(path, root).replace("\\", "/")
 
 
+def inside(p, folders):
+    """True when path p is in one of `folders` (None: no limit)."""
+    p = os.path.abspath(p)
+    return folders is None or any(p.startswith(f.rstrip(os.sep) + os.sep) for f in folders)
+
+
 def load_state(args, out_given):
     """What an earlier run on this shoot folder set up (Premiere Sync/kickoff-project.json), so a
     second run only adds what's new. A folder inside an earlier run's shoot folder (a new card
@@ -2326,9 +2423,10 @@ def load_state(args, out_given):
                 return json.load(fh)
         except (OSError, ValueError):
             return None
+    only = getattr(args, "only", None)
     st = read(args.out)
     if st:
-        return st, None
+        return st, only
     if out_given:
         return None, None
     d = args.clips
@@ -2336,9 +2434,11 @@ def load_state(args, out_given):
         d = os.path.dirname(d)
         st = read(os.path.join(d, "Premiere Sync"))
         if st:
-            restrict = args.clips
+            restrict = only or [args.clips]
             args.clips, args.out = d, os.path.join(d, "Premiere Sync")
-            log("%s is part of %s, which was set up before: adding it" % (os.path.basename(restrict), d))
+            log("%s %s part of %s, which was set up before: adding %s" % (
+                ", ".join(os.path.basename(r) for r in restrict), "is" if len(restrict) == 1 else "are", d,
+                "it" if len(restrict) == 1 else "them"))
             return st, restrict
     return None, None
 
@@ -2412,7 +2512,7 @@ def add_cards(args, state, restrict):
     def wanted(p, done):
         k = rel_key(p, args.clips)
         return k not in done and bad.get(k) != size(p) and \
-            (restrict is None or os.path.abspath(p).startswith(restrict + os.sep))
+            inside(p, restrict)
     done_clips, done_audio = set(state.get("clips", [])), set(state.get("audio", []))
     clips = [c for c in find_clips(args.clips, args.master, [args.out]) if wanted(c.path, done_clips)]
     master_abs = os.path.abspath(master_path) if master_path else None

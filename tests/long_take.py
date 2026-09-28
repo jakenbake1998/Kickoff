@@ -2,7 +2,7 @@
 """Long-take test: one camera rolling for ~20 minutes while the song is played over and over,
 with long stretches of no song (talk, resets) between passes, like an action camera left running.
 
-    python3 tests/long_take.py [seed] [passes]
+    python3 tests/long_take.py [seed] [passes] [full] [weak dB]
 
 Prints every part the matcher cut, with the true song position of the pass it covers."""
 import os
@@ -19,15 +19,21 @@ import make_synthetic as ms   # noqa: E402
 import musicsync as m         # noqa: E402
 
 
-def run(seed=5, n=12):
+def run(seed=5, n=12, full=0, weak=0):
+    """full=1: every pass plays the whole song from the top with short resets between (a DJI left
+    rolling through take after take), so all passes share the same song material."""
     r = np.random.default_rng(seed)
     ms.rng = np.random.default_rng(seed + 1)
     passes, c = [], r.uniform(5, 40)
     for _ in range(n):
-        s0 = r.uniform(0, sp.DUR - 15)
-        d = r.uniform(12, sp.DUR - s0)
-        passes.append((c, s0, d))
-        c += d + r.uniform(30, 150)
+        if full:
+            s0 = r.uniform(0, 2)
+            d = sp.DUR - s0 - r.uniform(0, 4)
+        else:
+            s0 = r.uniform(0, sp.DUR - 15)
+            d = r.uniform(12, sp.DUR - s0)
+        passes.append((c, s0, d, 10 ** (-weak / 20) if weak and len(passes) % 3 == 2 else 1.0))
+        c += d + (r.uniform(6, 40) if full else r.uniform(30, 150))
     length = c
     audio = signal.resample_poly(ms.passes_audio(sp.SONG, passes, length, snr_db=8, live_drums=True),
                                  147, 640).astype(np.float32)
@@ -36,7 +42,7 @@ def run(seed=5, n=12):
     t0 = time.time()
     m.sync_clip(clip, sp.MASTER, m.Settings())
     print("%.0f s take, %d passes, matched in %.1f s" % (length, n, time.time() - t0))
-    truth = [(c0, c0 + d, s0 - c0) for c0, s0, d in passes]
+    truth = [(c0, c0 + d, s0 - c0) for c0, s0, d, _ in passes]
     bad = 0
     for p in (clip.parts if clip.split else []):
         tr = [o for a, b, o in truth if min(b, p.src_out) - max(a, p.src_in) > 2]

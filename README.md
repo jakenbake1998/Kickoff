@@ -19,9 +19,21 @@ python3 musicsync.py "/Volumes/Shoot/White Wolf"
 
 It finds the song itself (the only audio file, or the one in a `Music` folder or named
 master/song/mix; with several there, it passes over stems, instrumentals and clicks and takes the
-longest; otherwise pass `--master "Song.wav"`). Camera card dumps can go in as they are
-(`A_CAM/PRIVATE/M4ROOT/CLIP/...`, `B_CAM/A001C003_....mxf`); Sony proxy and thumbnail folders are
-skipped. Any other audio files (boom, lav, Zoom recorder) are treated as captured audio.
+longest; otherwise pass `--master "Song.wav"`). When a card or a day's footage is run on its own, a
+`Music` folder next to it or a couple of levels up (`Shoot/Audio/Music`) counts too. Camera card
+dumps can go in as they are (`A_CAM/PRIVATE/M4ROOT/CLIP/...`, `B_CAM/A001C003_....mxf`). Proxies,
+Premiere preview renders and auto-saves, and `Renders`, `Generations` and `Exports` folders are
+skipped, as are Sony thumbnail folders. Any other audio files (boom, lav, Zoom recorder) are treated
+as captured audio.
+
+Several folders can go in together (cards, or a day's camera folders):
+
+```
+python3 musicsync.py "Day 2/A Cam (Mini LF)/A004" "Day 2/B Cam (FX3)/B003"
+```
+
+They make one project in the folder that holds them all, or are added to the project that folder
+belongs to when it was set up before. A song file given alongside them is the song.
 
 Everything is written to `Premiere Sync` inside the shoot folder (`-o` to change):
 
@@ -153,7 +165,12 @@ camera kept rolling, each pass is found on its own:
 - Nothing outside a pass rides along out of sync: the stretches between and around passes are
   searched again on their own (landmarks plus a phase correlation against the whole song), and a
   false start or other short burst of song becomes its own part, set aside as
-  `short burst of song (false start?)` unless it's long and clear enough to place.
+  `short burst of song (false start?)` unless it's long and clear enough to place. Twenty seconds
+  or more of song whose waveform lines up is a performance, and is placed even when the landmarks
+  miss it (a worn tape, the band louder than the playback).
+- A part runs on only 8 s past its song. A longer stretch after it becomes a part of its own, set
+  aside as `between plays of the song`, so a play too buried to match never rides along at the
+  previous play's position.
 - A take where the song stops and never restarts syncs as one clip, and the report's "Worth a look"
   section flags the stretch where the audio no longer matches.
 
@@ -231,9 +248,11 @@ tries the rest against the song and keeps the one that matches best. The report 
 
 Clips are grouped by camera model from the file metadata (ffprobe tags, Sony `M01.XML` sidecars,
 GoPro firmware string), then split by body using, in order: the serial number, the camera letter in
-ARRI/RED style names (`A001C003`, `B002_C004`), or the top-level folder under the clips folder.
-Camera letters come from those names or folders (`A_CAM`, `CAM B`, `C001`) when present, otherwise
-A, B, C... in order. `--group-by model` or `--group-by folder` forces one rule.
+ARRI/RED style names (`A001C003`, `B002_C004`), or the top-level folder under the clips folder. A
+folder named for the camera at any depth (`Footage/Day 1/C Cam (Action 4.1)`) wins over all of those,
+so two identical cameras in `C Cam` and `D Cam` stay apart and each day's `A Cam` is the same camera.
+Camera letters come from those folders (`A Cam (Mini LF)`, `A_CAM`, `Camera B`), then reel names
+(`A001C003`), otherwise A, B, C... in order. `--group-by model` or `--group-by folder` forces one rule.
 
 ## Options
 

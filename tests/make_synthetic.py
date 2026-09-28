@@ -179,8 +179,8 @@ def passes_audio(song, passes, length, **kw):
     """Scratch audio for a take where the song was stopped / restarted / jumped:
     passes = [(clip_start, song_start, seconds)]. Room noise and the drummer carry on in between."""
     src = np.zeros(int(length * FS))
-    for c0, s0, d in passes:
-        seg = song[int(s0 * FS):int(s0 * FS) + int(d * FS)]
+    for c0, s0, d, *g in passes:          # optional 4th value: level of that pass (band drowning it out)
+        seg = song[int(s0 * FS):int(s0 * FS) + int(d * FS)] * (g[0] if g else 1.0)
         src[int(c0 * FS):int(c0 * FS) + len(seg)] = seg
     return room(src, **kw)
 

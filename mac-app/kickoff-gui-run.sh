@@ -1,6 +1,8 @@
 #!/bin/bash
-# Run by the Kickoff window for one folder: fetch the latest engine from GitHub (if online), then
-# run it with progress events for the window ($2: auto, music or setup; $3: rebuild to start over). Offline or on any error, the installed engine is kept.
+# Run by the Kickoff window: fetch the latest engine from GitHub (if online), then run it with
+# progress events for the window. Arguments: -- MODE (auto, music or setup) rebuild|add PATH...
+# (the folders and song in the window's list); an older window passes FOLDER MODE rebuild|add.
+# Offline or on any error, the installed engine is kept.
 SUPPORT="$HOME/Library/Application Support/Kickoff"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 PY="$SUPPORT/venv/bin/python3"
@@ -15,6 +17,11 @@ if [ -n "$BASE" ]; then
   rm -f "$SUPPORT/musicsync.py.run"
 fi
 command -v ffmpeg >/dev/null || { echo "error: ffmpeg isn't installed. Run the Kickoff installer again." >&2; exit 1; }
+if [ "$1" = "--" ]; then
+  MODE="$2"; HOW="$3"; shift 3
+else
+  MODE="$2"; HOW="$3"; set -- "$1"
+fi
 EXTRA=()
-[ "$3" = "rebuild" ] && EXTRA=(--rebuild)
-exec "$PY" "$SUPPORT/musicsync.py" --events --mode "${2:-auto}" "${EXTRA[@]}" "$1"
+[ "$HOW" = "rebuild" ] && EXTRA=(--rebuild)
+exec "$PY" "$SUPPORT/musicsync.py" --events --mode "${MODE:-auto}" "${EXTRA[@]}" -- "$@"

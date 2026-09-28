@@ -1,17 +1,28 @@
-// Kickoff: the Mac window. Drop a shoot folder on the window (or the Dock icon), and the engine
-// (musicsync.py) builds the Premiere project inside it while the window shows progress.
+// Kickoff: the Mac window. Drop shoot folders, cards or a song on the window (or the Dock icon), press
+// Start, and the engine (musicsync.py) builds the Premiere project while the window shows progress.
 //
 // The window itself is ui/index.html in a web view; this file only does what a web page can't:
-// accept folder drops, run the engine, and open files. The installer compiles it with the Command
+// accept folder drops, run the engine, keep the history of runs, and open files. The installer compiles it with the Command
 // Line Tools (swiftc), and kickoff-update.sh recompiles it when a new version arrives from GitHub.
 import Cocoa
 import WebKit
+import UniformTypeIdentifiers
 
 let support = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Kickoff")
+let historyFile = support.appendingPathComponent("history.json")
+let audioExtensions: Set<String> = ["wav", "aif", "aiff", "bwf", "mp3", "m4a", "flac", "aac", "caf"]
+
+// what the window takes: folders (a shoot, a day, a card) and audio files (the song)
+func usable(_ urls: [URL]) -> [URL] {
+    urls.filter { url in
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            || audioExtensions.contains(url.pathExtension.lowercased())
+    }
+}
 
 final class DropWebView: WKWebView {
-    var onDrop: ((URL) -> Void)?
+    var onDrop: (([URL]) -> Void)?
     var onDragging: ((Bool) -> Void)?
 
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
@@ -21,33 +32,31 @@ final class DropWebView: WKWebView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    private func folder(_ info: NSDraggingInfo) -> URL? {
+    private func items(_ info: NSDraggingInfo) -> [URL] {
         let objs = info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
                                                        options: [.urlReadingFileURLsOnly: true]) ?? []
-        for case let url as URL in objs {
-            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { return url }
-        }
-        return nil
+        return usable(objs.compactMap { $0 as? URL })
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard folder(sender) != nil else { return [] }
+        guard !items(sender).isEmpty else { return [] }
         onDragging?(true)
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        return folder(sender) != nil ? .copy : []
+        return items(sender).isEmpty ? [] : .copy
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) { onDragging?(false) }
 
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { folder(sender) != nil }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !items(sender).isEmpty }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         onDragging?(false)
-        guard let url = folder(sender) else { return false }
-        onDrop?(url)
+        let urls = items(sender)
+        guard !urls.isEmpty else { return false }
+        onDrop?(urls)
         return true
     }
 
@@ -60,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var proc: Process?
     var ready = false
     var stopped = false
-    var pending: URL?
+    var pending: [URL] = []                // dropped before the page was ready
     var updateNote = ""
     var mode = "auto"                     // auto / music / setup, from the switch in the window
     var rebuild = false                   // "start over" box: ignore earlier runs on the folder
@@ -73,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         web = DropWebView(frame: frame, configuration: cfg)
         web.setValue(false, forKey: "drawsBackground")          // no white flash while loading
         web.navigationDelegate = self
-        web.onDrop = { [weak self] url in self?.run(url) }
+        web.onDrop = { [weak self] urls in self?.stage(urls) }
         web.onDragging = { [weak self] on in self?.js("Kickoff.dragging(\(on))") }
 
         window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -96,9 +105,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     // folders dropped on the Dock icon, or on the app in Finder
     func application(_ sender: NSApplication, open urls: [URL]) {
-        if let url = urls.first(where: { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }) {
-            run(url)
-        }
+        stage(usable(urls))
+    }
+
+    // add to the list in the window; nothing runs until Start
+    func stage(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        guard ready else { pending += urls; return }
+        window.makeKeyAndOrderFront(nil)
+        js("Kickoff.add(\(json(urls.map { $0.path })))")
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -132,14 +147,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "ready":
             ready = true
             if !updateNote.isEmpty { js("Kickoff.info(\(json(["update": updateNote])))") }
-            if let url = pending {
-                pending = nil
-                run(url)
+            js("Kickoff.history(\(json(loadHistory())))")
+            if !pending.isEmpty {
+                let urls = pending
+                pending = []
+                stage(urls)
             }
         case "mode": mode = body["mode"] as? String ?? "auto"
         case "rebuild": rebuild = body["on"] as? Bool ?? false
         case "pick": pick()
-        case "run": if let f = body["folder"] as? String { run(URL(fileURLWithPath: f)) }
+        case "run":
+            let paths = body["paths"] as? [String] ?? (body["folder"] as? String).map { [$0] } ?? []
+            if !paths.isEmpty { run(paths) }
+        case "history-add":
+            if let entry = body["entry"] as? [String: Any] {
+                var list = loadHistory()
+                list.insert(entry, at: 0)
+                saveHistory(Array(list.prefix(300)))
+            }
+        case "history-remove":
+            if let id = body["id"] as? String {
+                saveHistory(loadHistory().filter { ($0["id"] as? String) != id })
+                js("Kickoff.history(\(json(loadHistory())))")
+            }
+        case "history-clear":
+            saveHistory([])
+            js("Kickoff.history([])")
         case "stop":
             stopped = true
             proc?.terminate()
@@ -172,31 +205,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return String(s.dropFirst().dropLast())                  // unwrap the [ ] around it
     }
 
+    // MARK: history of runs (a JSON list, newest first, written by the window when a run ends)
+
+    func loadHistory() -> [[String: Any]] {
+        guard let data = try? Data(contentsOf: historyFile),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return list
+    }
+
+    func saveHistory(_ list: [[String: Any]]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: list, options: [.prettyPrinted]) else { return }
+        try? data.write(to: historyFile, options: .atomic)
+    }
+
     // MARK: running the engine
 
     @objc func pick() {
         guard proc?.isRunning != true else { NSSound.beep(); return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Sync"
-        panel.message = "Choose the shoot folder"
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.audio, .folder]
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.message = "Choose the shoot folder, or cards (and the song if it isn't in the folder)"
         panel.beginSheetModal(for: window) { [weak self] result in
-            if result == .OK, let url = panel.url { self?.run(url) }
+            if result == .OK { self?.stage(usable(panel.urls)) }
         }
     }
 
-    func run(_ folder: URL) {
-        guard ready else { pending = folder; return }
+    func run(_ paths: [String]) {
         guard proc?.isRunning != true else { NSSound.beep(); return }
         stopped = false
         window.makeKeyAndOrderFront(nil)
-        js("Kickoff.started(\(json(folder.path)))")
+        js("Kickoff.started(\(json(paths)))")
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [support.appendingPathComponent("kickoff-gui-run.sh").path, folder.path, mode, rebuild ? "rebuild" : "add"]
+        p.arguments = [support.appendingPathComponent("kickoff-gui-run.sh").path, "--", mode, rebuild ? "rebuild" : "add"] + paths
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         env["PYTHONUNBUFFERED"] = "1"
@@ -354,7 +400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let fileItem = NSMenuItem()
         main.addItem(fileItem)
         let fileMenu = NSMenu(title: "File")
-        let open = fileMenu.addItem(withTitle: "Open Shoot Folder…", action: #selector(pick), keyEquivalent: "o")
+        let open = fileMenu.addItem(withTitle: "Add Folders…", action: #selector(pick), keyEquivalent: "o")
         open.target = self
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileItem.submenu = fileMenu
