@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.8"
+VERSION = "0.5.9"
 
 # ---------------------------------------------------------------- constants
 
@@ -921,6 +921,7 @@ def refine_offset(xs, master, coarse, lo, hi):
     return coarse, None, "landmark only (refinement too weak, +-1 frame)", (ov0, ov1)
 
 
+SONG_TRACK_HEIGHT = 120    # the song's audio track height in Premiere (its default is about 40)
 WAVE_WIN, WAVE_HOP = 4.0, 2.0
 WAVE_MATCH = 12.0           # GCC-PHAT peak / median: chance ~5, a bar off up to ~9, a real match 15-45
 
@@ -1796,6 +1797,13 @@ class Xmeml:
         na = max([0] + [(e["atrack"] + len(e.get("asrc") or [1]) - 1) if e["atrack"] else 0 for e in entries])
         vtracks = [sub(video, "track") for _ in range(max(nv, 1))]
         atracks = [sub(audio, "track") for _ in range(na)]
+        for e in entries:
+            if e.get("tall") and e.get("atrack"):
+                # the song's track opens tall, so its waveform is readable (the attributes Premiere
+                # writes itself for a track's height)
+                for k in range(e["atrack"] - 1, min(na, e["atrack"] - 1 + len(e.get("asrc") or [1]))):
+                    atracks[k].set("TL.SQTrackExpanded", "1")
+                    atracks[k].set("TL.SQTrackExpandedHeight", str(SONG_TRACK_HEIGHT))
         count = collections.Counter()
         track_of, index_of = {}, {}
         for e in sorted(entries, key=lambda e: e["start"]):
@@ -1956,7 +1964,7 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song
     entries = []
     with_song = bool(master_media) and song and not args.no_master_audio
     if with_song:
-        entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1))
+        entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1, tall=True))
     first_a = 2 if with_song else 1
     for c, p in placements:
         # song time of the part's first frame, snapped so the cut sits on a whole source frame
@@ -2094,7 +2102,7 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
                             label=camera_label(letter))
                        for i, (letter, seq, _, _) in enumerate(nests, 1)]
             if master_media and not args.no_master_audio:
-                entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1))
+                entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1, tall=True))
             return entries
         # written after the sync sequences it nests: they must be defined before they're referenced
         xw.sequence(syncb, "%s_CamsNested" % name, seq_fps, w, h, tc, all_cams())

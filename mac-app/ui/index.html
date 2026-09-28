@@ -414,7 +414,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     optSummary();
   }
   function optSummary() {           // the closed Options line says what they are set to
-    $("optSum").textContent = "XML goes to " + (xmlDir ? base(xmlDir) : "the top of the footage drive") +
+    // the chosen folder with the one above it ("Project Files > XML"): a folder named XML alone read as "XML goes to XML"
+    var shown = xmlDir ? [base(parent(xmlDir)), base(xmlDir)].filter(Boolean).join(" > ") : "";
+    $("optSum").textContent = (xmlDir ? "XML saves to " + shown : "XML saves to the top of the footage drive") +
       ($("rebuild").checked ? ", starting over" : "");
   }
   var batch = null;                // the runs Start began: { runs: [{paths, mode, name}], i, ids }
