@@ -93,8 +93,9 @@ to the top of the project. The tree is:
 Adjustment Layers                    (placeholder; Temp Color can't come through XML)
 Footage / A Cam (Mini LF), B Cam (FX3), ...   every clip of that camera, bin and clips label colored
 Sequence / Breakup   "A Cam_Breakup" ...: every clip of the camera back to back in file order
-         / Sync      "A Cam_Sync" ...: every synced clip on its own video track
-         / Edit      "<Project>_Edit": each Cam_Sync nested on V1 (A), V2 (B)..., song on A1
+         / Sync      "<Project>_CamsNested": each Cam_Sync nested on V1 (A), V2 (B)..., song on A1
+                     "A Cam_Sync" ...: every synced clip on its own video track
+         / Edit      "<Project>_Edit": a copy of <Project>_CamsNested, to cut in
                 / Working, Past      (placeholders)
 Audio / Music        the song (+ anything else in a Music folder)
       / SFX          files from an SFX folder, else placeholder
@@ -104,8 +105,8 @@ Audio / Music        the song (+ anything else in a Music folder)
 Premiere's XML import drops empty bins, so a bin that would be empty gets a blank
 `(empty bin).png` to keep it; delete it once the project is open (`--no-placeholders` to skip).
 
-Label colors: A Cam Iris, B Cam Mango, C Cam Rose, then Caribbean, Forest, Lavender, Cerulean,
-Yellow... applied to that camera's bin, its clips and both of its sequences.
+Label colors: A Cam Iris, B Cam Mango, C Cam Rose, D Cam Yellow, E Cam Cerulean, then Caribbean,
+Lavender, Magenta, Forest... applied to that camera's bin, its clips and both of its sequences.
 
 Sync sequences (and the Edit sequence) are 3840x2160, with every clip scaled to fill the frame edge
 to edge, cropping what overflows, so there are never black edges: 1080p at 200%, 3200x1800 at 120%,

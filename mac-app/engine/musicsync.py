@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.5"
+VERSION = "0.5.6"
 
 # ---------------------------------------------------------------- constants
 
@@ -1591,8 +1591,10 @@ def add_timecode(parent, fps, frame, string=None):
 
 
 # Premiere label colour names, in the order cameras get them (A Iris, B Mango, C Rose, ...)
-CAMERA_LABELS = ["Iris", "Mango", "Rose", "Caribbean", "Forest", "Lavender", "Cerulean", "Yellow",
-                 "Magenta", "Tan", "Violet", "Purple", "Blue", "Teal", "Green", "Brown"]
+# A Iris, B Mango, C Rose (Jake's), then colors that read apart in Premiere's label list: Caribbean
+# and Forest are both green there, so D and E are Yellow and Cerulean
+CAMERA_LABELS = ["Iris", "Mango", "Rose", "Yellow", "Cerulean", "Caribbean", "Lavender", "Magenta",
+                 "Forest", "Tan", "Violet", "Purple", "Blue", "Teal", "Green", "Brown"]
 
 
 def camera_label(letter):
@@ -2053,15 +2055,22 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
     for sub_name in ("Working", "Past"):
         maybe_empty(bin_(edit, sub_name), ["Sequence", "Edit", sub_name], False)
     if nests:
-        # the sequence Jake cuts in: each camera's sync sequence nested on its own track, song on A1
+        # every camera's sync sequence nested on its own track (A on V1, B on V2...), song on A1:
+        # "<name>_CamsNested" in the Sync bin, and the same again as the Edit sequence Jake
+        # cuts in. (Multi-Camera on the nests is a switch XML can't carry: select them > Enable.)
         (w, h), tc = nests[0][2], nests[0][3]
         song_frame = int(round(preroll * seq_fps))
-        entries = [dict(nest=(seq, int(seq.findtext("duration"))), start=0, vtrack=i, atrack=None,
-                        label=camera_label(letter))
-                   for i, (letter, seq, _, _) in enumerate(nests, 1)]
-        if master_media and not args.no_master_audio:
-            entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1))
-        xw.sequence(edit, "%s_Edit" % name, seq_fps, w, h, tc, entries)
+
+        def all_cams():
+            entries = [dict(nest=(seq, int(seq.findtext("duration"))), start=0, vtrack=i, atrack=None,
+                            label=camera_label(letter))
+                       for i, (letter, seq, _, _) in enumerate(nests, 1)]
+            if master_media and not args.no_master_audio:
+                entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1))
+            return entries
+        # written after the sync sequences it nests: they must be defined before they're referenced
+        xw.sequence(syncb, "%s_CamsNested" % name, seq_fps, w, h, tc, all_cams())
+        xw.sequence(edit, "%s_Edit" % name, seq_fps, w, h, tc, all_cams())
     elif setup_only:
         # an empty sequence to cut in, at the delivery size, starting at 01:00:00:00
         usable = [c for c in clips if c.readable and c.fps and c.width]
@@ -2575,7 +2584,7 @@ def main(argv=None):
           unreadable=sum(1 for c in clips if not c.readable),
           restarted=sum(1 for c in clips if c.split),
           check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None),
-          worth_a_look=len(doubtful(clips)))
+          worth_a_look=len({id(c) for c, _, _ in doubtful(clips)}))   # clips, not parts
 
 
 def match_all(clips, master, args):
