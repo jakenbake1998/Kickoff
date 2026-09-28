@@ -109,16 +109,21 @@ camera kept rolling, each pass is found on its own:
 - A repeated chorus doesn't count as a jump: when one position explains both stretches, it stays
   one pass. A pass that only covers a copy-pasted chorus is placed at the first copy and flagged
   (see "Repeated chorus" below).
-- A bit of song shorter than 3 seconds (a false start) isn't split out.
+- Nothing outside a pass rides along out of sync: the stretches between and around passes are
+  searched again on their own (landmarks plus a phase correlation against the whole song), and a
+  false start or other short burst of song becomes its own part, set aside as
+  `short burst of song (false start?)` unless it's long and clear enough to place.
 - A take where the song stops and never restarts syncs as one clip, and the report's "Worth a look"
   section flags the stretch where the audio no longer matches.
 
 Tested with `tests/stress_passes.py 300`: 300 random single, restarted, paused, jumped and
 three-pass takes (600 passes, 3 to 15 dB signal-to-noise, with and without a live drummer). No pass
-was placed at a wrong position. 542 were placed exactly and 37 chorus-only passes at a flagged
-chorus copy. 19 were left unplaced: passes that are mostly repeated chorus with 3 seconds or less
+was placed at a wrong position. 543 were placed exactly and 39 chorus-only passes at a flagged
+chorus copy. 17 were left unplaced: passes that are mostly repeated chorus with 3 seconds or less
 of anything else, where neither position can be confirmed. One take whose two passes sat only
-0.1 s apart in the song was placed as one clip, 1 frame off.
+0.1 s apart in the song was placed as one clip, 1 frame off. The research thread's independent
+generator (`sync-research/crosscheck_builder.py 60 11`, different layouts, rooms and scoring) also
+finds no wrong placements apart from the flagged chorus copies.
 
 ## Repeated chorus
 

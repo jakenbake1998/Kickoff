@@ -322,9 +322,9 @@ def main(out):
                ["placed", "placed"], meta=arri_meta, acodec="pcm_s16le")      # jump, no stop
     add_passes(os.path.join(gopro, "GX010004.MP4"), "30000/1001", 46, [(0, 30, 15), (19, 45, 25)],
                ["placed", "placed"], meta=gopro_meta)                          # paused 4 s, resumed
-    # a 2 s false start is too short to be its own pass: the take syncs as one clip on the real pass
-    add(os.path.join(sony, "C0009.MP4"), "24000/1001", 36, 5.0, sidecar={},
-        audio=passes_audio(song, [(0, 10, 2), (5, 10, 30)], 36))
+    # a 2 s false start: set aside as its own part so its frames don't ride along out of sync
+    add_passes(os.path.join(sony, "C0009.MP4"), "24000/1001", 36, [(0, 10, 2), (5, 10, 30)],
+               ["false start", "placed"])
     # the song stops mid-take and never restarts: synced as normal, the report flags the silent tail
     add(os.path.join(arri, "B001C007_260927_R1AB.mov"), "24000/1001", 35, 40.0, meta=arri_meta,
         acodec="pcm_s16le", audio=passes_audio(song, [(0, 40, 20)], 35))

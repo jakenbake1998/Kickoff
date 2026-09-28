@@ -676,6 +676,16 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
             clip.notes.append("best guess song %.2fs" % (coarse - aoff))
             return
 
+    if xs is not None and clip.repeat_alt is None:
+        # one pass, but is there song elsewhere in the clip at another position (a false start)?
+        res = master.hits(h, t)
+        c = int(round(coarse / FRAME_S))
+        on = np.sort(res[0][np.abs(res[1] - c) <= 2]) if res is not None else np.zeros(0)
+        if len(on) > 2:
+            f0, f1 = pass_edges(xs, master, coarse, on[0] * FRAME_S, on[-1] * FRAME_S)
+            main = dict(off=coarse, first=f0, last=f1, ev=ev, good=True)
+            if emit_parts(clip, master, st, [main], h, t, x, speed, xs):
+                return
     offset_audio, clip.drift_ms, clip.refine, ov = refine_offset(xs, master, coarse, 0.0, xs_len)
     if clip.refine.startswith("landmark only"):
         clip.notes.append(clip.refine)
@@ -723,7 +733,7 @@ def refine_offset(xs, master, coarse, lo, hi):
 
 
 WAVE_WIN, WAVE_HOP = 4.0, 2.0
-WAVE_MATCH = 9.0            # GCC-PHAT peak / median: chance is about 5, a real match 15-35
+WAVE_MATCH = 12.0           # GCC-PHAT peak / median: chance ~5, a bar off up to ~9, a real match 15-45
 
 
 def wave_q(xs, master, off, lo, hi, drift=None, span=None, hop=WAVE_HOP):
@@ -847,13 +857,19 @@ def find_passes(master, h, t):
     return out, tc, off
 
 
-def pass_edges(xs, master, off, first, last):
+def pass_edges(xs, master, off, first, last, rivals=()):
     """Where a pass's song really starts and stops (xs seconds). Landmark hits only bracket it to a
     second or so (anchors pair with peaks up to 1.5 s later, and stray chance hits pile up in gaps),
     so this slides a 1 s waveform window in 0.1 s steps across each edge. On test takes the first
-    matching window begins 0.4 s before the song does and the last one ends 0.5 s after it stops."""
+    matching window begins 0.4 s before the song does and the last one ends 0.5 s after it stops.
+    With `rivals` (the other passes' offsets), a window only counts when it lines up 1.5x better here
+    than at any of them: passes a bar apart share the drum pattern."""
+    def q_at(o, t):
+        return gcc_phat_offset(xs, master.audio, o, t, t + 1.0, search=0.06, min_len=0.9)[1]
+
     def hit(t):
-        return gcc_phat_offset(xs, master.audio, off, t, t + 1.0, search=0.06, min_len=0.9)[1] >= WAVE_MATCH
+        q = q_at(off, t)
+        return q >= WAVE_MATCH and all(q >= 1.5 * q_at(r, t) for r in rivals)
     n = len(xs) / SR
     starts = [t for t in np.arange(max(0.0, first - 2.0), min(first + 4.0, n - 1.0), 0.1) if hit(t)]
     ends = [t for t in np.arange(max(0.0, last - 4.0), min(last + 3.0, n - 1.0), 0.1) if hit(t)]
@@ -879,7 +895,6 @@ def split_passes(clip, master, st, h, t, x, speed, xs):
     """Split a take in which the song was played more than once (stopped and restarted, paused,
     or jumped to another section) into one Part per pass. Returns False, touching nothing,
     when the clip holds a single pass."""
-    xs_len = len(xs) / SR if xs is not None else len(x) / SR * speed
     raw, tc, off = find_passes(master, h, t)
     if len(raw) < 2:
         return False
@@ -926,8 +941,80 @@ def split_passes(clip, master, st, h, t, x, speed, xs):
             passes.append(dict(p, ev=e, good=good))
     if len(passes) < 2:
         return False
+    return emit_parts(clip, master, st, passes, h, t, x, speed, xs)
 
+
+REASON_SHORT = "short burst of song (false start?)"
+
+
+def song_search(xs, master, lo, hi):
+    """Best song offset for clip stretch [lo, hi] (xs seconds) by phase correlation against the whole
+    song: slower than landmarks but it still finds a few seconds of song that are too faint or too
+    short for them. Returns the offset (song time of xs sample 0)."""
+    seg = xs[int(lo * SR):int(hi * SR)]
+    n = 1 << int(math.ceil(math.log2(len(master.audio) + len(seg))))
+    X = np.fft.rfft(master.audio, n) * np.conj(np.fft.rfft(seg, n))
+    freqs = np.fft.rfftfreq(n, 1 / SR)
+    X[(freqs < 120) | (freqs > 4500)] = 0
+    X /= np.maximum(np.abs(X), 1e-12)
+    cc = np.fft.irfft(X, n)[:len(master.audio)]
+    return int(np.argmax(cc)) / SR - lo
+
+
+def stray_song(xs, master, st, h, t, lo, hi, known):
+    """Song audio in clip stretch [lo, hi] (outside every known pass) at a position of its own, e.g.
+    a false start before the real take. Returns a pass dict, or None when the stretch holds no song
+    that lines up anywhere else (talk, room noise, the tail of a known pass)."""
+    if hi - lo < 2.0:
+        return None
+    sel = (t >= lo / FRAME_S) & (t < hi / FRAME_S)
+    e = evaluate(master, h[sel], t[sel]) if sel.any() else None
+    cands = [song_search(xs, master, lo, hi)] + ([e["offset"]] if e is not None and e["A"] >= 6 else [])
+
+    def q1(o, w):
+        return gcc_phat_offset(xs, master.audio, o, w, w + 1.0, search=0.06, min_len=0.9)[1]
+    best = None
+    for o in cands:
+        if any(abs(o - k) < 0.3 for k in known):
+            continue
+        wins = [w for w in np.arange(lo, hi - 1.0 + 1e-6, 0.5)
+                if q1(o, w) >= WAVE_MATCH and all(q1(o, w) >= 1.5 * q1(k, w) for k in known)]
+        if len(wins) >= 2 and (best is None or len(wins) > len(best[1])):
+            best = (o, wins)
+    if best is None:
+        return None
+    o, wins = best
+    first, last = wins[0] + 0.4, wins[-1] + 0.5
+    sel = (t >= first / FRAME_S) & (t < last / FRAME_S)
+    e = evaluate(master, h[sel], t[sel]) if sel.any() else None
+    if e is None:
+        e = dict(A=0, R=0, N=0.0, offset=o, runner_up_offset=o, conf=0.0, strength=0.0)
+    good = abs(e["offset"] - o) < 0.1 and accepted(e, st) and last - first >= MIN_PASS_S
+    return dict(off=o, first=first, last=last, ev=e, good=good, stray=True)
+
+
+def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
+    """Cut the clip into one Part per pass. Before cutting, each pass's edges are tightened against
+    its neighbours and the stretches outside every pass are searched for song audio of their own
+    (a false start), which becomes its own part, so no part carries song that doesn't line up at its
+    offset. Returns False when that leaves a single pass (nothing to split)."""
+    xs_len = len(xs) / SR if xs is not None else len(x) / SR * speed
     passes.sort(key=lambda p: p["first"])
+    if xs is not None:
+        for p in passes:
+            rivals = [q["off"] for q in passes if q is not p]
+            if rivals:
+                p["first"], p["last"] = pass_edges(xs, master, p["off"], p["first"], p["last"], rivals)
+        known = [p["off"] for p in passes]
+        bounds = [0.0] + [v for p in passes for v in (p["first"], p["last"])] + [xs_len]
+        for lo, hi in zip(bounds[::2], bounds[1::2]):
+            sp = stray_song(xs, master, st, h, t, lo, hi, known)
+            if sp:
+                passes.append(sp)
+        passes.sort(key=lambda p: p["first"])
+    if len(passes) < 2:
+        return False
+
     # cut where the next pass's song starts: in a gap, half a second ahead of it; in a straight
     # jump (no gap), right at it
     cuts = [0.0]
@@ -964,6 +1051,9 @@ def split_passes(clip, master, st, h, t, x, speed, xs):
                 part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms, span=ov[1] - ov[0]))
                 part.notes.append("%s: placed at the first copy, also fits at song %.1fs"
                                   % (REPEAT_NOTE, other + p["first"]))
+            elif p.get("stray"):
+                part.reason = REASON_SHORT
+                part.notes.append("%.1f s of song at song %.1fs" % (p["last"] - p["first"], p["off"] + p["first"]))
             elif ambiguous:
                 part.reason = REASON_AMBIGUOUS
                 part.notes.append("this pass starts at song %.1fs or %.1fs (repeated section)"
