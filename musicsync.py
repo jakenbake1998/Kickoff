@@ -739,21 +739,31 @@ def load_channels(path, layout, limit=None):
 
 def is_timecode(x):
     """LTC timecode recorded as audio: a square wave at a constant level, switching 1900-4000 times
-    a second. It never matches a song; skipping it saves the time of trying."""
+    a second. It never matches a song; skipping it saves the time of trying. Judged second by
+    second over the clip, so a silent start (the camera still locking on) or a filtered, rounded
+    square wave doesn't hide it."""
     if len(x) < SR:
         return False
-    seg = x[:SR * 10]
-    rms = float(np.sqrt(np.mean(seg ** 2)))
-    if rms <= 0:
-        return False
-    zc = np.count_nonzero(np.diff(np.signbit(seg))) / (len(seg) / SR)
-    if not (1500 < zc < 5000 and float(np.median(np.abs(seg))) / rms > 0.85):
-        return False
-    # hiss squashed by a limiter also crosses zero that often at a near-constant level; LTC's energy
-    # sits in its two tones (half the bit rate and the bit rate, 960-2400 Hz), noise is spread out
-    spec = np.abs(np.fft.rfft(seg)) ** 2
-    f = np.fft.rfftfreq(len(seg), 1 / SR)
-    return float(spec[(f > 600) & (f < 2700)].sum() / (spec.sum() + 1e-12)) > 0.55
+    n = len(x) // SR
+    starts = [k * SR for k in range(n)] if n <= 40 else [int(k) * SR for k in np.linspace(0, n - 1, 40)]
+    f = np.fft.rfftfreq(SR, 1 / SR)
+    band = (f > 600) & (f < 2700)
+    loud = ltc = 0
+    for a in starts:
+        seg = x[a:a + SR]
+        rms = float(np.sqrt(np.mean(seg ** 2)))
+        if rms < 10 ** (-50 / 20):
+            continue
+        loud += 1
+        zc = np.count_nonzero(np.diff(np.signbit(seg)))
+        if not (1500 < zc < 5000 and float(np.median(np.abs(seg))) / rms > 0.7):
+            continue
+        # hiss squashed by a limiter also crosses zero that often at a near-constant level; LTC's
+        # energy sits in its two tones (half the bit rate and the bit rate, 960-2400 Hz)
+        spec = np.abs(np.fft.rfft(seg)) ** 2
+        if float(spec[band].sum() / (spec.sum() + 1e-12)) > 0.55:
+            ltc += 1
+    return loud > 0 and ltc >= max(1, 0.6 * loud)
 
 
 def spectrogram(x):
