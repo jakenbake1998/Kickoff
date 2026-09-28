@@ -245,7 +245,15 @@ def event(kind, **data):
         print("@@kickoff " + json.dumps(dict(data, event=kind)), flush=True)
 
 
+# Footage drives (spinning or USB) slow right down when many files are read at once, so only a few
+# ffmpeg decodes read at a time; the matching after each read still runs on every core.
+DRIVE_READS = threading.BoundedSemaphore(max(1, int(os.environ.get("KICKOFF_READS", "3") or 3)))
+
+
 def run(cmd):
+    if cmd and cmd[0] == "ffmpeg":
+        with DRIVE_READS:
+            return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
@@ -1297,15 +1305,26 @@ BLANK_MOSTLY = 0.5         # a part at least this blank is set aside
 
 def blank_frame(f):
     """True for a shrunk frame (pixels x RGB) that is one solid color, with or without black bars
-    around it (a Video8 capture box's blue screen is a 4:3 blue box inside black side bars), or all
-    black. A dark stage still has lights in it, so it doesn't count."""
+    around it (a Video8 capture box's blue screen is a 4:3 blue box inside black side bars), or
+    pure black with nothing in it. A dark stage (most pixels near black, a few dim lights and
+    faces) is real picture, so the solid color must be clearly a color (saturated, like a deck's
+    blue ~4,0,148) or bright (a grey or white card), and all-black means black without texture."""
+    luma = f @ np.array([0.299, 0.587, 0.114], np.float32)
+    if luma.mean() < BLANK_PURE_MEAN and luma.std() < BLANK_PURE_STD:
+        return True
     black = f.max(axis=1) < BLANK_BLACK
     if black.all():
-        return True
+        return False
     rest = f[~black]
     main = np.median(rest, axis=0)
+    if main.max() - main.min() < BLANK_SATURATED and main.max() < BLANK_BRIGHT:
+        return False
     solid = np.abs(rest - main).max(axis=1) < BLANK_NEAR
     return bool(solid.sum() >= 0.3 * len(f) and black.sum() + solid.sum() >= 0.97 * len(f))
+BLANK_PURE_MEAN = 8.0      # an all-black frame: luma below this on average...
+BLANK_PURE_STD = 2.0       # ...and this flat
+BLANK_SATURATED = 60       # a flat color this saturated (max-min channel) is a "no signal" screen
+BLANK_BRIGHT = 120         # or this bright (a grey or white card)
 BLANK_EDGE_S = 3.0         # a blank run this long at a placed part's start or end is cut off it
 
 
@@ -1315,7 +1334,8 @@ def blank_seconds(path, duration):
            "-an", "-sn", "-dn", "-vf", "scale=32:18:flags=area,format=rgb24,showinfo", "-vsync", "passthrough",
            "-f", "rawvideo", "-"]
     try:
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+        with DRIVE_READS:
+            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
     except (OSError, subprocess.TimeoutExpired):
         return None
     ts = [float(v) for v in re.findall(rb"pts_time:\s*([-0-9.]+)", r.stderr)]
@@ -1393,14 +1413,8 @@ def drop_blank(clip, blank=None):
         if p.status != "placed":
             parts.append(p)
             continue
-        f = frac(p.src_in, p.src_out)
-        if f >= BLANK_MOSTLY:
-            p.notes.append("%.0f%% of the picture is a flat color, placed at song %.1fs by its sound"
-                           % (100 * f, p.offset + p.src_in * clip.speed))
-            p.status, p.offset, p.reason = "not placed", None, REASON_NO_PICTURE
-            parts.append(p)
-            changed = True
-            continue
+        # blank runs at the ends come off first; the part goes only if what's left is mostly blank too
+        # (a pass that is 59% blue at one end still has real picture in the rest)
         lo, hi = int(p.src_in), min(len(blank), int(math.ceil(p.src_out)))
         a = lo
         while a < hi and blank[a]:
@@ -1408,6 +1422,14 @@ def drop_blank(clip, blank=None):
         b = hi
         while b > a and blank[b - 1]:
             b -= 1
+        f = frac(p.src_in, p.src_out)
+        if f >= BLANK_MOSTLY and (b - a < BLANK_EDGE_S or frac(a, b) >= BLANK_MOSTLY):
+            p.notes.append("%.0f%% of the picture is a flat color, placed at song %.1fs by its sound"
+                           % (100 * f, p.offset + p.src_in * clip.speed))
+            p.status, p.offset, p.reason = "not placed", None, REASON_NO_PICTURE
+            parts.append(p)
+            changed = True
+            continue
         head = Part(p.src_in, float(a), status="not placed", reason=REASON_NO_PICTURE) \
             if a - p.src_in >= BLANK_EDGE_S else None
         tail = Part(float(b), p.src_out, status="not placed", reason=REASON_NO_PICTURE) \
