@@ -503,6 +503,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
   <div class="btns" id="btnsErr" hidden>
     <button class="pri" id="bRetry">Try again</button>
+    <button class="quiet" id="bBackBoxes" style="margin-left:0" hidden>Back to the boxes</button>
     <button class="newrun" id="bNew2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New run</button>
   </div>
   </section>
@@ -603,9 +604,17 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   var ICON_FOLDER = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 
   // ---- adding things: dropped on a box, picked for a box, or dropped anywhere / from the Dock
+  function resultShowing() { return !$("btnsDone").hidden || !$("btnsErr").hidden || !$("batch").hidden; }
+  // rows (or the Other projects queue) whose run finished are cleared, so they don't run again
+  function clearFinished() {
+    jobs = jobs.filter(function (j) { return !j.done; });
+    if (!jobs.length) jobs = [{ song: null, footage: [] }];
+    if (queueDone) { queue = []; setupName = ""; $("qName").innerHTML = ""; queueDone = false; }
+  }
+  function leaveResult() { clearFinished(); batch = null; reset(); }
   function ready() {                      // leave a finished run's result for the next setup
     if (running()) return false;
-    if (!$("btnsDone").hidden || !$("btnsErr").hidden || !$("batch").hidden) reset();
+    if (resultShowing()) leaveResult();
     if ($("vRun").hidden) showView(mode);
     return true;
   }
@@ -653,6 +662,30 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     return l;
   }
   var setupName = "";
+  var queueDone = false;           // the queue's run finished: cleared when the next thing is added
+  // the boxes are kept on this Mac, so a relaunch (or an update) brings them back; finished runs are left out
+  function saveBoxes() {
+    try {
+      localStorage.setItem("kickoff-boxes", JSON.stringify({
+        jobs: jobs.filter(function (j) { return !j.done; }).map(function (j) { return { song: j.song, footage: j.footage, name: j.name || "" }; }),
+        queue: queueDone ? [] : queue, setupName: queueDone ? "" : setupName }));
+    } catch (e) {}
+  }
+  function loadBoxes() {
+    try {
+      var saved = JSON.parse(localStorage.getItem("kickoff-boxes") || "null");
+      if (!saved || typeof saved !== "object") return;
+      var str = function (x) { return typeof x === "string"; };
+      if (Array.isArray(saved.jobs)) {
+        var js = saved.jobs.filter(function (o) { return o && typeof o === "object"; }).map(function (o) {
+          return { song: str(o.song) ? o.song : null, footage: Array.isArray(o.footage) ? o.footage.filter(str) : [], name: str(o.name) ? o.name : "" };
+        });
+        if (js.length) jobs = js;
+      }
+      if (Array.isArray(saved.queue)) queue = saved.queue.filter(str);
+      if (str(saved.setupName)) setupName = saved.setupName;
+    } catch (e) {}
+  }
 
   function addFootage(r, folders) {
     folders.forEach(function (f) { if (jobs[r].footage.indexOf(f) < 0) jobs[r].footage.push(f); });
@@ -663,6 +696,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     else add(paths);
   }
 
+  function boxKey(ev, target, i) {        // Enter or Space on a box: the same as clicking it
+    if (ev.target !== ev.currentTarget || (ev.key !== "Enter" && ev.key !== " ")) return;
+    ev.preventDefault();
+    if (!running()) post({ cmd: "pick", target: target, row: i });
+  }
   function renderJobs() {
     var wrap = $("jobs");
     wrap.innerHTML = "";
@@ -696,6 +734,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         sb.appendChild(c);
       }
       sb.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "song", row: i }); });
+      sb.addEventListener("keydown", function (ev) { boxKey(ev, "song", i); });
       // sync to
       var mid = document.createElement("div");
       mid.className = "syncto";
@@ -735,6 +774,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         fb.append(v2, s2);
       }
       fb.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "footage", row: i }); });
+      fb.addEventListener("keydown", function (ev) { boxKey(ev, "footage", i); });
       var rx = document.createElement("button");
       rx.className = "rowx";
       rx.textContent = "×";
@@ -748,7 +788,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       row.append(sb, mid, fb);
       if (rx.hidden) row.classList.add("one"); else row.append(rx);
       wrap.appendChild(row);
-      if (j.song || j.footage.length) wrap.appendChild(nameField(j.name || "", function (v) { j.name = v; },
+      if (j.song || j.footage.length) wrap.appendChild(nameField(j.name || "", function (v) { j.name = v; saveBoxes(); },
         j.footage.length ? projectName(j.footage) : "the footage folder's name"));
     });
   }
@@ -756,7 +796,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function runsToStart() {                // [{paths, mode, name}], or a reason Start is off
     if (mode === "setup") {
       var folders = queue.filter(function (p) { return !isSong(p); });
-      return folders.length ? [{ paths: queue.slice(), mode: "setup", name: label(queue), xml: setupName.trim() }]
+      return folders.length ? [{ paths: queue.slice(), mode: "setup", name: label(queue), xml: setupName.trim(), queue: true }]
         : "Add the shoot folder or cards.";
     }
     var used = jobs.filter(function (j) { return j.song || j.footage.length; });
@@ -767,7 +807,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     }
     // no song in the box: the engine looks for it in the footage (a Music folder, or the song file)
     return used.map(function (j) {
-      return { paths: (j.song ? [j.song] : []).concat(j.footage), mode: "music", xml: (j.name || "").trim(),
+      return { paths: (j.song ? [j.song] : []).concat(j.footage), mode: "music", xml: (j.name || "").trim(), job: j,
                name: j.song ? base(j.song) : projectName(j.footage) };
     });
   }
@@ -792,6 +832,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (music) $("qNote").textContent = "";
     var note = typeof runs === "string" && (music ? jobs.some(function (j) { return j.song || j.footage.length; }) : false) ? runs : "";
     $("modeNote").textContent = note || MODE_NOTES[mode];
+    saveBoxes();
   }
 
   function renderQueue() {
@@ -820,8 +861,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       list.appendChild(row);
     });
     var qn = $("qName");
-    if (!qn.firstChild && queue.length) qn.appendChild(nameField(setupName, function (v) { setupName = v; }, ""));
-    if (!queue.length) qn.innerHTML = "";
+    if (!qn.firstChild && queue.length) qn.appendChild(nameField(setupName, function (v) { setupName = v; saveBoxes(); }, ""));
+    if (!queue.length) { qn.innerHTML = ""; setupName = ""; }
     var inp = qn.querySelector("input");
     if (inp) inp.placeholder = projectName(queue);
     var folders = queue.filter(function (p) { return !isSong(p); });
@@ -852,11 +893,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function start() {
     var runs = runsToStart();
     if (running() || typeof runs === "string") return;
-    batch = { runs: runs, i: 0, ids: [] };
+    batch = { runs: runs, i: 0, ids: [], rebuild: $("rebuild").checked };
     runNext();
   }
   function runNext() {
-    var r = batch.runs[batch.i];
+    var r = batch && batch.runs[batch.i];
+    if (!r) return;
     post({ cmd: "run", paths: r.paths, mode: r.mode, xmlDir: xmlDir || "drive", xmlName: r.xml || "",
            folder: r.paths.filter(function (p) { return !isSong(p); })[0] });
   }
@@ -1088,6 +1130,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("aside").classList.remove("moves");
     $("bOpen").textContent = "Open in Premiere";
     $("bRetry").hidden = false;
+    $("bBackBoxes").hidden = true;
     $("bStartOver").hidden = true;
     if (e.nothing_new) return finishNothing(e);
     if (e.add) return finishAdd(e);
@@ -1177,12 +1220,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (!batch) return;
     if (!stoppedByUser && batch.i < batch.runs.length - 1) {   // on to the next music video
       batch.i++;
-      setTimeout(runNext, 900);
+      nextTimer = setTimeout(function () { nextTimer = null; runNext(); }, 900);
       return;
     }
     if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); optSummary(); }
-    if (batch.runs.length > 1) showBatch();
+    if (batch.runs.length > 1 && !stoppedByUser) showBatch();   // stopped: Try again carries on from that video
+    if (!$("vSet").hidden && pane === "files") renderSettings();   // Choose… works again
   }
+  var nextTimer = null;            // the pause between one music video and the next
 
   // several music videos: a card per run, the same as in History
   function showBatch() {
@@ -1197,11 +1242,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       : ok + " of " + plural(runs.length, "music video") + " done";
     box.appendChild(hd);
     runs.forEach(function (h) { box.appendChild(entryCard(h)); });
-    ["drop", "run", "stats", "camsWrap", "aside", "todo", "error", "btnsDone", "btnsErr"].forEach(function (id) { show(id, false); });
+    ["drop", "run", "hero", "stats", "camsWrap", "aside", "todo", "error", "btnsDone", "btnsErr"].forEach(function (id) { show(id, false); });
     $("details").open = false;
     show("batch", true);
     show("btnsErr", true);
     $("bRetry").hidden = true;
+    $("bBackBoxes").hidden = ok === runs.length;
     setTitle("Kickoff");
   }
 
@@ -1223,6 +1269,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     show("error", true);
     show("btnsErr", true);
     $("bRetry").hidden = false;
+    $("bBackBoxes").hidden = false;
     record(stoppedByUser ? "stopped" : "error", null, $("errText").textContent);
   }
 
@@ -1240,6 +1287,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       entry.restarted = e.restarted || 0;
     }
     if (err) entry.error = String(err).slice(0, 400);
+    var run = batch && batch.runs[batch.i];
+    if (run) entry.name = run.xml || "";
+    if (run && e) {                              // done or nothing new: its row is cleared when the next thing is added
+      if (run.job) run.job.done = true;
+      else if (run.queue) queueDone = true;
+      saveBoxes();
+    }
     history.unshift(entry);
     post({ cmd: "history-add", entry: entry });
     if (batch) batch.ids.push(entry.id);
@@ -1307,8 +1361,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     t.textContent = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
     var ti = document.createElement("span");
     ti.className = "t";
-    var sg = (h.paths || []).filter(isSong)[0];
-    ti.textContent = h.project || (sg ? base(sg).replace(/\.[^.]+$/, "") : label(h.paths || []));
+    var sg = (h.paths || []).filter(isSong)[0], hf = (h.paths || []).filter(function (p) { return !isSong(p); });
+    ti.textContent = h.project || (hf.length ? projectName(hf) : sg ? base(sg).replace(/\.[^.]+$/, "") : "");
     var b = document.createElement("span");
     b.className = "badge " + desc[1];
     b.textContent = desc[0];
@@ -1333,13 +1387,21 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (h.xml) act(h.add ? "Import into Premiere" : "Open in Premiere", function () { post({ cmd: "premiere", path: h.xml }); });
     if (h.report) act(h.mode === "setup" ? "Clip list" : "Report", function () { post({ cmd: "report", path: h.report }); });
     if (h.xml || (h.paths && h.paths.length)) act("Show in Finder", function () { post({ cmd: "reveal", path: h.xml || h.paths[0] }); });
-    if (h.paths && h.paths.length) act("Run again", function () {
+    if (h.paths && h.paths.length) act("Put back", function () {   // into the boxes, next to what's there
       if (running()) return;
+      clearTimeout(nextTimer); nextTimer = null;
+      if (resultShowing()) leaveResult();
       var m = h.mode === "setup" ? "setup" : "music";
       showView(m);
-      reset();
-      if (m === "setup") queue = h.paths.slice();
-      else jobs = [{ song: h.paths.filter(isSong)[0] || null, footage: h.paths.filter(function (p) { return !isSong(p); }) }];
+      var stem = h.xml ? base(h.xml).replace(/\.xml$/i, "") : "";
+      var name = typeof h.name === "string" ? h.name : stem !== h.project ? stem : "";
+      if (m === "setup") {                        // one queue: the folders join it
+        h.paths.forEach(function (p) { if (queue.indexOf(p) < 0) queue.push(p); });
+        if (!setupName) { setupName = name; $("qName").innerHTML = ""; }
+      } else {
+        var row = { song: h.paths.filter(isSong)[0] || null, footage: h.paths.filter(function (p) { return !isSong(p); }), name: name };
+        if (jobs.some(function (j) { return j.song || j.footage.length; })) jobs.push(row); else jobs = [row];
+      }
       renderStage();
     });
     act("Remove", function () {
@@ -1354,8 +1416,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function showView(v) {             // "music", "setup", "hist" or "set"
     var aside = v === "hist" || v === "set";
     if (!aside && v !== mode) {
-      if (running()) v = mode;                  // a run in progress: stay on its screen
-      else setMode(v);                          // a finished run stays on screen until New run
+      if (running() || resultShowing()) v = mode;   // a run, or its result: stay on its screen until New run
+      else setMode(v);
     }
     show("vRun", !aside);
     show("vHist", v === "hist");
@@ -1394,19 +1456,30 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (atEnd) log.scrollTop = log.scrollHeight;
   }
 
-  function running() { return !$("btnsRun").hidden; }
+  function running() { return !$("btnsRun").hidden || !!nextTimer; }   // the pause between music videos too
   $("drop").addEventListener("click", function () { if (!running() && $("btnsDone").hidden) post({ cmd: "pick", target: "any" }); });
   $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick", target: "any" }); });
   $("bOpen").addEventListener("click", function () { post({ cmd: "premiere", path: state.result.xml }); });
   $("bReport").addEventListener("click", function () { post({ cmd: "report", path: state.result.report }); });
   $("bReveal").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.xml }); });
-  function fresh() { queue = []; jobs = [{ song: null, footage: [] }]; batch = null; reset(); }
+  function fresh() {
+    clearTimeout(nextTimer); nextTimer = null;
+    queue = []; jobs = [{ song: null, footage: [] }]; setupName = ""; queueDone = false; $("qName").innerHTML = "";
+    batch = null; reset();                  // reset saves the empty boxes
+  }
   $("bNew").addEventListener("click", fresh);
   $("bNew2").addEventListener("click", fresh);
   $("bRetry").addEventListener("click", function () {      // the run that failed, then the rest of the batch
     if (!state.paths.length || running()) return;
     if (!batch) batch = { runs: [{ paths: state.paths, mode: mode }], i: 0, ids: [] };
+    if (batch.rebuild && !$("rebuild").checked) { $("rebuild").checked = true; post({ cmd: "rebuild", on: true }); optSummary(); }
     runNext();
+  });
+  $("bBackBoxes").addEventListener("click", function () {  // after a stop or an error: the boxes as they were
+    if (running()) return;
+    jobs.forEach(function (j) { delete j.done; });
+    queueDone = false;
+    batch = null; reset();
   });
   $("bStart").addEventListener("click", start);
   $("bStartOver").addEventListener("click", function () {   // "Nothing new": rebuild the same run from scratch
@@ -1414,13 +1487,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("rebuild").checked = true;
     post({ cmd: "rebuild", on: true });
     var r0 = batch && batch.runs[batch.i];
-    batch = { runs: [r0 || { paths: state.paths, mode: mode }], i: 0, ids: [] };
+    batch = { runs: [r0 || { paths: state.paths, mode: mode }], i: 0, ids: [], rebuild: true };
     runNext();
   });
   $("bExport").addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
   $("bExportReset").addEventListener("click", function () { setXmlDir(""); });
   $("bAddJob").addEventListener("click", function () { if (!running()) { jobs.push({ song: null, footage: [] }); renderStage(); } });
-  $("bClear").addEventListener("click", function () { queue = []; renderStage(); });
+  $("bClear").addEventListener("click", function () { queue = []; setupName = ""; $("qName").innerHTML = ""; renderStage(); });
   $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
 
 
@@ -1601,6 +1674,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       g = group("Project XML", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
       var v = el("span", { class: "hint" }, esc(xmlDir || "The top of the drive the footage is on"));
       var b = el("button", {}, "Choose…");
+      if (running()) { b.disabled = true; b.title = "Available when the run finishes"; }
       b.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
       var wrap = el("span", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }); wrap.appendChild(v); wrap.appendChild(b);
       if (xmlDir) { var r0 = el("button", { class: "quiet", style: "margin-left:0" }, "Use the drive"); r0.addEventListener("click", function () { setXmlDir(""); renderSettings(); }); wrap.appendChild(r0); }
@@ -1881,6 +1955,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     },
     reset: reset
   };
+  loadBoxes();
   setMode(mode);
   setXmlDir(xmlDir);
   showView(mode);
