@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.11"
+VERSION = "0.5.12"
 
 # ---------------------------------------------------------------- constants
 
@@ -1631,6 +1631,16 @@ def premiere_audio(layout, pick):
     return n, first[i] + 1 + (c if layout[i] > 2 else 0)
 
 
+def audio_track_channels(layout):
+    """Channels in each audio clip Premiere makes of a file, from its streams' channel counts
+    (see premiere_audio): [1, 1, 1, 1, 1] for a Mini LF, [2] for most cameras, [1, 1, 1, 1] for
+    one 4-channel stream."""
+    out = []
+    for n in (max(1, n) for n in (layout or [2])):
+        out += [n] if n <= 2 else [1] * n
+    return out
+
+
 @dataclass
 class Media:
     """A source file as it appears in the XML."""
@@ -1648,13 +1658,14 @@ class Media:
     rotation: int = 0
     audio_tracks: int = 1        # audio clips Premiere makes of the file (a mono stream each, or a stereo pair)
     audio_pick: int = 0          # which of them holds the channel the sync used (1-based; 0: not known)
+    audio_layout: list = field(default_factory=list)    # channels in each audio stream, in order
 
     @staticmethod
     def of_clip(c, fallback_fps):
         tracks, pick = premiere_audio(c.audio_layout, c.audio_pick)
         return Media(c.path, c.fps or fallback_fps, c.duration, True, c.has_audio,
                      max(1, c.audio_channels), c.audio_rate, c.width or 1920, c.height or 1080, c.timecode,
-                     c.par or 1.0, c.rotation, tracks, pick)
+                     c.par or 1.0, c.rotation, tracks, pick, list(c.audio_layout))
 
     def shown_size(self):
         """Width and height of the picture as Premiere shows it: anamorphic unsqueezed, phones upright."""
@@ -1697,11 +1708,24 @@ class Xmeml:
                 sub(sc, "pixelaspectratio", "square")
             sub(sc, "fielddominance", "none")
         if m.has_audio:
-            a = sub(media, "audio")
-            sc = sub(a, "samplecharacteristics")
-            sub(sc, "depth", 16)
-            sub(sc, "samplerate", m.rate)
-            sub(a, "channelcount", m.channels)
+            # one <audio> per clip Premiere makes of the file (a mono stream, a stereo pair, or each
+            # channel of a 3+ channel stream), numbered by source channel the way Premiere exports
+            # them. A single <audio> with the first stream's channel count makes Premiere keep only
+            # that stream: on a Mini LF (5 mono streams) that is channel 1, which is empty.
+            ch = 0
+            for n in audio_track_channels(m.audio_layout or [m.channels]):
+                a = sub(media, "audio")
+                sc = sub(a, "samplecharacteristics")
+                sub(sc, "depth", 16)
+                sub(sc, "samplerate", m.rate)
+                sub(a, "channelcount", n)
+                if n <= 2:
+                    sub(a, "layout", "mono" if n == 1 else "stereo")
+                for k in range(n):
+                    ch += 1
+                    ac = sub(a, "audiochannel")
+                    sub(ac, "sourcechannel", ch)
+                    sub(ac, "channellabel", "discrete" if n == 1 else ("left", "right")[k])
         return f
 
     def clipitem(self, track, cid, m, mediatype, start, frames, fps, enabled=True, label=None, scale=None,
