@@ -1289,8 +1289,22 @@ def place_on(clip, master, st, cand, multi):
 # are checked against the picture: one frame per second (keyframes of long-GOP files only, so it
 # stays cheap), shrunk to 32x18, and a frame that is one flat color is blank.
 BLANK_CODECS = {"h264", "hevc", "mpeg4", "mpeg2video", "vp9", "av1"}
-BLANK_STD = 4.0            # 0-255 spread of the shrunk frame's pixels around their own mean
-BLANK_MOSTLY = 0.6         # a part at least this blank is set aside
+BLANK_BLACK = 24           # a pixel darker than this (0-255, every channel) is black
+BLANK_NEAR = 20            # a pixel this close to the frame's main color is that color
+BLANK_MOSTLY = 0.5         # a part at least this blank is set aside
+
+
+def blank_frame(f):
+    """True for a shrunk frame (pixels x RGB) that is one solid color, with or without black bars
+    around it (a Video8 capture box's blue screen is a 4:3 blue box inside black side bars), or all
+    black. A dark stage still has lights in it, so it doesn't count."""
+    black = f.max(axis=1) < BLANK_BLACK
+    if black.all():
+        return True
+    rest = f[~black]
+    main = np.median(rest, axis=0)
+    solid = np.abs(rest - main).max(axis=1) < BLANK_NEAR
+    return bool(solid.sum() >= 0.3 * len(f) and black.sum() + solid.sum() >= 0.97 * len(f))
 BLANK_EDGE_S = 3.0         # a blank run this long at a placed part's start or end is cut off it
 
 
@@ -1309,7 +1323,7 @@ def blank_seconds(path, duration):
     if not n:
         return None
     fr = fr[:n * 32 * 18 * 3].reshape(n, 32 * 18, 3).astype(np.float32)
-    flat = (fr - fr.mean(axis=1, keepdims=True)).std(axis=(1, 2)) < BLANK_STD
+    flat = [blank_frame(f) for f in fr]
     secs = int(math.ceil(duration)) or 1
     out = [None] * secs
     for t, f in zip(ts, flat):                 # each keyframe stands for the time up to the next one
