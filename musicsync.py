@@ -14,6 +14,7 @@ Needs ffmpeg + ffprobe on PATH and Python 3.9+ with numpy and scipy.
 
 import argparse
 import collections
+import copy
 import concurrent.futures as cf
 import csv
 import datetime
@@ -25,6 +26,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 import urllib.parse
 import warnings
 import xml.etree.ElementTree as ET
@@ -712,20 +715,44 @@ def load_audio(path, stream="a:0"):
 MAX_CHANNELS = 16
 
 
-def load_channels(path, layout, limit=None):
+def _decode_channels(path, layout, limit=None):
     """Every audio channel of the file as its own mono track: [(label, samples)]. Cameras put the
     scratch mic on different channels (an ARRI Mini LF: timecode on 3, mic on 4, 1-2 nearly silent),
-    and a downmix buries it, so channels are never mixed before one is chosen."""
+    and a downmix buries it, so channels are never mixed before one is chosen. All the streams come
+    out of one read of the file (a Mini LF has 5 audio streams, and the file used to be read once
+    for each); if that fails, each stream is read on its own so one bad stream doesn't lose the rest."""
+    layout = layout or [1]
+    need, total = 0, 0
+    for ch in layout:                             # streams needed to reach MAX_CHANNELS channels
+        need += 1
+        total += max(1, ch)
+        if total >= MAX_CHANNELS:
+            break
+    raws = None
+    if need > 1:
+        with tempfile.TemporaryDirectory(prefix="kickoff-") as tmp:
+            outs = [os.path.join(tmp, "a%d.f32" % i) for i in range(need)]
+            cmd = ["ffmpeg", "-v", "error", "-nostdin", "-i", path]
+            for i, o in enumerate(outs):          # (-t is an output option: each output needs its own)
+                cmd += (["-t", str(limit)] if limit else []) + \
+                    ["-map", "0:a:%d" % i, "-vn", "-ar", str(SR), "-f", "f32le", "-acodec", "pcm_f32le", o]
+            if run(cmd).returncode == 0:
+                raws = [np.fromfile(o, dtype=np.float32) for o in outs]
     out = []
-    for i, ch in enumerate(layout or [1]):
-        r = run(["ffmpeg", "-v", "error", "-nostdin", "-i", path] + (["-t", str(limit)] if limit else [])
-                + ["-map", "0:a:%d" % i, "-vn",
-                 "-ar", str(SR), "-f", "f32le", "-acodec", "pcm_f32le", "-"])
-        if r.returncode != 0:
-            if out:
-                continue
-            raise RuntimeError(r.stderr.decode(errors="replace").strip()[-300:])
-        x = np.frombuffer(r.stdout, dtype=np.float32)
+    for i, ch in enumerate(layout):
+        if raws is not None:
+            if i >= len(raws):
+                break
+            x = raws[i]
+        else:
+            r = run(["ffmpeg", "-v", "error", "-nostdin", "-i", path] + (["-t", str(limit)] if limit else [])
+                    + ["-map", "0:a:%d" % i, "-vn",
+                     "-ar", str(SR), "-f", "f32le", "-acodec", "pcm_f32le", "-"])
+            if r.returncode != 0:
+                if out:
+                    continue
+                raise RuntimeError(r.stderr.decode(errors="replace").strip()[-300:])
+            x = np.frombuffer(r.stdout, dtype=np.float32)
         ch = max(1, ch)
         x = x[:len(x) // ch * ch].reshape(-1, ch)
         for c in range(ch):
@@ -735,6 +762,77 @@ def load_channels(path, layout, limit=None):
             if len(out) >= MAX_CHANNELS:
                 return out
     return out
+
+
+AUDIO_CACHE_GB = 10.0       # decoded camera audio kept for reruns, oldest dropped past this
+
+
+def audio_cache_dir():
+    """Where decoded camera audio is kept between runs (None: caching off). A rerun, an added day
+    or Start over then skips the slowest step, reading the audio out of every camera file."""
+    if os.environ.get("KICKOFF_NO_CACHE"):
+        return None
+    home = os.path.expanduser("~")
+    base = os.path.join(home, "Library", "Caches", "Kickoff") if sys.platform == "darwin" \
+        else os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(home, ".cache"), "kickoff")
+    return os.path.join(base, "audio")
+
+
+def load_channels(path, layout, limit=None):
+    """_decode_channels, remembered: the same file (path, size and modification time unchanged)
+    read the same way comes back from the cache, sample for sample."""
+    d = audio_cache_dir()
+    try:
+        st_ = os.stat(path)
+    except OSError:
+        d = None
+    if d is None:
+        return _decode_channels(path, layout, limit)
+    import hashlib
+    key = json.dumps([os.path.abspath(path), st_.st_size, st_.st_mtime_ns, SR, list(layout or [1]), limit,
+                      MAX_CHANNELS, 1])
+    f = os.path.join(d, hashlib.sha1(key.encode()).hexdigest() + ".npz")
+    try:
+        with np.load(f, allow_pickle=False) as z:
+            labels = [str(v) for v in z["labels"]]
+            out = [(lb, z["c%d" % i]) for i, lb in enumerate(labels)]
+        os.utime(f)                                   # recently used: kept longest
+        return out
+    except Exception:
+        pass
+    out = _decode_channels(path, layout, limit)
+    try:
+        os.makedirs(d, exist_ok=True)
+        tmp = f + ".%d.%d.tmp" % (os.getpid(), threading.get_ident())
+        with open(tmp, "wb") as fh:
+            np.savez(fh, labels=np.array([lb for lb, _ in out]), **{"c%d" % i: x for i, (_, x) in enumerate(out)})
+        os.replace(tmp, f)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+    return out
+
+
+def trim_audio_cache():
+    """Keep the audio cache under AUDIO_CACHE_GB, dropping the least recently used files first."""
+    d = audio_cache_dir()
+    if not d or not os.path.isdir(d):
+        return
+    try:
+        files = [(e.stat().st_mtime, e.stat().st_size, e.path) for e in os.scandir(d) if e.is_file()]
+    except OSError:
+        return
+    total, cap = sum(f[1] for f in files), AUDIO_CACHE_GB * 1e9
+    for _, size, pth in sorted(files):
+        if total <= cap:
+            break
+        try:
+            os.remove(pth)
+            total -= size
+        except OSError:
+            pass
 
 
 def is_timecode(x):
@@ -826,6 +924,21 @@ class MasterIndex:
         h, t = landmarks(*find_peaks(audio))
         order = np.argsort(h, kind="stable")
         self.h, self.t = h[order], t[order]
+        self._spec, self._spec_lock = collections.OrderedDict(), threading.Lock()
+
+    def spectrum(self, n):
+        """The song's FFT at size n (np.fft.rfft(audio, n)), worked out once and reused: a long take
+        is searched against the whole song hundreds of times, and each search used to redo it."""
+        with self._spec_lock:
+            if n in self._spec:
+                self._spec.move_to_end(n)
+                return self._spec[n]
+        A = np.fft.rfft(self.audio, n)
+        with self._spec_lock:
+            self._spec[n] = A
+            while len(self._spec) > 3:          # a few sizes: each can be a few hundred MB
+                self._spec.popitem(last=False)
+        return A
 
     def match(self, h, t):
         """Histogram of (master_time - clip_time) over all hash hits."""
@@ -995,8 +1108,32 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         r, c = max(ph, key=lambda v: v[0])
         if c is not best and r >= PHASE_AGREE and r > 1.2 * max(v[0] for v in ph if v[1] is best):
             best = c
-    _, label, x, h, t, ev = best
-    if len(chans) > 1:
+    # The pick above is only the likeliest channel: when it doesn't place the clip (a Mini LF whose
+    # ch3 is blown out while ch4 has clean scratch audio), every other channel that matched the song
+    # at all gets the same full search, and the first one that places the clip is kept. Every
+    # placement still has to clear the same checks, whichever channel it came from.
+    others = sorted((c for c in tried if c is not best and c[5] is not None), key=lambda c: c[0], reverse=True)
+    if not others:
+        return place_on(clip, master, st, best, len(chans) > 1)
+    snap = copy.deepcopy(clip)
+    first = None
+    for cand in [best] + others[:3]:
+        work = copy.deepcopy(snap)
+        place_on(work, master, st, cand, True)
+        if work.status == "placed":
+            if cand is not best:
+                work.notes.append("placed on %s: %s didn't match" % (cand[1], best[1]))
+            clip.__dict__.update(work.__dict__)
+            return
+        if first is None:
+            first = work
+    clip.__dict__.update(first.__dict__)
+
+
+def place_on(clip, master, st, cand, multi):
+    """Sync the clip on one audio channel (cand from sync_clip: score, label, samples, landmarks, match)."""
+    _, label, x, h, t, ev = cand
+    if multi:
         clip.audio_pick = label
         clip.notes.append("scratch audio on %s" % label)
     if ev is None:
@@ -1293,20 +1430,26 @@ def pass_edges(xs, master, off, first, last, rivals=()):
     def hit(t):
         q = q_at(off, t)
         return q >= WAVE_MATCH and all(q >= 1.5 * q_at(r, t) for r in rivals)
+    def first_hit(ts):          # only the first matching window from each side counts, so stop there
+        return next((t for t in ts if hit(t)), None)
     n = len(xs) / SR
-    starts = [t for t in np.arange(max(0.0, first - 2.0), min(first + 4.0, n - 1.0), 0.1) if hit(t)]
-    ends = [t for t in np.arange(max(0.0, last - 4.0), min(last + 3.0, n - 1.0), 0.1) if hit(t)]
-    if not starts or not ends:
+    start = first_hit(np.arange(max(0.0, first - 2.0), min(first + 4.0, n - 1.0), 0.1))
+    end = first_hit(np.arange(max(0.0, last - 4.0), min(last + 3.0, n - 1.0), 0.1)[::-1])
+    if start is None or end is None:
         # the landmarks' first or last hit was chance (a drummer noodling between passes lines up
         # with the song now and then): walk in from that side to where the waveform really matches
-        coarse = [t for t in np.arange(first, max(first, last - 1.0), 0.5) if hit(t)]
-        if not coarse:
+        coarse = np.arange(first, max(first, last - 1.0), 0.5)
+        c0 = first_hit(coarse)
+        if c0 is None:
             return first, last
-        if not starts:
-            starts = [t for t in np.arange(max(0.0, coarse[0] - 1.0), coarse[0] + 0.05, 0.1) if hit(t)]
-        if not ends:
-            ends = [t for t in np.arange(coarse[-1], min(coarse[-1] + 1.0, n - 1.0) + 0.05, 0.1) if hit(t)]
-    return starts[0] + 0.4, ends[-1] + 0.5
+        c1 = first_hit(coarse[::-1])
+        if start is None:
+            start = first_hit(np.arange(max(0.0, c0 - 1.0), c0 + 0.05, 0.1))
+        if end is None:
+            end = first_hit(np.arange(c1, min(c1 + 1.0, n - 1.0) + 0.05, 0.1)[::-1])
+        if start is None or end is None:
+            raise IndexError("list index out of range")    # as before: an edge window that never matches
+    return start + 0.4, end + 0.5
 
 
 def continues(xs, master, tc, off, a, b):
@@ -1391,7 +1534,7 @@ def song_search(xs, master, lo, hi):
     short for them. Returns the offset (song time of xs sample 0)."""
     seg = xs[int(lo * SR):int(hi * SR)]
     n = 1 << int(math.ceil(math.log2(len(master.audio) + len(seg))))
-    X = np.fft.rfft(master.audio, n) * np.conj(np.fft.rfft(seg, n))
+    X = master.spectrum(n) * np.conj(np.fft.rfft(seg, n))
     freqs = np.fft.rfftfreq(n, 1 / SR)
     X[(freqs < 120) | (freqs > 4500)] = 0
     X /= np.maximum(np.abs(X), 1e-12)
@@ -1415,7 +1558,7 @@ def phase_search(xs, master, lo, hi):
     if len(seg) < SR:
         return None, 0.0
     n = 1 << int(math.ceil(math.log2(len(master.audio) + len(seg))))
-    X = np.fft.rfft(master.audio, n) * np.conj(np.fft.rfft(seg, n))
+    X = master.spectrum(n) * np.conj(np.fft.rfft(seg, n))
     freqs = np.fft.rfftfreq(n, 1 / SR)
     X[(freqs < 150) | (freqs > 4000)] = 0
     X /= np.maximum(np.abs(X), 1e-12)
@@ -1447,8 +1590,11 @@ def stray_song(xs, master, st, h, t, lo, hi, known):
     for o in cands:
         if any(abs(o - k) < 0.08 for k in known):     # beyond that, windows at k miss it (search 0.06)
             continue
-        wins = [w for w in np.arange(lo, hi - 1.0 + 1e-6, 0.5)
-                if q1(o, w) >= WAVE_MATCH and all(q1(o, w) >= 1.5 * q1(k, w) for k in known)]
+        wins = []
+        for w in np.arange(lo, hi - 1.0 + 1e-6, 0.5):
+            q = q1(o, w)                                # (worked out once, not once per known pass)
+            if q >= WAVE_MATCH and all(q >= 1.5 * q1(k, w) for k in known):
+                wins.append(w)
         if len(wins) >= 2 and (best is None or len(wins) > len(best[1])):
             best = (o, wins)
     if best is None:
@@ -2988,6 +3134,7 @@ def main(argv=None):
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--settings", default=os.environ.get("KICKOFF_SETTINGS"))
     load_settings(pre.parse_known_args(argv)[0].settings)
+    trim_audio_cache()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", metavar="[MASTER] FOLDER",
                     help="a shoot folder (the song is found inside it), or a master song then a clips folder; "
@@ -3027,7 +3174,9 @@ def main(argv=None):
     ap.add_argument("--path-map", action="append", default=[], metavar="OLD=NEW",
                     help="rewrite media paths in the XML, e.g. /mnt/footage=/Volumes/SSD/Shoot "
                          "or /mnt/footage=D:/Shoot (repeatable)")
-    ap.add_argument("-j", "--jobs", type=int, default=max(1, min(8, os.cpu_count() or 2)))
+    ap.add_argument("-j", "--jobs", type=int, default=max(1, min(10, os.cpu_count() or 2)))
+    ap.add_argument("--no-cache", action="store_true",
+                    help="don't keep decoded camera audio for the next run (see audio_cache_dir)")
     ap.add_argument("--mode", choices=["auto", "music", "setup"], default="auto",
                     help="music: sync to the song (music video); setup: bins, Breakups and an empty Edit "
                          "sequence only (commercials); auto (default): music when a song is found and "
@@ -3042,6 +3191,8 @@ def main(argv=None):
                     place_repeats=SETTINGS["place_repeats"])
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
+    if args.no_cache:
+        os.environ["KICKOFF_NO_CACHE"] = "1"
     global EVENTS
     EVENTS = args.events
     if args.sync_size == "first":
