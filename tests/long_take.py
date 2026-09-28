@@ -2,7 +2,7 @@
 """Long-take test: one camera rolling for ~20 minutes while the song is played over and over,
 with long stretches of no song (talk, resets) between passes, like an action camera left running.
 
-    python3 tests/long_take.py [seed] [passes] [full] [weak dB]
+    python3 tests/long_take.py [seed] [passes] [full] [weak dB] [every] [snr dB]
 
 Prints every part the matcher cut, with the true song position of the pass it covers."""
 import os
@@ -19,9 +19,10 @@ import make_synthetic as ms   # noqa: E402
 import musicsync as m         # noqa: E402
 
 
-def run(seed=5, n=12, full=0, weak=0):
+def run(seed=5, n=12, full=0, weak=0, every=3, snr=8):
     """full=1: every pass plays the whole song from the top with short resets between (a DJI left
-    rolling through take after take), so all passes share the same song material."""
+    rolling through take after take), so all passes share the same song material. weak: every
+    `every`-th pass is played that many dB quieter (1 = all of them); snr: room and band noise level."""
     r = np.random.default_rng(seed)
     ms.rng = np.random.default_rng(seed + 1)
     passes, c = [], r.uniform(5, 40)
@@ -32,10 +33,10 @@ def run(seed=5, n=12, full=0, weak=0):
         else:
             s0 = r.uniform(0, sp.DUR - 15)
             d = r.uniform(12, sp.DUR - s0)
-        passes.append((c, s0, d, 10 ** (-weak / 20) if weak and len(passes) % 3 == 2 else 1.0))
+        passes.append((c, s0, d, 10 ** (-weak / 20) if weak and len(passes) % every == every - 1 else 1.0))
         c += d + (r.uniform(6, 40) if full else r.uniform(30, 150))
     length = c
-    audio = signal.resample_poly(ms.passes_audio(sp.SONG, passes, length, snr_db=8, live_drums=True),
+    audio = signal.resample_poly(ms.passes_audio(sp.SONG, passes, length, snr_db=snr, live_drums=True),
                                  147, 640).astype(np.float32)
     clip = m.Clip(path="long", rel="long", duration=length, fps=23.976, has_audio=True)
     m.load_channels = lambda path, layout: [("channel 1", audio)]
