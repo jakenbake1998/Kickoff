@@ -319,25 +319,30 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .addbin:hover{color:var(--ink);border-color:var(--muted)}
 .foot{font-size:11.5px;color:var(--muted);display:flex;justify-content:space-between;gap:10px}
 [hidden]{display:none!important}
-/* opening (about 1 s): the logo pops in, winds up, and is kicked off to the right, taking the cover with it
-   to reveal the page */
+/* opening (about 1.5 s): the slate pops in, the clapper opens and claps shut, and the clap launches it
+   off to the right, taking the cover with it to reveal the page */
 #intro{position:fixed;inset:0;z-index:50;background:var(--bg);display:grid;place-items:center;pointer-events:none;
-  box-shadow:-24px 0 40px rgba(0,0,0,.45);animation:introSlide .46s cubic-bezier(.55,0,.25,1) .54s forwards}
-#intro .ilogo{width:92px;height:92px;border-radius:22px;background:var(--accent);display:grid;place-items:center;
-  box-shadow:0 10px 30px color-mix(in srgb,var(--accent) 35%,transparent);animation:introKick 1s linear forwards}
-#intro .ilogo svg{width:64px;height:64px}
-@keyframes introKick{
-  0%{transform:scale(.55);opacity:0;animation-timing-function:cubic-bezier(.3,1.4,.5,1)}
-  24%{transform:scale(1);opacity:1;animation-timing-function:ease-in-out}
-  40%{transform:scale(1)}
-  52%{transform:translateX(-16px) rotate(-12deg);animation-timing-function:cubic-bezier(.5,0,.3,1)}
-  100%{transform:translateX(24px) rotate(28deg)}}
+  box-shadow:-24px 0 40px rgba(0,0,0,.45);animation:introSlide .55s cubic-bezier(.5,0,.2,1) .95s both}
+#intro .ilogo{width:112px;height:112px;border-radius:26px;background:var(--accent);display:grid;place-items:center;
+  box-shadow:0 10px 30px color-mix(in srgb,var(--accent) 35%,transparent);
+  animation:tilePop .3s cubic-bezier(.3,1.5,.5,1) both, tileHit .3s ease-out .62s both}
+#intro .ilogo svg{width:78px;height:78px;overflow:visible}
+#intro .clap{transform-origin:11px 15px;animation:clap .5s cubic-bezier(.6,0,.4,1) .2s both}
+#intro .lines{animation:lines .35s ease-out .64s both}
+#intro .lines path{stroke-dasharray:7;stroke-dashoffset:7;animation:draw .25s ease-out .64s forwards}
+#intro .flash{opacity:0;animation:flash .25s ease-out .6s both}
+@keyframes tilePop{from{transform:scale(.5);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes clap{0%{transform:rotate(0)}55%{transform:rotate(-20deg)}78%{transform:rotate(-20deg)}100%{transform:rotate(0)}}
+@keyframes tileHit{0%{transform:scale(1)}30%{transform:scale(1.08,.92) translateX(-4px)}100%{transform:scale(1) translateX(0)}}
+@keyframes lines{from{opacity:0;transform:translateX(6px)}to{opacity:1;transform:none}}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes flash{0%{opacity:0}20%{opacity:1}100%{opacity:0}}
 @keyframes introSlide{from{transform:translateX(0)}to{transform:translateX(105%)}}
 @media (prefers-reduced-motion:reduce){#intro{display:none}}
 </style>
 </head>
 <body>
-<div id="intro" aria-hidden="true"><div class="ilogo"><svg viewBox="-1 3 32 30" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 13.5h4.5M0 18h5M2.5 22.5h4.5" stroke-width="2.3"/><g transform="rotate(-30 19 18)"><rect x="11" y="15" width="17" height="11" rx="1.4"/><path d="M11 15l-0.6-4.2 16.4-2.4 0.6 4.2z"/><path d="M14.2 10.3l3 4.1M18.7 9.6l3 4.1M23.2 9l3 4.1" stroke-width="2"/></g></svg></div></div>
+<div id="intro" aria-hidden="true"><div class="ilogo"><svg viewBox="-1 3 32 30" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><g class="lines"><path d="M2 13.5h4.5M0 18h5M2.5 22.5h4.5"/></g><g transform="rotate(-30 19 18)"><rect x="11" y="15" width="17" height="11" rx="1.4"/><g class="clap"><path d="M11 15l-0.6-4.2 16.4-2.4 0.6 4.2z"/><path d="M14.2 10.3l3 4.1M18.7 9.6l3 4.1M23.2 9l3 4.1" stroke-width="2"/></g><g class="flash" stroke-width="1.6"><path d="M9 11.5l-2.4-1.6M8.6 15l-2.8 0.2M9.8 8.4l-1.4-2.4"/></g></g></svg></div></div>
 <div class="titlebar" id="title">Kickoff</div>
 <main>
   <div class="top">
@@ -1852,7 +1857,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   (function () {                         // the opening animation leaves once it has played
     var intro = $("intro"), gone = function () { if (intro.parentNode) intro.parentNode.removeChild(intro); };
     intro.addEventListener("animationend", function (ev) { if (ev.target === intro) gone(); });
-    setTimeout(gone, 1400);
+    setTimeout(gone, 1900);
   })();
 })();
 </script>
