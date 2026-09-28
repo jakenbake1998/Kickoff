@@ -114,6 +114,17 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .hs{color:var(--muted);font-size:13px;margin-top:3px;overflow-wrap:anywhere}
 .hq{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
 .hq:empty{display:none}
+/* "Already up to date": one centred card that carries its own Start over */
+.hact{display:none}
+.hero.solo{grid-template-columns:1fr;justify-items:center;text-align:center;gap:12px;padding:34px 32px 30px;
+  width:min(100%,620px);justify-self:center;align-self:center;margin-inline:auto}
+.hero.solo .hicon{width:64px;height:64px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.hero.solo .hicon svg{width:30px;height:30px}
+.hero.solo .ht{font-size:26px}
+.hero.solo .hs{font-size:14px;margin-top:6px;max-width:46ch;margin-inline:auto}
+.hero.solo .hact{display:grid;justify-items:center;gap:8px;margin-top:18px}
+.hero.solo .hact button{display:flex;align-items:center;padding:11px 22px;font-size:14.5px;border-radius:11px}
+.hero.solo .hact p{margin:0;color:var(--muted);font-size:12.5px}
 button svg{vertical-align:-2px;margin-right:6px}
 button.newrun{margin-left:auto;display:flex;align-items:center;padding:10px 20px;font-size:14.5px;border-radius:11px;
   color:var(--accent);border:1.5px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
@@ -452,7 +463,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <div class="hero" id="hero" hidden>
     <div class="hicon" id="heroIcon" aria-hidden="true"></div>
-    <div class="htxt"><div class="ht" id="heroT"></div><div class="hs" id="heroS"></div><div class="hq" id="heroQ"></div></div>
+    <div class="htxt"><div class="ht" id="heroT"></div><div class="hs" id="heroS"></div><div class="hq" id="heroQ"></div>
+      <div class="hact" id="heroAct">
+        <button class="pri" id="bStartOver" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Start over</button>
+        <p>Builds the whole project again with the latest Kickoff.</p>
+      </div></div>
   </div>
 
   <p class="stats" id="stats" hidden><b id="sSynced">0</b> synced so far, <b id="sAside">0</b> set aside<span hidden><b id="sCams"></b><span id="sCamsL"></span></span></p>
@@ -488,7 +503,6 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
   <div class="btns" id="btnsErr" hidden>
     <button class="pri" id="bRetry">Try again</button>
-    <button class="pri" id="bStartOver" hidden>Start over</button>
     <button class="newrun" id="bNew2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New run</button>
   </div>
   </section>
@@ -1057,8 +1071,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("stage").textContent = "Nothing new since the last run: every clip in this folder is already in " + e.project + ".";
     $("count").textContent = "";
     show("stats", false);
-    hero("plain", "Nothing new to add",
-      "Every clip in this folder is already in " + e.project + ". To rebuild it from scratch with the latest Kickoff, press Start over.", []);
+    var dirs = state.paths.filter(function (p) { return !isSong(p); }).map(base);
+    hero("plain", "Already up to date",
+      "Every clip in " + (dirs.length ? dirs.join(", ") : "this folder") + " is already in " + e.project + ", so nothing was changed.", []);
+    show("drop", false); show("details", false);     // the card says it all
+    $("hero").classList.add("solo");
+    $("heroIcon").innerHTML = ICON_OK;
     show("btnsRun", false);
     show("btnsErr", true);
     $("bRetry").hidden = true;
