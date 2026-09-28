@@ -1395,7 +1395,7 @@ def drop_blank(clip, blank=None):
         f = frac(p.src_in, p.src_out)
         if f >= BLANK_MOSTLY:
             p.notes.append("%.0f%% of the picture is a flat color, placed at song %.1fs by its sound"
-                           % (100 * f, p.offset + p.src_in))
+                           % (100 * f, p.offset + p.src_in * clip.speed))
             p.status, p.offset, p.reason = "not placed", None, REASON_NO_PICTURE
             parts.append(p)
             changed = True
