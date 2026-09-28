@@ -12,12 +12,15 @@ let support = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Kickoff")
 let historyFile = support.appendingPathComponent("history.json")
 let audioExtensions: Set<String> = ["wav", "aif", "aiff", "bwf", "mp3", "m4a", "flac", "aac", "caf"]
+let videoExtensions: Set<String> = ["mov", "mp4", "mxf", "m4v", "mts", "m2ts", "avi", "mkv", "r3d", "braw",
+                                    "insv", "360", "wmv", "webm"]
 
 // what the window takes: folders (a shoot, a day, a card) and audio files (the song)
 func usable(_ urls: [URL]) -> [URL] {
     urls.filter { url in
         (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
             || audioExtensions.contains(url.pathExtension.lowercased())
+            || videoExtensions.contains(url.pathExtension.lowercased())     // XMLs, text, stills: left out
     }
 }
 
@@ -81,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var updateNote = ""
     var mode = "auto"                     // auto / music / setup, from the switch in the window
     var rebuild = false                   // "start over" box: ignore earlier runs on the folder
+    var xmlName = ""                      // what the XML is called ("": the footage folder's name)
     var xmlDir = "drive"                  // "Export XML to": a folder, or "drive" (top of the footage's drive)
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -174,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let paths = body["paths"] as? [String] ?? (body["folder"] as? String).map { [$0] } ?? []
             if let m = body["mode"] as? String { mode = m }
             xmlDir = body["xmlDir"] as? String ?? "drive"
+            xmlName = (body["xmlName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !paths.isEmpty { run(paths) }
         case "history-add":
             if let entry = body["entry"] as? [String: Any] {
@@ -243,13 +248,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard proc?.isRunning != true else { NSSound.beep(); return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = target != "song"
-        panel.canChooseFiles = target == "song" || target == "any"
-        if panel.canChooseFiles { panel.allowedContentTypes = [.audio, .folder] }
+        panel.canChooseFiles = target != "export"
+        if target == "song" { panel.allowedContentTypes = [.audio] }
+        else if panel.canChooseFiles { panel.allowedContentTypes = [.audiovisualContent, .folder] }
         panel.allowsMultipleSelection = target == "footage" || target == "any"
         panel.canCreateDirectories = target == "export"
         panel.prompt = target == "export" ? "Export Here" : "Add"
         panel.message = target == "song" ? "Choose the song"
-            : target == "footage" ? "Choose the footage: the shoot folder, a day, or cards"
+            : target == "footage" ? "Choose the footage: the shoot folder, a day, cards or clips"
             : target == "export" ? "Choose the folder the Premiere XML goes in"
             : "Choose the shoot folder or cards (and the song if it isn't in the folder)"
         panel.beginSheetModal(for: window) { [weak self] result in
@@ -276,6 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         env["PYTHONUNBUFFERED"] = "1"
         env["KICKOFF_XML_DIR"] = xmlDir
+        env["KICKOFF_NAME"] = xmlName
         p.environment = env
         let out = Pipe(), err = Pipe()
         p.standardOutput = out

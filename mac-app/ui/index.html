@@ -77,6 +77,12 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .list span:last-child{color:var(--muted);text-align:right}
 .list .h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
 
+.xname{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);margin:-2px 40px 0 2px}
+.xname span:first-child{font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;flex:none}
+.xname input{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:7px;color:var(--ink);font:13px var(--body);padding:6px 9px}
+.xname input:focus{outline:none;border-color:var(--accent)}
+.xname .ext{flex:none}
+#qName .xname{margin:4px 0 0}
 .builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:grid;gap:12px}
 .builds .h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
 .bgrid{display:grid;grid-template-columns:minmax(190px,230px) 1fr;gap:18px;align-items:start}
@@ -223,6 +229,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div class="qhead"><span class="h" id="qCount">Ready to run</span><button class="quiet" id="bClear" style="margin-left:0">Clear all</button></div>
     <div class="queue" id="qList"></div>
     <p class="qnote" id="qNote"></p>
+    <div id="qName"></div>
   </div>
 
   <div class="modes" id="modes">
@@ -374,6 +381,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     parts.forEach(function (q) { var i = 0; while (i < out.length && out[i] === q[i]) i++; out.length = i; });
     return out.join("/") || "/";
   }
+  var VIDEO = /\.(mov|mp4|mxf|m4v|mts|m2ts|avi|mkv|r3d|braw|insv|360|wmv|webm)$/i;
+  function projectName(paths) {       // what the engine names the project: the folder that holds it all
+    var f = paths.filter(function (p) { return !isSong(p); });
+    f = (f.length ? f : paths).map(function (p) { return VIDEO.test(p) || isSong(p) ? parent(p) : p; });
+    return f.length ? base(commonFolder(f)) : "";
+  }
   function label(paths) {             // what a run is called: the folder, or "3 folders"
     var f = paths.filter(function (p) { return !isSong(p); });
     return f.length === 1 ? base(f[0]) : f.length + " folders";
@@ -394,18 +407,17 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (!ready()) return;
     paths = paths || [];
     if (mode === "setup") {
-      paths.forEach(function (p) {
-        if (isSong(p)) queue = queue.filter(function (q) { return !isSong(q); });    // one song
-        if (queue.indexOf(p) < 0) queue.push(p);
-      });
+      paths.forEach(function (p) { if (queue.indexOf(p) < 0) queue.push(p); });
       return renderStage();
     }
     var songs = paths.filter(isSong), folders = paths.filter(function (p) { return !isSong(p); });
     var r = row != null && row >= 0 && row < jobs.length ? row : -1;
     if (r >= 0) {                                   // on a box: into that row
-      if (songs.length) jobs[r].song = songs.shift();
-      addFootage(r, folders);
-      folders = [];
+      // the song box takes a song; either box gives an empty song box the first audio file, and
+      // everything else dropped (folders, clips, more audio) is that row's footage
+      if (songs.length && (target === "song" || !jobs[r].song)) jobs[r].song = songs.shift();
+      addFootage(r, folders.concat(songs));
+      folders = []; songs = [];
     }
     songs.forEach(function (sg) {                   // each other song: the first row without one, else a new row
       var j = jobs.findIndex(function (x) { return !x.song; });
@@ -419,6 +431,22 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     }
     renderStage();
   }
+  // "Name the XML": what the Premiere project file is called (empty: the footage folder's name)
+  function nameField(value, set, dflt) {
+    var l = document.createElement("label");
+    l.className = "xname";
+    var k = document.createElement("span");
+    k.textContent = "XML name";
+    var i = document.createElement("input");
+    i.type = "text"; i.value = value; i.placeholder = dflt; i.spellcheck = false;
+    i.addEventListener("input", function () { set(i.value); });
+    var x = document.createElement("span");
+    x.className = "ext"; x.textContent = ".xml";
+    l.append(k, i, x);
+    return l;
+  }
+  var setupName = "";
+
   function addFootage(r, folders) {
     folders.forEach(function (f) { if (jobs[r].footage.indexOf(f) < 0) jobs[r].footage.push(f); });
   }
@@ -451,7 +479,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       v.textContent = j.song ? base(j.song) : "Drop the song here";
       var sub = document.createElement("div");
       sub.className = "sub";
-      sub.textContent = j.song ? parent(j.song) : "or click to choose it";
+      sub.textContent = j.song ? parent(j.song) : j.footage.length ? "or leave it: Kickoff looks in the footage's Music folder"
+        : "or click to choose it";
       sb.append(v, sub);
       if (j.song) {
         var c = document.createElement("button");
@@ -486,7 +515,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         });
         var more = document.createElement("div");
         more.className = "sub";
-        more.textContent = j.footage.length > 1 ? "One project, in " + base(commonFolder(j.footage)) + " · drop or click to add more"
+        more.textContent = j.footage.length > 1 ? "One project, in " + projectName(j.footage) + " · drop or click to add more"
           : "Drop or click to add more cards";
         fb.append(chips, more);
       } else {
@@ -495,7 +524,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         v2.textContent = "Drop the footage here";
         var s2 = document.createElement("div");
         s2.className = "sub";
-        s2.textContent = "the shoot folder, a day, or cards";
+        s2.textContent = "a whole folder, a day, cards or clips. Only video and audio are used";
         fb.append(v2, s2);
       }
       fb.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "footage", row: i }); });
@@ -511,22 +540,28 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       });
       row.append(sb, mid, fb, rx);
       wrap.appendChild(row);
+      if (j.song || j.footage.length) wrap.appendChild(nameField(j.name || "", function (v) { j.name = v; },
+        j.footage.length ? projectName(j.footage) : "the footage folder's name"));
     });
   }
 
   function runsToStart() {                // [{paths, mode, name}], or a reason Start is off
     if (mode === "setup") {
       var folders = queue.filter(function (p) { return !isSong(p); });
-      return folders.length ? [{ paths: queue.slice(), mode: "setup", name: label(queue) }] : "Add the shoot folder or cards.";
+      return folders.length ? [{ paths: queue.slice(), mode: "setup", name: label(queue), xml: setupName.trim() }]
+        : "Add the shoot folder or cards.";
     }
     var used = jobs.filter(function (j) { return j.song || j.footage.length; });
     if (!used.length) return "Add a song and the footage to sync to it.";
     for (var i = 0; i < jobs.length; i++) {
       var j = jobs[i], n = jobs.length > 1 ? "Music video " + (i + 1) : "This music video";
       if (j.song && !j.footage.length) return n + " needs its footage.";
-      if (!j.song && j.footage.length) return n + " needs its song.";
     }
-    return used.map(function (j) { return { paths: [j.song].concat(j.footage), mode: "music", name: base(j.song) }; });
+    // no song in the box: the engine looks for it in the footage (a Music folder, or the song file)
+    return used.map(function (j) {
+      return { paths: (j.song ? [j.song] : []).concat(j.footage), mode: "music", xml: (j.name || "").trim(),
+               name: j.song ? base(j.song) : projectName(j.footage) };
+    });
   }
 
   function renderStage() {
@@ -576,6 +611,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       row.append(txt, x);
       list.appendChild(row);
     });
+    var qn = $("qName");
+    if (!qn.firstChild && queue.length) qn.appendChild(nameField(setupName, function (v) { setupName = v; }, ""));
+    if (!queue.length) qn.innerHTML = "";
+    var inp = qn.querySelector("input");
+    if (inp) inp.placeholder = projectName(queue);
     var folders = queue.filter(function (p) { return !isSong(p); });
     show("queue", queue.length > 0);
     show("hints", queue.length === 0);
@@ -609,7 +649,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
   function runNext() {
     var r = batch.runs[batch.i];
-    post({ cmd: "run", paths: r.paths, mode: r.mode, xmlDir: xmlDir || "drive",
+    post({ cmd: "run", paths: r.paths, mode: r.mode, xmlDir: xmlDir || "drive", xmlName: r.xml || "",
            folder: r.paths.filter(function (p) { return !isSong(p); })[0] });
   }
 

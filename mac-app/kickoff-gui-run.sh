@@ -28,4 +28,6 @@ EXTRA=()
 if [ -n "$KICKOFF_XML_DIR" ] && grep -q -- '--xml-dir' "$SUPPORT/musicsync.py"; then
   EXTRA+=(--xml-dir "$KICKOFF_XML_DIR")
 fi
+# what to call the project XML, from the window ("" or unset: the footage folder's name)
+[ -n "$KICKOFF_NAME" ] && EXTRA+=(--name "$KICKOFF_NAME")
 exec "$PY" "$SUPPORT/musicsync.py" --events --mode "${MODE:-auto}" "${EXTRA[@]}" -- "$@"

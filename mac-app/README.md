@@ -30,6 +30,13 @@ Kickoff has two screens, picked at the top:
 - **Other projects** (commercials and anything else): drop the shoot folder or cards into the list,
   remove any with ×, then **Start**. It sets up bins, Breakups and an empty Edit sequence, no syncing.
 
+Drop anything: a whole project folder, a day, cards or loose clips. Kickoff only uses the video and
+audio in it and leaves out everything else (XMLs, text files, stills, project files). Leave the Song
+box empty when the song is in the folder (in a `Music` folder, or named master/song/mix).
+
+**XML name** (under each music video, and under the list on Other projects) names the Premiere
+project file; leave it empty to use the footage folder's name.
+
 **Export XML to** (on both screens) is where the Premiere XML goes. Unless you choose a folder, it goes
 at the top of the drive the footage is on (for footage on `/Volumes/26JL02/...`, in `/Volumes/26JL02`);
 footage on the Mac's own disk keeps it in the `Kickoff Exports` folder. Reports stay in `Kickoff Exports`

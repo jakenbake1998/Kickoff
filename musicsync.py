@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 
 # ---------------------------------------------------------------- constants
 
@@ -462,6 +462,8 @@ def find_clips(clips_dir, master_path, skip_dirs=()):
     master_abs = os.path.abspath(master_path) if master_path else None
     skip = {os.path.abspath(d) for d in skip_dirs}
     out = []
+    # dropped a camera folder itself, or clips inside one: the camera is the folder it's in
+    here_cam = next((d for d in reversed(os.path.abspath(clips_dir).split(os.sep)) if CAM_FOLDER.match(d)), "")
     for root, dirs, files in os.walk(clips_dir):
         dirs[:] = sorted(d for d in dirs if not skip_dir(d) and os.path.abspath(os.path.join(root, d)) not in skip)
         for f in sorted(files):
@@ -476,7 +478,7 @@ def find_clips(clips_dir, master_path, skip_dirs=()):
             parts = rel.replace("\\", "/").split("/")[:-1]
             # the camera's folder: one named like "A Cam (Mini LF)" at any depth (Footage/Day 1/...),
             # else the first folder under the one dropped
-            cam = next((d for d in parts if CAM_FOLDER.match(d)), parts[0] if parts else "")
+            cam = next((d for d in parts if CAM_FOLDER.match(d)), None) or here_cam or (parts[0] if parts else "")
             out.append(Clip(path=p, rel=rel, top_folder=cam))
     return drop_copies(out)
 
@@ -2314,7 +2316,7 @@ def main(argv=None):
                          "several folders (cards) are taken together, as one project in the folder that holds them")
     ap.add_argument("--master", help="master song, if it can't be found in the folder automatically")
     ap.add_argument("-o", "--out", help="output folder (default: '%s' inside the folder)" % OUT_DIR)
-    ap.add_argument("--name", help="project name (default: the folder name)")
+    ap.add_argument("--name", help="project name, which names the XML (default: the folder name)")
     ap.add_argument("--xml-dir", help="where the project XMLs go (default: the output folder); 'drive' puts them "
                                       "at the top of the drive the footage is on. Reports stay in the output folder")
     ap.add_argument("--no-placeholders", dest="placeholders", action="store_false",
@@ -2367,34 +2369,46 @@ def main(argv=None):
         if not m:
             ap.error("--sync-size needs WxH, e.g. 3840x2160, or 'first'")
         args.sync_size = (int(m.group(1)), int(m.group(2)))
-    folders = [os.path.abspath(p) for p in args.paths if os.path.isdir(p)]
+    # folders, and loose files dropped with them: footage and audio are taken, anything else
+    # (XMLs, text, stills, project files) is left out
+    folders, files, other = [os.path.abspath(p) for p in args.paths if os.path.isdir(p)], [], []
     for p in args.paths:
         if os.path.isdir(p):
             continue
         if not os.path.isfile(p):
-            sys.exit("error: %s is not a folder" % p)
-        if os.path.splitext(p)[1].lower() not in AUDIO_EXT:
-            sys.exit("error: %s is not a folder or a song (audio file)" % p)
-        if args.master and os.path.abspath(args.master) != os.path.abspath(p):
-            sys.exit("error: more than one song given (%s and %s)" % (os.path.basename(args.master), os.path.basename(p)))
-        args.master = p
-    if not folders:
-        sys.exit("error: give a shoot folder (or the card folders) to sync")
+            sys.exit("error: %s is not a folder or a file" % p)
+        ext = os.path.splitext(p)[1].lower()
+        if ext in AUDIO_EXT and not args.master:
+            args.master = p                            # the first audio file is the song
+        elif ext in AUDIO_EXT or ext in MEDIA_EXT:
+            if os.path.abspath(p) != os.path.abspath(args.master or ""):
+                files.append(os.path.abspath(p))
+        else:
+            other.append(p)
+    if other:
+        log("Left out %d file%s that aren't footage or audio: %s" % (
+            len(other), "" if len(other) == 1 else "s", ", ".join(os.path.basename(p) for p in other[:5])
+            + (" ..." if len(other) > 5 else "")))
+    if not folders and not files:
+        sys.exit("error: give a shoot folder (or the card folders, or the clips) to sync")
     # several folders (cards dropped together): one project in the folder that holds them all
     folders = [f for f in folders if not any(f != g and f.startswith(g.rstrip(os.sep) + os.sep) for g in folders)]
     folders = sorted(set(folders))
-    args.only = folders if len(folders) > 1 else None
-    args.clips = os.path.commonpath(folders) if len(folders) > 1 else folders[0]
+    files = sorted(set(f for f in files if not any(f.startswith(g.rstrip(os.sep) + os.sep) for g in folders)))
+    homes = sorted(set(folders) | {os.path.dirname(f) for f in files})
+    args.only = (folders + files) if len(folders) + len(files) > 1 or files else None
+    args.clips = os.path.commonpath(homes) if len(homes) > 1 else homes[0]
     if args.only and args.clips in ("/", "/Volumes", os.path.expanduser("~")):
         sys.exit("error: those folders aren't in one shoot folder. Put the cards in one folder, or run them one at a time.")
     if args.only:
-        log("Taking %d folders together in %s: %s" % (len(folders), args.clips,
-                                                    ", ".join(os.path.relpath(f, args.clips) for f in folders)))
+        log("Taking %d %s together in %s: %s" % (len(args.only), "folders" if not files else "items", args.clips,
+                                               ", ".join(os.path.relpath(f, args.clips) for f in args.only[:12])
+                                               + (" ..." if len(args.only) > 12 else "")))
     out_given = bool(args.out)
     args.out = os.path.abspath(args.out or os.path.join(args.clips, OUT_DIR))
     state, restrict = (None, None) if args.rebuild else load_state(args, out_given)
     args.xml_out = xml_folder(args)
-    project_name = (state or {}).get("project") or args.name or os.path.basename(args.clips.rstrip("/\\")) or "Sync"
+    project_name = args.name or (state or {}).get("project") or os.path.basename(args.clips.rstrip("/\\")) or "Sync"
 
     for tool in ("ffmpeg", "ffprobe"):
         if not shutil.which(tool):
@@ -2668,7 +2682,7 @@ def xml_folder(args):
 def inside(p, folders):
     """True when path p is in one of `folders` (None: no limit)."""
     p = os.path.abspath(p)
-    return folders is None or any(p.startswith(f.rstrip(os.sep) + os.sep) for f in folders)
+    return folders is None or any(p == f or p.startswith(f.rstrip(os.sep) + os.sep) for f in folders)
 
 
 def load_state(args, out_given):
@@ -2753,7 +2767,7 @@ def add_cards(args, state, restrict):
     only the clips that are new since then, into one small XML to import into the open project.
     Each camera's new clips get their own bin ('A Cam Card 2'), Breakup and Sync sequence; the
     Sync sequence starts at the same timecode as the camera's main one, so it nests on top of it."""
-    name = state["project"]
+    name = args.name or state["project"]
     args.mode = state.get("mode") or "music"
     seq_fps, preroll = state["seq_fps"], state["preroll"]
     args.sync_size = tuple(state["sync_size"]) if state.get("sync_size") else None
