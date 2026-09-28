@@ -385,10 +385,11 @@ NOT_SONG = re.compile(r"stem|instrumental|\binst\b|a ?cappella|acapella|vocals? 
                       r"\bsfx\b|\bvo\b|voice ?over|wild ?track|room ?tone|\bboom\b|\blav\b|zoom\d", re.I)
 
 
-def pick_master(folder, audio_files):
+def pick_master(folder, audio_files, ties=None):
     """Guess the master song in a dropped folder. A file in a Music/Song folder, or named
     master/song/mix, wins; stems, instrumentals, clicks and sound recordings are passed over; of
-    several equally likely files, the longest (a full mix, not an edit or a stem) is taken."""
+    several equally likely files, the longest (a full mix, not an edit or a stem) is taken. Those
+    equally likely files go in `ties` (longest first), so the clips can vote (vote_song)."""
     if len(audio_files) == 1:
         return audio_files[0]
 
@@ -416,6 +417,8 @@ def pick_master(folder, audio_files):
     top = [p for sc, p in scored if sc == scored[0][0]]
     if len(top) > 1:
         top.sort(key=lambda p: -probe_audio(p)[0])
+        if ties is not None:
+            ties[:] = top
         log("Several possible songs: %s. Using the longest, %s (pass --master to pick another)"
             % (", ".join(os.path.basename(p) for p in top), os.path.basename(top[0])))
     return top[0]
@@ -424,7 +427,49 @@ def pick_master(folder, audio_files):
 MUSIC_DIRS = ("music", "song", "songs", "playback", "master")
 
 
-def song_nearby(folder, levels=3):
+VOTE_CLIPS, VOTE_SECONDS = 12, 90
+
+
+def vote_song(songs, clips):
+    """Of several equally likely songs (a Music folder holding the band's other tracks, or a v1 and
+    a v2), the one most clips line up with: the first 90 s of up to 12 clips spread through the shoot,
+    each voting for the song it matches best. Returns (song, votes) or None when no clip matches any."""
+    sample = clips[::max(1, len(clips) // VOTE_CLIPS)][:VOTE_CLIPS]
+    idx = []
+    for p in songs:
+        try:
+            idx.append((p, MasterIndex(load_audio(p))))
+        except RuntimeError:
+            continue
+    votes = {p: 0 for p, _ in idx}
+    st = Settings()
+    for c in sample:
+        if not c.duration:
+            probe(c)
+        if not (c.readable and c.has_audio):
+            continue
+        try:
+            chans = load_channels(c.path, c.audio_layout, limit=VOTE_SECONDS)
+        except RuntimeError:
+            continue
+        best = None
+        for _, xc in chans:
+            if not len(xc) or float(np.sqrt(np.mean(xc ** 2))) < 10 ** (-60 / 20) or is_timecode(xc):
+                continue
+            h, t = landmarks(*find_peaks(xc))
+            for p, mi in idx:
+                e = evaluate(mi, h, t)
+                if e is not None and accepted(e, st) and (best is None or e["conf"] > best[0]):
+                    best = (e["conf"], p)
+        if best:
+            votes[best[1]] += 1
+    if not votes or max(votes.values()) == 0:
+        return None
+    top = max(votes.values())
+    return next(p for p in songs if votes.get(p) == top), votes
+
+
+def song_nearby(folder, levels=3, ties=None):
     """The song in a Music folder next to the one dropped, or a level or two up: a card or a day's
     footage dropped on its own (Shoot/Footage/Day 1) with the song in Shoot/Audio/Music."""
     d = os.path.abspath(folder)
@@ -443,7 +488,7 @@ def song_nearby(folder, levels=3):
                 if x.lower() in MUSIC_DIRS and os.path.isdir(os.path.join(sub, x)):
                     found += find_audio(os.path.join(sub, x))
         if found:
-            song = pick_master(d, found)
+            song = pick_master(d, found, ties)
             if song:
                 log("Song found next to the folder: %s" % song)
                 return song
@@ -517,13 +562,14 @@ def load_audio(path, stream="a:0"):
 MAX_CHANNELS = 16
 
 
-def load_channels(path, layout):
+def load_channels(path, layout, limit=None):
     """Every audio channel of the file as its own mono track: [(label, samples)]. Cameras put the
     scratch mic on different channels (an ARRI Mini LF: timecode on 3, mic on 4, 1-2 nearly silent),
     and a downmix buries it, so channels are never mixed before one is chosen."""
     out = []
     for i, ch in enumerate(layout or [1]):
-        r = run(["ffmpeg", "-v", "error", "-nostdin", "-i", path, "-map", "0:a:%d" % i, "-vn",
+        r = run(["ffmpeg", "-v", "error", "-nostdin", "-i", path] + (["-t", str(limit)] if limit else [])
+                + ["-map", "0:a:%d" % i, "-vn",
                  "-ar", str(SR), "-f", "f32le", "-acodec", "pcm_f32le", "-"])
         if r.returncode != 0:
             if out:
@@ -2436,8 +2482,18 @@ def main(argv=None):
     audio_files = [p for p in all_audio if inside(p, args.only)]
     if args.mode != "setup" and not args.master:
         # the song can sit outside the cards dropped (Audio/Music next to them): look everywhere
-        args.master = pick_master(args.clips, audio_files) or (pick_master(args.clips, all_audio) if args.only else None) \
-            or song_nearby(args.clips)
+        ties = []
+        args.master = pick_master(args.clips, audio_files, ties) or \
+            (pick_master(args.clips, all_audio, ties) if args.only else None) or song_nearby(args.clips, ties=ties)
+        if args.master and len(ties) > 1:
+            # several files could be the song: let a few clips say which one they were shot to
+            event("stage", text="Working out which file is the song")
+            probe_clips = [c for c in find_clips(args.clips, None, [args.out]) if inside(c.path, args.only)]
+            won = vote_song(ties, probe_clips) if probe_clips else None
+            if won:
+                args.master = won[0]
+                log("Song picked by the clips: %s (%s)" % (os.path.basename(won[0]), ", ".join(
+                    "%s %d" % (os.path.basename(p), n) for p, n in sorted(won[1].items(), key=lambda kv: -kv[1]))))
         if not args.master and args.mode == "music":
             names = "\n  ".join(os.path.relpath(p, args.clips) for p in audio_files) or "(no audio files)"
             sys.exit("error: can't tell which file is the song. Put it in a 'Music' folder or pass "
