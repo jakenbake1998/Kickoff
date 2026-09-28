@@ -1225,7 +1225,7 @@ def song_search(xs, master, lo, hi):
 
 PHASE_EXCL_S = 0.25        # the runner-up peak is looked for this far or more from the best one
 PHASE_AGREE = 1.35         # best/runner-up ratio enough when the landmarks' best guess lands on the same spot
-PHASE_ALONE = 1.8          # ... and without them (random clips and the band's other songs stay under ~1.25)
+PHASE_ALONE = 2.0          # ... and without them (the band's other song reaches 1.5 by chance on synthetic takes)
 PHASE_FRAME_S = 0.045      # "the same spot": within about a frame
 
 
