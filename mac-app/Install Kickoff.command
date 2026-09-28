@@ -66,6 +66,9 @@ else
   rm -rf "$APP"
   osacompile -o "$APP" Kickoff.applescript
 fi
+# files unzipped from a download carry macOS's quarantine flag; the app is built here, but clear it
+# from everything installed so nothing trips Gatekeeper later
+xattr -dr com.apple.quarantine "$APP" "$SUPPORT" 2>/dev/null || true
 echo
 echo "Installed ~/Applications/Kickoff.app"
 echo "Drag it to your Dock, then drop a shoot folder on it (or on its window)."
