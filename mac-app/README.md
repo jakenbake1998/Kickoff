@@ -45,7 +45,8 @@ either way (shoots set up before this change keep their old `Premiere Sync` fold
 When a run ends, a panel says how many clips synced, where the XML was saved and how long it took.
 It is green when every placement looks clean and amber when some clips are worth a look, so check
 those first. **Left for you in Premiere** lists what an XML can't do: drag the imported bin to the top,
-enable Multi-Camera on the nests in `<name>_Edit`, and add a Temp Color adjustment layer. **Open XML folder** opens
+enable Multi-Camera on the nests in `<name>_Edit`, add a Temp Color adjustment layer, and
+create proxies for the Footage bin. **Open XML folder** opens
 that folder with the XML selected; **New run** clears the window for the next one. If nothing is new
 since the last run, **Start over** rebuilds the project from scratch.
 
