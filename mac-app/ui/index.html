@@ -529,6 +529,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       <span class="k">Export XML to</span><span class="v" id="exportPath"></span>
       <button id="bExport">Choose…</button><button class="quiet" id="bExportReset" hidden>Use the drive</button>
     </div>
+    <div class="export">
+      <span class="k">Premiere project saves to</span><span class="v" id="prPath"></span>
+      <button id="bPr">Choose…</button><button class="quiet" id="bPrReset" hidden>Next to the XML</button>
+    </div>
     <label class="check"><input type="checkbox" id="rebuild"> Start over: rebuild the whole project, even if this folder was run before</label>
     </details>
   </div>
@@ -672,10 +676,29 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("bExportReset").hidden = !xmlDir;
     optSummary();
   }
+  var prDir = "";                  // "" = next to the XML (a Premiere folder beside a folder named XML)
+  try { prDir = localStorage.getItem("kickoff-prproj-dir") || ""; } catch (e) {}
+  function setPrDir(d) {
+    prDir = d || "";
+    try { localStorage.setItem("kickoff-prproj-dir", prDir); } catch (e) {}
+    $("prPath").textContent = prDir || "Next to the XML";
+    $("prPath").title = prDir || "When the XML folder is called XML, a Premiere folder beside it";
+    $("bPrReset").hidden = !prDir;
+    optSummary();
+  }
+  function projectDirFor(xml) {     // where Open in Premiere makes the project for this XML
+    if (prDir) return prDir;
+    var d = parent(xml);
+    return base(d).toLowerCase() === "xml" ? parent(d) + "/Premiere" : d;
+  }
+  function openPremiere(xml, isAdd) {  // an add goes into the project they already have, so no new project
+    post(isAdd ? { cmd: "premiere", path: xml } : { cmd: "premiere", path: xml, projectDir: projectDirFor(xml) });
+  }
   function optSummary() {           // the closed Options line says what they are set to
     // the chosen folder with the one above it ("Project Files > XML"): a folder named XML alone read as "XML goes to XML"
     var shown = xmlDir ? [base(parent(xmlDir)), base(xmlDir)].filter(Boolean).join(" > ") : "";
     $("optSum").textContent = (xmlDir ? "XML saves to " + shown : "XML saves to the top of the footage drive") +
+      (prDir ? ", project to " + [base(parent(prDir)), base(prDir)].filter(Boolean).join(" > ") : "") +
       ($("rebuild").checked ? ", starting over" : "");
   }
   var batch = null;                // the runs Start began: { runs: [{paths, mode, name}], i, ids }
@@ -1750,7 +1773,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       bt.addEventListener("click", fn);
       acts.appendChild(bt);
     }
-    if (h.xml) act(h.add ? "Import into Premiere" : "Open in Premiere", function () { post({ cmd: "premiere", path: h.xml }); });
+    if (h.xml) act(h.add ? "Import into Premiere" : "Open in Premiere", function () { openPremiere(h.xml, h.add); });
     if (h.report) act(h.mode === "setup" ? "Clip list" : "Report", function () { post({ cmd: "report", path: h.report }); });
     if (h.xml || (h.paths && h.paths.length)) act("Show in Finder", function () { post({ cmd: "reveal", path: h.xml || h.paths[0] }); });
     if (h.paths && h.paths.length) act("Put back", function () {   // into the boxes, next to what's there
@@ -1826,7 +1849,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function running() { return !$("btnsRun").hidden || !!nextTimer; }   // the pause between music videos too
   $("drop").addEventListener("click", function () { if (!running() && $("btnsDone").hidden) post({ cmd: "pick", target: "any" }); });
   $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick", target: "any" }); });
-  $("bOpen").addEventListener("click", function () { post({ cmd: "premiere", path: state.result.xml }); });
+  $("bOpen").addEventListener("click", function () { openPremiere(state.result.xml, state.result.add); });
   $("bReport").addEventListener("click", function () { post({ cmd: "report", path: state.result.report }); });
   $("bReveal").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.xml }); });
   function fresh() {
@@ -1859,6 +1882,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   });
   $("bExport").addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
   $("bExportReset").addEventListener("click", function () { setXmlDir(""); });
+  $("bPr").addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "prproj" }); });
+  $("bPrReset").addEventListener("click", function () { setPrDir(""); });
   $("bAddJob").addEventListener("click", function () { if (!running()) { jobs.push({ song: null, footage: [] }); renderStage(); } });
   $("bClear").addEventListener("click", function () { queue = []; setupName = ""; $("qName").innerHTML = ""; renderStage(); });
   $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
@@ -2039,7 +2064,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       BinTree(holder, { bins: settings.bins, required: REQUIRED, notes: ROLE_NOTE, scroller: P,
         onChange: function () { saveSettings(); } });
     } else if (pane === "files") {
-      g = group("Project XML", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
+      g = group("Where it saves", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
       var v = el("span", { class: "hint" }, esc(xmlDir || "The top of the drive the footage is on"));
       var b = el("button", {}, "Choose…");
       if (running()) { b.disabled = true; b.title = "Available when the run finishes"; }
@@ -2047,6 +2072,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       var wrap = el("span", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }); wrap.appendChild(v); wrap.appendChild(b);
       if (xmlDir) { var r0 = el("button", { class: "quiet", style: "margin-left:0" }, "Use the drive"); r0.addEventListener("click", function () { setXmlDir(""); renderSettings(); }); wrap.appendChild(r0); }
       row(g, "Export XML to", wrap);
+      var v2 = el("span", { class: "hint" }, esc(prDir || "Next to the XML"));
+      var b2 = el("button", {}, "Choose…");
+      if (running()) { b2.disabled = true; b2.title = "Available when the run finishes"; }
+      b2.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "prproj" }); });
+      var wrap2 = el("span", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }); wrap2.appendChild(v2); wrap2.appendChild(b2);
+      if (prDir) { var r2 = el("button", { class: "quiet", style: "margin-left:0" }, "Next to the XML"); r2.addEventListener("click", function () { setPrDir(""); renderSettings(); }); wrap2.appendChild(r2); }
+      row(g, "Premiere project saves to", wrap2);
       P.appendChild(g);
       g = group("Folders Kickoff skips", "Proxies, previews, renders, Generations and Exports are always skipped. Add any other folder names to leave out, separated by commas.");
       row(g, "Also skip", text(settings.skip_folders.join(", "), function (v) {
@@ -2311,7 +2343,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     add: function (paths) { add(paths); },
     drop: drop,
     picked: function (paths, target, row) {
-      if (target === "export") { setXmlDir(paths[0]); if (!$("vSet").hidden) renderSettings(); } else add(paths, target, row);
+      if (target === "export") { setXmlDir(paths[0]); if (!$("vSet").hidden) renderSettings(); }
+      else if (target === "prproj") { setPrDir(paths[0]); if (!$("vSet").hidden) renderSettings(); }
+      else add(paths, target, row);
     },
     settings: function (obj) { adopt(obj); renderTree(); if (!$("vSet").hidden) renderSettings(); },
     history: function (list) { history = Array.isArray(list) ? list : []; renderHistory(); },
@@ -2332,6 +2366,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   loadBoxes();
   setMode(mode);
   setXmlDir(xmlDir);
+  setPrDir(prDir);
   showView(mode);
   renderHistory();
   post({ cmd: "ready" });

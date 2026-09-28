@@ -28,6 +28,11 @@ if get mac-app/ui/index.html && grep -q "window.Kickoff" "$TMP/index.html" \
   cp "$TMP/index.html" "$SUPPORT/ui/index.html.upd" && mv "$SUPPORT/ui/index.html.upd" "$SUPPORT/ui/index.html"
   changed="${changed:+$changed, }window"
 fi
+# the empty Premiere project that "Open in Premiere" copies into the chosen folder (a gzip file)
+if get mac-app/Blank.prproj && [ "$(head -c 2 "$TMP/Blank.prproj" | od -An -tx1 | tr -d ' ')" = "1f8b" ] \
+   && ! cmp -s "$TMP/Blank.prproj" "$SUPPORT/Blank.prproj"; then
+  cp "$TMP/Blank.prproj" "$SUPPORT/Blank.prproj.upd" && mv "$SUPPORT/Blank.prproj.upd" "$SUPPORT/Blank.prproj"
+fi
 # the Dock/Finder icon: swapped into the app, which Finder and the Dock pick up once it's touched
 if [ -n "$APP" ] && [ -d "$APP/Contents/Resources" ] && get mac-app/icon/AppIcon.icns \
    && [ "$(head -c 4 "$TMP/AppIcon.icns")" = "icns" ] \

@@ -215,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             stopped = true
             proc?.terminate()
         case "title": window.title = body["text"] as? String ?? "Kickoff"
-        case "premiere": if let p = path { openInPremiere(p) }
+        case "premiere": if let p = path { openInPremiere(p, projectDir: body["projectDir"] as? String) }
         case "report": if let p = path { openReport(p) }
         case "reveal": if let p = path { NSWorkspace.shared.activateFileViewerSelecting([p]) }
         case "copy":                                    // file names from the results, for Premiere's search
@@ -274,18 +274,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard proc?.isRunning != true else { NSSound.beep(); return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = target != "song"
-        panel.canChooseFiles = target != "export"
+        let folderOnly = target == "export" || target == "prproj"
+        panel.canChooseFiles = !folderOnly
         // exactly the files usable() keeps, so nothing that can be chosen is dropped afterwards
         let audioTypes = audioExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
         let videoTypes = videoExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
         if target == "song" { panel.allowedContentTypes = audioTypes }
         else if panel.canChooseFiles { panel.allowedContentTypes = [UTType.folder] + audioTypes + videoTypes }
         panel.allowsMultipleSelection = target == "footage" || target == "any"
-        panel.canCreateDirectories = target == "export"
-        panel.prompt = target == "export" ? "Export Here" : "Add"
+        panel.canCreateDirectories = folderOnly
+        panel.prompt = target == "export" ? "Export Here" : target == "prproj" ? "Save Here" : "Add"
         panel.message = target == "song" ? "Choose the song"
             : target == "footage" ? "Choose the footage: the shoot folder, a day, cards or clips"
             : target == "export" ? "Choose the folder the Premiere XML goes in"
+            : target == "prproj" ? "Choose the folder the Premiere project goes in"
             : "Choose the shoot folder or cards (and the song if it isn't in the folder)"
         panel.beginSheetModal(for: window) { [weak self] result in
             guard let self = self, result == .OK else { return }
@@ -399,17 +401,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return nil
     }
 
-    func openInPremiere(_ xml: URL) {
-        NSWorkspace.shared.activateFileViewerSelecting([xml])
+    // With a folder picked and the blank project installed: copy the blank there as "<XML name>.prproj",
+    // open it in Premiere, then hand Premiere the XML once the project is open, so everything lands in it.
+    // Without them: hand Premiere the XML (it asks where to save the project).
+    func openInPremiere(_ xml: URL, projectDir: String? = nil) {
         guard let app = premiereApp() else {
+            NSWorkspace.shared.activateFileViewerSelecting([xml])
             let alert = NSAlert()
             alert.messageText = "Premiere Pro isn't in Applications"
             alert.informativeText = "The project is selected in Finder. In Premiere, use File > Import and pick it."
             alert.beginSheetModal(for: window, completionHandler: nil)
             return
         }
-        NSWorkspace.shared.open([xml], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(),
-                                completionHandler: nil)
+        let fm = FileManager.default
+        let blank = support.appendingPathComponent("Blank.prproj")
+        guard let dirPath = projectDir, !dirPath.isEmpty, fm.fileExists(atPath: blank.path) else {
+            NSWorkspace.shared.activateFileViewerSelecting([xml])
+            NSWorkspace.shared.open([xml], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(),
+                                    completionHandler: nil)
+            return
+        }
+        let dir = URL(fileURLWithPath: dirPath)
+        let name = xml.deletingPathExtension().lastPathComponent
+        var project = dir.appendingPathComponent(name + ".prproj")
+        // opened before from this XML: open that project again instead of making another
+        let xmlDate = (try? xml.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        let projDate = (try? project.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        if let p = projDate, let x = xmlDate, p >= x {
+            NSWorkspace.shared.open([project], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(),
+                                    completionHandler: nil)
+            return
+        }
+        var n = 2
+        while fm.fileExists(atPath: project.path) {
+            project = dir.appendingPathComponent("\(name) \(n).prproj")
+            n += 1
+        }
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try fm.copyItem(at: blank, to: project)
+        } catch {
+            NSWorkspace.shared.open([xml], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(),
+                                    completionHandler: nil)
+            return
+        }
+        let id = Bundle(url: app)?.bundleIdentifier ?? ""
+        let wasRunning = !id.isEmpty && !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty
+        NSWorkspace.shared.open([project], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) {
+            running, _ in
+            DispatchQueue.main.async { self.openXML(xml, app: app, running: running, wait: wasRunning ? 4 : 10, tries: 0) }
+        }
+    }
+
+    // Premiere takes the XML into whichever project is open, so give the new one time to open first.
+    func openXML(_ xml: URL, app: URL, running: NSRunningApplication?, wait: Double, tries: Int) {
+        if let r = running, !r.isFinishedLaunching, tries < 120 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                self.openXML(xml, app: app, running: r, wait: wait, tries: tries + 1)
+            }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+            NSWorkspace.shared.open([xml], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(),
+                                    completionHandler: nil)
+        }
     }
 
     func openReport(_ report: URL) {
