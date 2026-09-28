@@ -35,8 +35,9 @@ python3 musicsync.py "Day 2/A Cam (Mini LF)/A004" "Day 2/B Cam (FX3)/B003"
 They make one project in the folder that holds them all, or are added to the project that folder
 belongs to when it was set up before. A song file given alongside them is the song.
 
-Everything is written to `Premiere Sync` inside the shoot folder (`-o` to change). `--xml-dir FOLDER`
-puts the project XMLs somewhere else (reports and the project memory stay in `Premiere Sync`);
+Everything is written to `Kickoff Exports` inside the shoot folder (`-o` to change; projects set up
+before 0.5.3 keep using their `Premiere Sync` folder). `--xml-dir FOLDER`
+puts the project XMLs somewhere else (reports and the project memory stay in `Kickoff Exports`);
 `--xml-dir drive` puts them at the top of the drive the footage is on (`/Volumes/26JL02`), which is
 what the Kickoff window does unless you choose a folder:
 
@@ -60,7 +61,7 @@ forces one or the other.
 
 ## Adding cards as they come in (DIT days)
 
-Kickoff remembers every folder it has set up (`Premiere Sync/kickoff-project.json`: the song,
+Kickoff remembers every folder it has set up (`Kickoff Exports/kickoff-project.json`: the song,
 cameras and their letters, frame rate, where the sequences start, and every file already in the
 project). Run it again on the same shoot folder, or drop just the new card's folder if it sits
 inside the shoot folder, and it only picks up what's new since last time. It writes one small XML,
@@ -285,7 +286,7 @@ Camera letters come from those folders (`A Cam (Mini LF)`, `A_CAM`, `Camera B`),
 ```
 python3 tests/make_synthetic.py /tmp/synth
 python3 musicsync.py /tmp/synth/clips          # add --rebuild when running it again
-python3 tests/check.py /tmp/synth/expected.json "/tmp/synth/clips/Premiere Sync/sync_report.csv"
+python3 tests/check.py /tmp/synth/expected.json "/tmp/synth/clips/Kickoff Exports/sync_report.csv"
 ```
 
 `make_synthetic.py` builds a song with a pasted chorus and 20 clips from an FX3, an Alexa and a

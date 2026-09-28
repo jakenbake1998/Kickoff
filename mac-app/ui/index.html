@@ -321,7 +321,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     xmlDir = d || "";
     try { localStorage.setItem("kickoff-xml-dir", xmlDir); } catch (e) {}
     $("exportPath").textContent = xmlDir || "The top of the drive the footage is on";
-    $("exportPath").title = xmlDir || "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the Premiere Sync folder inside it";
+    $("exportPath").title = xmlDir || "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the Kickoff Exports folder inside it";
     $("bExportReset").hidden = !xmlDir;
   }
   var batch = null;                // the runs Start began: { runs: [{paths, mode, name}], i, ids }

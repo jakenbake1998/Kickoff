@@ -16,6 +16,6 @@ if [ -n "$BASE" ]; then
   rm -f "$SUPPORT/musicsync.py.new"
 fi
 clear
-"$PY" "$SUPPORT/musicsync.py" "$1" && open "$1/Premiere Sync" \
-  && echo && echo "Done. In Premiere: File > Import the .xml in Premiere Sync." \
+"$PY" "$SUPPORT/musicsync.py" "$1" && open "$1/Kickoff Exports" \
+  && echo && echo "Done. In Premiere: File > Import the .xml in Kickoff Exports." \
   || echo "Kickoff hit an error; see above."

@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 
 # ---------------------------------------------------------------- constants
 
@@ -57,10 +57,12 @@ MEDIA_EXT = {".mov", ".mp4", ".mxf", ".m4v", ".mts", ".m2ts", ".avi", ".mkv",
              ".r3d", ".braw", ".insv", ".360", ".wmv", ".webm"}
 AUDIO_EXT = {".wav", ".aif", ".aiff", ".bwf", ".mp3", ".m4a", ".flac", ".aac", ".caf"}
 UNREADABLE_EXT = {".r3d", ".braw"}   # ffmpeg cannot decode these containers
+OUT_DIR = "Kickoff Exports"            # what Kickoff writes, inside the shoot folder
+OLD_OUT_DIRS = ("Premiere Sync",)      # its name before 0.5.3: earlier projects are still found there
 SKIP_DIRS = {"SUB", "THMBNL", "GENERAL", "AVF_INFO", "CACHE", "THMB"}
 # not camera originals: proxies, Premiere's preview renders and auto-saves, renders and exports
 SKIP_DIR_RE = re.compile(r"prox(y|ies)|previews?\b|auto-?save|\brenders?\b|\bgenerations?\b|\bexports?\b|"
-                         r"media cache|^premiere sync$|\.(prproj|fcpbundle|drp)$", re.I)
+                         r"media cache|^premiere sync$|^kickoff exports$|\.(prproj|fcpbundle|drp)$", re.I)
 CAM_FOLDER = re.compile(r"^(?:(?i:cam(?:era)?)(?:[ _-]+([A-Za-z])|([A-Z]))(?![A-Za-z])|"
                         r"([A-Za-z])[ _-]*(?i:cam(?:era)?)(?![A-Za-z]))")
 
@@ -2190,7 +2192,7 @@ def main(argv=None):
                     help="a shoot folder (the song is found inside it), or a master song then a clips folder; "
                          "several folders (cards) are taken together, as one project in the folder that holds them")
     ap.add_argument("--master", help="master song, if it can't be found in the folder automatically")
-    ap.add_argument("-o", "--out", help="output folder (default: 'Premiere Sync' inside the folder)")
+    ap.add_argument("-o", "--out", help="output folder (default: '%s' inside the folder)" % OUT_DIR)
     ap.add_argument("--name", help="project name (default: the folder name)")
     ap.add_argument("--xml-dir", help="where the project XMLs go (default: the output folder); 'drive' puts them "
                                       "at the top of the drive the footage is on. Reports stay in the output folder")
@@ -2268,7 +2270,7 @@ def main(argv=None):
         log("Taking %d folders together in %s: %s" % (len(folders), args.clips,
                                                     ", ".join(os.path.relpath(f, args.clips) for f in folders)))
     out_given = bool(args.out)
-    args.out = os.path.abspath(args.out or os.path.join(args.clips, "Premiere Sync"))
+    args.out = os.path.abspath(args.out or os.path.join(args.clips, OUT_DIR))
     state, restrict = (None, None) if args.rebuild else load_state(args, out_given)
     args.xml_out = xml_folder(args)
     project_name = (state or {}).get("project") or args.name or os.path.basename(args.clips.rstrip("/\\")) or "Sync"
@@ -2549,7 +2551,7 @@ def inside(p, folders):
 
 
 def load_state(args, out_given):
-    """What an earlier run on this shoot folder set up (Premiere Sync/kickoff-project.json), so a
+    """What an earlier run on this shoot folder set up (Kickoff Exports/kickoff-project.json), so a
     second run only adds what's new. A folder inside an earlier run's shoot folder (a new card
     dropped on its own) counts too: returns (state, the dropped folder) and points args at the
     shoot folder. (None, None) when this is the first run."""
@@ -2565,13 +2567,20 @@ def load_state(args, out_given):
         return st, only
     if out_given:
         return None, None
+    for old in OLD_OUT_DIRS:                 # a project set up before the folder was renamed
+        st = read(os.path.join(args.clips, old))
+        if st:
+            args.out = os.path.join(args.clips, old)
+            return st, only
     d = args.clips
     while os.path.dirname(d) != d:
         d = os.path.dirname(d)
-        st = read(os.path.join(d, "Premiere Sync"))
-        if st:
+        found = next(((o, st) for o in (OUT_DIR,) + OLD_OUT_DIRS
+                      for st in [read(os.path.join(d, o))] if st), None)
+        if found:
+            st = found[1]
             restrict = only or [args.clips]
-            args.clips, args.out = d, os.path.join(d, "Premiere Sync")
+            args.clips, args.out = d, os.path.join(d, found[0])
             log("%s %s part of %s, which was set up before: adding %s" % (
                 ", ".join(os.path.basename(r) for r in restrict), "is" if len(restrict) == 1 else "are", d,
                 "it" if len(restrict) == 1 else "them"))
