@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.28"
+VERSION = "0.5.29"
 
 # ---------------------------------------------------------------- constants
 
@@ -3746,8 +3746,9 @@ def narrative_cameras(args, project_name, clips):
         master = MasterIndex(np.concatenate(chunks))
         event("stage", text="Lining up the other cameras with %s Cam" % lead)
         left = []
-        with cf.ThreadPoolExecutor(args.jobs) as ex:
-            for c in ex.map(work, pending):
+        with cf.ThreadPoolExecutor(args.jobs) as ex:             # each clip reported as soon as it's done
+            for fut in cf.as_completed([ex.submit(work, c) for c in pending]):
+                c = fut.result()
                 c.afile = take_of(c) if c.status == "placed" else None
                 if c.afile is None:
                     c.status = "not placed"
