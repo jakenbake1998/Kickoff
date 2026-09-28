@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 # ---------------------------------------------------------------- constants
 
@@ -1180,7 +1180,10 @@ def camera_letter_hint(clip):
     return ""
 
 
-def assign_cameras(clips, group_by):
+def assign_cameras(clips, group_by, prior=None, prior_folders=None):
+    """Camera key and letter per clip. `prior` ({key: [letter, model]}) holds the cameras of earlier
+    runs on the same project (cards added later): they keep their letters."""
+    prior = prior or {}
     for c in clips:
         model = c.model or "Unknown camera"
         if group_by == "folder":
@@ -1200,6 +1203,8 @@ def assign_cameras(clips, group_by):
                  (c.top_folder and k.top_folder == c.top_folder)]
         if mates:
             c.camera_key = collections.Counter(k.camera_key for k in mates).most_common(1)[0][0]
+        elif (prior_folders or {}).get(c.top_folder):         # filed with a camera from an earlier run
+            c.camera_key = prior_folders[c.top_folder]
     groups = collections.OrderedDict()
     for c in sorted(clips, key=lambda c: c.rel):
         groups.setdefault(c.camera_key, []).append(c)
@@ -1207,10 +1212,17 @@ def assign_cameras(clips, group_by):
     for key, cl in groups.items():
         letters = collections.Counter(camera_letter_hint(c) for c in cl if camera_letter_hint(c))
         hints[key] = letters.most_common(1)[0][0] if letters else ""
-    used, labels = set(), {}
-    hinted = collections.Counter(h for h in hints.values() if h)
+    used, labels = {v[0] for v in prior.values()}, {}
+    for key in groups:
+        if key in prior:
+            labels[key] = prior[key][0]
+        else:           # same model and letter as a camera already in the project: the same camera
+            same = [v[0] for v in prior.values() if v[0] == hints[key] and v[1] == (groups[key][0].model or "")]
+            if same:
+                labels[key] = same[0]
+    hinted = collections.Counter(h for k, h in hints.items() if h and k not in labels)
     for key in sorted(groups, key=lambda k: (hints[k] == "", hints[k], k)):   # unique hints first
-        if hints[key] and hinted[hints[key]] == 1:
+        if key not in labels and hints[key] and hinted[hints[key]] == 1 and hints[key] not in used:
             labels[key] = hints[key]
             used.add(hints[key])
     for key in sorted(groups, key=lambda k: (hints[k] == "", hints[k], k)):
@@ -1540,14 +1552,15 @@ def cam_bin_name(letter, model):
     return "%s Cam (%s)" % (letter, short) if short else "%s Cam" % letter
 
 
-def sync_entries(placements, seq_fps, preroll_s, master_media, args, label):
+def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song=True):
     """Sync layout: song at 01:00:00:00, every clip (every pass of a restarted take) on its own
     video track at its song offset. placements: [(Clip, Part)]."""
     song_frame = int(round(preroll_s * seq_fps))
     entries = []
-    if master_media and not args.no_master_audio:
+    with_song = bool(master_media) and song and not args.no_master_audio
+    if with_song:
         entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1))
-    first_a = 1 if args.no_master_audio else 2
+    first_a = 2 if with_song else 1
     for c, p in placements:
         # song time of the part's first frame, snapped so the cut sits on a whole source frame
         a = int(round(p.src_in * seq_fps))
@@ -1557,7 +1570,7 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label):
         entries.append(dict(media=Media.of_clip(c, seq_fps), start=start, vtrack=p.track,
                             atrack=(first_a + p.track - 1) if args.scratch_audio != "off" else None,
                             aenabled=args.scratch_audio == "on", label=label, speed=c.speed,
-                            src=(p.src_in, p.src_out) if c.split else None,
+                            src=(p.src_in, p.src_out) if c.split or p.src_in > 0 else None,
                             name=clip_name(c, p)))
     start_tc = 3600 * rate_xml(seq_fps)[0] - song_frame
     return entries, start_tc
@@ -1776,9 +1789,9 @@ def md_escape(s):
     return str(s).replace("|", "\\|")
 
 
-def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, captured=()):
+def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, captured=(), stem="sync_report"):
     rows = [r for c in clips for r in clip_rows(c, seq_fps, preroll)]
-    with open(os.path.join(out_dir, "sync_report.csv"), "w", newline="", encoding="utf-8") as fh:
+    with open(os.path.join(out_dir, stem + ".csv"), "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=COLUMNS)
         w.writeheader()
         w.writerows(rows)
@@ -1896,7 +1909,7 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
              "next-best one: 60 is about 2.7 standard deviations, 90+ is unmistakable. Waveform check is a "
              "second, independent test: the clip's audio is compared with the song at the placed position in "
              "4-second windows, and it counts the windows that match.")
-    with open(os.path.join(out_dir, "sync_report.md"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(out_dir, stem + ".md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(L) + "\n")
 
 
@@ -1944,6 +1957,9 @@ def main(argv=None):
                     help="music: sync to the song (music video); setup: bins, Breakups and an empty Edit "
                          "sequence only (commercials); auto (default): music when a song is found and "
                          "clips line up with it")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="build the whole project again even if this folder was run before (by default a "
+                         "second run only adds the cards that are new since then)")
     ap.add_argument("--events", action="store_true", help=argparse.SUPPRESS)   # for the Kickoff window
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
@@ -1965,8 +1981,10 @@ def main(argv=None):
     if not os.path.isdir(args.clips):
         sys.exit("error: %s is not a folder" % args.clips)
     args.clips = os.path.abspath(args.clips)
+    out_given = bool(args.out)
     args.out = os.path.abspath(args.out or os.path.join(args.clips, "Premiere Sync"))
-    project_name = args.name or os.path.basename(args.clips.rstrip("/\\")) or "Sync"
+    state, restrict = (None, None) if args.rebuild else load_state(args, out_given)
+    project_name = (state or {}).get("project") or args.name or os.path.basename(args.clips.rstrip("/\\")) or "Sync"
 
     for tool in ("ffmpeg", "ffprobe"):
         if not shutil.which(tool):
@@ -1977,6 +1995,9 @@ def main(argv=None):
             sys.exit("error: --path-map needs OLD=NEW")
         old, new = pm.split("=", 1)
         args.path_maps.append((os.path.abspath(old), new.rstrip("/\\")))
+
+    if state:
+        return add_cards(args, state, restrict)
 
     audio_files = find_audio(args.clips, [args.out])
     if args.mode != "setup" and not args.master:
@@ -2052,7 +2073,9 @@ def main(argv=None):
                            collections.Counter(c.fps for c in clips if c.fps).most_common(1) or [(24.0, 0)])[0][0]
     preroll = max([0.0] + [-(p.offset + p.src_in * c.speed) for c in placed for p in c.parts
                            if p.status == "placed"])
-    preroll = math.ceil(preroll + 0.5)            # whole seconds, identical in every camera sequence
+    # whole seconds, identical in every camera sequence; at least 10 s so cards added later that
+    # started rolling a little earlier still fit
+    preroll = max(PREROLL_MIN, math.ceil(preroll + 0.5))
 
     cams = []
     for key, letter in sorted(labels.items(), key=lambda kv: kv[1]):
@@ -2103,6 +2126,7 @@ def main(argv=None):
     else:
         report = write_clip_list(clips, cams, args.out, audio_bins)
         log("Wrote clip_list.csv. Set up %d clips from %d cameras." % (len(clips), len(cams)))
+    save_state(args, project_name, clips, labels, seq_fps, preroll, audio_files)
     cam_events = []
     for letter, cl in cams:
         pl = [(c, p) for c in cl if c.status == "placed" for p in c.parts if p.status == "placed"]
@@ -2166,9 +2190,9 @@ def match_all(clips, master, args):
 CLIP_LIST_COLUMNS = ["file", "camera", "model", "resolution", "fps", "duration", "audio", "note"]
 
 
-def write_clip_list(clips, cams, out_dir, audio_bins):
+def write_clip_list(clips, cams, out_dir, audio_bins, stem="clip_list"):
     """Project-setup runs (no song): a plain list of what went where."""
-    path = os.path.join(out_dir, "clip_list.csv")
+    path = os.path.join(out_dir, stem + ".csv")
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=CLIP_LIST_COLUMNS)
         w.writeheader()
@@ -2184,6 +2208,268 @@ def write_clip_list(clips, cams, out_dir, audio_bins):
                 w.writerow(dict(file=os.path.relpath(m.path, os.path.dirname(out_dir)), camera="Audio > " + bname,
                                 duration="%.2f" % (m.duration or 0), audio="yes"))
     return path
+
+
+# ---------------------------------------------------------------- adding cards to a project
+
+STATE_FILE = "kickoff-project.json"
+PREROLL_MIN = 10
+
+
+def rel_key(path, root):
+    return os.path.relpath(path, root).replace("\\", "/")
+
+
+def load_state(args, out_given):
+    """What an earlier run on this shoot folder set up (Premiere Sync/kickoff-project.json), so a
+    second run only adds what's new. A folder inside an earlier run's shoot folder (a new card
+    dropped on its own) counts too: returns (state, the dropped folder) and points args at the
+    shoot folder. (None, None) when this is the first run."""
+    def read(out):
+        try:
+            with open(os.path.join(out, STATE_FILE), encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return None
+    st = read(args.out)
+    if st:
+        return st, None
+    if out_given:
+        return None, None
+    d = args.clips
+    while os.path.dirname(d) != d:
+        d = os.path.dirname(d)
+        st = read(os.path.join(d, "Premiere Sync"))
+        if st:
+            restrict = args.clips
+            args.clips, args.out = d, os.path.join(d, "Premiere Sync")
+            log("%s is part of %s, which was set up before: adding it" % (os.path.basename(restrict), d))
+            return st, restrict
+    return None, None
+
+
+def save_state(args, name, clips, labels, seq_fps, preroll, audio_files, prev=None, cards=None, adds=0):
+    st = dict(prev or {})
+    master = args.master
+    if master:
+        master = os.path.abspath(master)
+        master = rel_key(master, args.clips) if master.startswith(args.clips + os.sep) else master
+    st.update(version=1, project=name, mode=args.mode, master=master, seq_fps=seq_fps, preroll=preroll,
+              sync_size=list(args.sync_size) if args.sync_size else None, group_by=args.group_by,
+              adds=adds, updated=datetime.datetime.now().isoformat(timespec="seconds"))
+    cams = st.setdefault("cameras", {})
+    for key, letter in labels.items():
+        model = next((c.model for c in clips if c.camera_key == key and c.model), "")
+        cams.setdefault(key, [letter, model])
+    st["clips"] = sorted(set(st.get("clips", [])) | {rel_key(c.path, args.clips) for c in clips if c.readable})
+    # unreadable files are tried again next run only if they've changed (maybe still copying off the card)
+    bad = dict(st.get("unreadable", {}))
+    for c in clips:
+        k = rel_key(c.path, args.clips)
+        if c.readable:
+            bad.pop(k, None)
+        else:
+            try:
+                bad[k] = os.path.getsize(c.path)
+            except OSError:
+                pass
+    st["unreadable"] = bad
+    folders = st.setdefault("folders", {})           # top folder -> camera, for files with no metadata
+    for c in clips:
+        if c.top_folder and c.model and c.camera_key:
+            folders.setdefault(c.top_folder, c.camera_key)
+    st["audio"] = sorted(set(st.get("audio", [])) | {rel_key(p, args.clips) for p in audio_files})
+    cnt = collections.Counter(labels.values())
+    st["cards"] = cards if cards is not None else {letter: 1 for letter in cnt}
+    tmp = os.path.join(args.out, STATE_FILE + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(st, fh, indent=1)
+    os.replace(tmp, os.path.join(args.out, STATE_FILE))
+
+
+def add_cards(args, state, restrict):
+    """A later run on a shoot folder that was set up before (a DIT adding cards as they come in):
+    only the clips that are new since then, into one small XML to import into the open project.
+    Each camera's new clips get their own bin ('A Cam Card 2'), Breakup and Sync sequence; the
+    Sync sequence starts at the same timecode as the camera's main one, so it nests on top of it."""
+    name = state["project"]
+    args.mode = state.get("mode") or "music"
+    seq_fps, preroll = state["seq_fps"], state["preroll"]
+    args.sync_size = tuple(state["sync_size"]) if state.get("sync_size") else None
+    n = int(state.get("adds", 0)) + 1
+    master_path = state.get("master")
+    if master_path and not os.path.isabs(master_path):
+        master_path = os.path.join(args.clips, master_path)
+    if args.mode == "music" and not (master_path and os.path.exists(master_path)):
+        sys.exit("error: can't find the song this project was synced to (%s). Put it back, or run with "
+                 "--rebuild to start a new project." % state.get("master"))
+    args.master = master_path if args.mode == "music" else None
+    os.makedirs(args.out, exist_ok=True)
+
+    bad = state.get("unreadable", {})
+
+    def size(p):
+        try:
+            return os.path.getsize(p)
+        except OSError:
+            return -1
+
+    def wanted(p, done):
+        k = rel_key(p, args.clips)
+        return k not in done and bad.get(k) != size(p) and \
+            (restrict is None or os.path.abspath(p).startswith(restrict + os.sep))
+    done_clips, done_audio = set(state.get("clips", [])), set(state.get("audio", []))
+    clips = [c for c in find_clips(args.clips, args.master, [args.out]) if wanted(c.path, done_clips)]
+    master_abs = os.path.abspath(master_path) if master_path else None
+    audio_new = [p for p in find_audio(args.clips, [args.out])
+                 if wanted(p, done_audio) and os.path.abspath(p) != master_abs]
+    log("Adding to %s: %d new clips, %d new audio files" % (name, len(clips), len(audio_new)))
+    if not clips and not audio_new:
+        log("Nothing new since the last run.")
+        event("done", project=name, add=n, nothing_new=True, out=args.out, xml="", report="", mode=args.mode,
+              clips=0, synced=0, cameras=[], set_aside=[], audio=0, unreadable=0, restarted=0,
+              check_chorus=0, song_duration=0, moves=[])
+        return
+
+    master = None
+    if args.mode == "music":
+        event("stage", text="Listening to the song")
+        master = MasterIndex(load_audio(args.master))
+    event("stage", text="Reading %d new clips" % len(clips))
+    with cf.ThreadPoolExecutor(args.jobs) as ex:
+        list(ex.map(probe, clips))
+    event("start", project=name, folder=args.clips, song=os.path.basename(args.master or ""),
+          song_duration=round(master.duration, 2) if master else 0, clips=len(clips), version=VERSION,
+          mode=args.mode, add=n)
+    if master is not None and clips:
+        match_all(clips, master, args)
+    else:
+        for c in clips:
+            c.status = "not placed"
+    for c in clips:
+        if c.status == "placed" and not c.split:
+            c.parts = [Part(0.0, c.duration, offset=c.offset, status="placed", confidence=c.confidence,
+                            aligned=c.aligned, runner_up=c.runner_up, drift_ms=c.drift_ms, refine=c.refine,
+                            check=c.check, repeat_alt=c.repeat_alt)]
+        for p in c.parts:          # rolling longer before the song than the project allows: trim the head
+            if p.status == "placed" and p.offset + p.src_in * c.speed < -preroll:
+                p.src_in = (-preroll - p.offset) / c.speed + 1.0 / seq_fps
+                p.notes.append("head trimmed: rolled more than %d s before the song" % preroll)
+
+    labels = assign_cameras(clips, state.get("group_by", "auto"), prior=state.get("cameras"),
+                            prior_folders=state.get("folders"))
+    known_letters = {v[0] for v in state.get("cameras", {}).values()}
+    cards = dict(state.get("cards", {}))
+    cams = []
+    for key, letter in sorted(labels.items(), key=lambda kv: kv[1]):
+        cl = sorted([c for c in clips if c.camera_key == key], key=lambda c: c.rel)
+        if any(x[0] == letter for x in cams):            # a second key on a known letter: same camera
+            cams = [(l, x + cl if l == letter else x, k, nc) for l, x, k, nc in cams]
+            continue
+        new_cam = letter not in known_letters
+        card = 1 if new_cam else int(cards.get(letter, 1)) + 1
+        cards[letter] = card
+        cams.append((letter, cl, card, new_cam))
+    for letter, cl, card, new_cam in cams:
+        pl = sorted([(c, p) for c in cl if c.status == "placed" for p in c.parts if p.status == "placed"],
+                    key=lambda cp: (cp[0].rel, cp[1].src_in))
+        for i, (c, p) in enumerate(pl, 1):
+            p.track = i
+            if c.track is None:
+                c.track = i
+
+    master_media = None
+    if master is not None:
+        _, mch, mrate = probe_audio(args.master)
+        master_media = Media(args.master, seq_fps, master.duration, has_video=False, channels=mch, rate=mrate)
+    audio_bins = collections.defaultdict(list)
+    for p in audio_new:
+        dur, ch, rate = probe_audio(p)
+        parts = [x.lower() for x in rel_key(p, args.clips).split("/")[:-1]]
+        b = "SFX" if any(x in ("sfx", "sound effects", "sound fx") for x in parts) else \
+            "Music" if any(x in ("music", "song", "songs") for x in parts) else "Captured"
+        audio_bins[b].append(Media(p, seq_fps, dur, has_video=False, channels=ch, rate=rate))
+
+    event("stage", text="Writing the import for the new cards")
+    root, moves = build_add_xml(name, cams, seq_fps, preroll, master_media, audio_bins, args)
+    what = ", ".join(("%s Cam" % l) if nc else ("%s Cam Card %d" % (l, k)) for l, _, k, nc in cams)
+    fname = re.sub(r"[^\w .,()-]+", "_", "%s - Add %d (%s).xml" % (name, n, what or "audio"))[:150]
+    if not fname.endswith(".xml"):
+        fname = fname[:146] + ".xml"
+    xml_path = os.path.join(args.out, fname)
+    write_xml(root, xml_path)
+    log("Wrote %s" % fname)
+    if master is not None:
+        write_reports(clips, args.out, seq_fps, preroll, args, {}, labels,
+                      [m.path for m in audio_bins["Captured"]], stem="sync_report add %d" % n)
+        report = os.path.join(args.out, "sync_report add %d.md" % n)
+    else:
+        report = write_clip_list(clips, [(l, cl) for l, cl, _, _ in cams], args.out, audio_bins,
+                                 stem="clip_list add %d" % n)
+    save_state(args, name, clips, labels, seq_fps, preroll, audio_new, prev=state, cards=cards, adds=n)
+    for m_ in moves:
+        log("  %s  ->  %s" % tuple(m_))
+    placed = [c for c in clips if c.status == "placed"]
+    aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH
+                                for c in clips if c.status != "placed") if master is not None else {}
+    event("done", project=name, add=n, out=args.out, xml=xml_path, report=report,
+          song_duration=round(master.duration, 2) if master is not None else 0, mode=args.mode,
+          clips=len(clips), synced=len(placed),
+          cameras=[dict(letter=l, name=("%s Cam" % l) + ("" if nc else " Card %d" % k), label=camera_label(l),
+                        clips=len(cl), synced=sum(c.status == "placed" for c in cl),
+                        spans=sorted([round(p.offset + p.src_in * c.speed, 2), round(p.offset + p.src_out * c.speed, 2)]
+                                     for c in cl if c.status == "placed" for p in c.parts if p.status == "placed"))
+                   for l, cl, k, nc in cams],
+          set_aside=[dict(reason=r, count=k) for r, k in collections.Counter(aside).most_common()],
+          audio=len(audio_new), unreadable=sum(1 for c in clips if not c.readable),
+          restarted=sum(1 for c in clips if c.split),
+          check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None),
+          moves=moves)
+
+
+def build_add_xml(name, cams, seq_fps, preroll, master_media, audio_bins, args):
+    """The XML for cards added to an existing project. Premiere puts an imported XML in a bin of its
+    own, so everything sits at the top of it, ready to drag into place. Returns (root, [(item,
+    where it goes)])."""
+    xw = Xmeml(args.path_maps)
+    root = ET.Element("xmeml", version="4")
+    proj = sub(root, "project")
+    sub(proj, "name", name)
+    top = sub(proj, "children")
+    moves = []
+    for letter, cl, card, new_cam in cams:
+        label = camera_label(letter)
+        model = next((c.model for c in cl if c.model), "")
+        cam_name = cam_bin_name(letter, model)
+        suffix = "" if new_cam else " Card %d" % card
+        bname = cam_name if new_cam else "%s Cam Card %d" % (letter, card)
+        b = bin_(top, bname, label)
+        usable = [c for c in cl if c.readable and c.fps]
+        for c in usable:
+            xw.master_clip(b, Media.of_clip(c, seq_fps), label)
+        moves.append([bname, "Footage" if new_cam else "Footage > %s (as a bin inside it)" % cam_name])
+        sized = [c for c in usable if c.width]
+        if sized:
+            (w, h), fps = first_format(sized, seq_fps)
+            entries, tc = stringout_entries(sized, fps, label)
+            xw.sequence(top, "%s Cam_Breakup%s" % (letter, suffix), fps, w, h, tc, entries, label)
+            moves.append(["%s Cam_Breakup%s" % (letter, suffix), "Sequence > Breakup"])
+        placed = placements_of(cl)
+        if placed:
+            (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
+            entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label, song=new_cam)
+            xw.sequence(top, "%s Cam_Sync%s" % (letter, suffix), seq_fps, w, h, tc, entries, label, fit="fit")
+            moves.append(["%s Cam_Sync%s" % (letter, suffix),
+                          "Sequence > Sync, then nest it in the Edit sequence on a new track" if new_cam else
+                          "Sequence > Sync, then onto a new top track of %s Cam_Sync, at its start" % letter])
+    for bname in ("Music", "SFX", "Captured"):
+        if audio_bins.get(bname):
+            b = bin_(top, "%s (new)" % bname)
+            for m_ in audio_bins[bname]:
+                xw.master_clip(b, m_)
+            moves.append(["%s (new)" % bname, "Audio > %s" % bname])
+    return root, moves
+
 
 if __name__ == "__main__":
     main()

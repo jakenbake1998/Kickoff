@@ -42,6 +42,31 @@ Music, SFX or Captured, and `clip_list.csv` in place of the sync report. There a
 sequences and no Sync bin. `--mode music` or `--mode setup` (the switch in the Kickoff window)
 forces one or the other.
 
+## Adding cards as they come in (DIT days)
+
+Kickoff remembers every folder it has set up (`Premiere Sync/kickoff-project.json`: the song,
+cameras and their letters, frame rate, where the sequences start, and every file already in the
+project). Run it again on the same shoot folder, or drop just the new card's folder if it sits
+inside the shoot folder, and it only picks up what's new since last time. It writes one small XML,
+`<Project> - Add 2 (A Cam Card 2, B Cam Card 2).xml`, to import into the project you already have
+open. Premiere puts it in a bin of its own, and the window (and the log) lists where each item goes:
+
+- `A Cam Card 2`: drag it into Footage > A Cam as a bin of its own. The clips keep A Cam's label color.
+- `A Cam_Breakup Card 2`: Sequence > Breakup.
+- `A Cam_Sync Card 2`: the new card's synced clips, starting at the same timecode as `A Cam_Sync`.
+  Drag it onto a new top track of `A Cam_Sync` at its start. Because `A Cam_Sync` is already nested
+  in the Edit sequence, the new clips show up there too.
+- A camera that wasn't in the project before comes in whole (`C Cam (GoPro HERO9)`, `C Cam_Sync`
+  with the song, `C Cam_Breakup`); nest its Sync sequence in the Edit sequence.
+- New sound files come in as `Captured (new)` etc.
+
+Cameras keep their letters and colors across runs. Every Sync sequence starts at least 10 s before
+the song, so a card that started rolling earlier than the first one still fits; if a clip rolled even
+longer before the song, its head is trimmed in the Sync sequence (the report says so). Files that
+can't be read (maybe still copying) are tried again on the next run once they've changed. Each add
+has its own report (`sync_report add 2.md`). `--rebuild` (the "Start over" box in the window) ignores
+earlier runs and builds the whole project again.
+
 ## In Premiere
 
 File > Import the project XML. Premiere puts it in a bin named after the file; drag its contents
@@ -217,6 +242,7 @@ A, B, C... in order. `--group-by model` or `--group-by folder` forces one rule.
 --mode auto|music|setup   music video (sync) or project setup only (default: auto)
 --set-aside-repeats   don't place chorus-only clips at the first chorus
 --sync-size 3840x2160 frame size of the Sync and Edit sequences (clips scaled to fit)
+--rebuild             build the whole project again instead of adding what's new
 --path-map OLD=NEW    rewrite media paths in the XML (repeatable)
 -j 8                  parallel files; use -j 2 when reading from a single spinning drive
 ```
@@ -225,7 +251,7 @@ A, B, C... in order. `--group-by model` or `--group-by folder` forces one rule.
 
 ```
 python3 tests/make_synthetic.py /tmp/synth
-python3 musicsync.py /tmp/synth/clips
+python3 musicsync.py /tmp/synth/clips          # add --rebuild when running it again
 python3 tests/check.py /tmp/synth/expected.json "/tmp/synth/clips/Premiere Sync/sync_report.csv"
 ```
 

@@ -30,6 +30,10 @@ the folder has a song the clips line up with, otherwise a regular project), **Mu
 **Project setup only** (commercials and anything else: bins, Breakups and an empty Edit sequence,
 no syncing). Kickoff remembers the choice.
 
+On a shoot, drop the same folder again (or just the new card's folder inside it) and Kickoff adds only
+the new cards: a small XML to import into your open project, and a list in the window of where each
+new bin and sequence goes. Tick **Start over** to rebuild the whole project instead.
+
 The window is built on your Mac by the installer (it uses Apple's Command Line Tools). If that
 build fails, the installer puts in the simple version instead: a folder picker, then a Terminal
 window with progress.

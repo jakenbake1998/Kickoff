@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var pending: URL?
     var updateNote = ""
     var mode = "auto"                     // auto / music / setup, from the switch in the window
+    var rebuild = false                   // "start over" box: ignore earlier runs on the folder
 
     func applicationDidFinishLaunching(_ note: Notification) {
         buildMenu()
@@ -136,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 run(url)
             }
         case "mode": mode = body["mode"] as? String ?? "auto"
+        case "rebuild": rebuild = body["on"] as? Bool ?? false
         case "pick": pick()
         case "run": if let f = body["folder"] as? String { run(URL(fileURLWithPath: f)) }
         case "stop":
@@ -194,7 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [support.appendingPathComponent("kickoff-gui-run.sh").path, folder.path, mode]
+        p.arguments = [support.appendingPathComponent("kickoff-gui-run.sh").path, folder.path, mode, rebuild ? "rebuild" : "add"]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         env["PYTHONUNBUFFERED"] = "1"

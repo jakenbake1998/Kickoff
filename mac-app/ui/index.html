@@ -69,6 +69,9 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .seg button{border:0;background:none;padding:6px 14px;border-radius:7px;color:var(--muted);font-weight:600}
 .seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
 .modes p{margin:0;color:var(--muted);font-size:12.5px}
+.check{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12.5px;cursor:pointer;width:max-content;max-width:100%}
+.check input{accent-color:var(--accent);margin:0}
+.moves .mv span:first-child{font-weight:600}
 .list{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;display:grid;gap:5px}
 .list div{display:flex;justify-content:space-between;gap:12px}
 .list span:last-child{color:var(--muted);text-align:right}
@@ -114,6 +117,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
       <button data-mode="setup" aria-pressed="false">Project setup only</button>
     </div>
     <p id="modeNote"></p>
+    <label class="check"><input type="checkbox" id="rebuild"> Start over: rebuild the whole project, even if this folder was run before</label>
   </div>
 
   <div class="list" id="hints">
@@ -125,6 +129,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     <div data-for="music"><span>Every clip synced to the song by its audio</span><span>A Cam_Sync, B Cam_Sync&hellip;</span></div>
     <div data-for="music"><span>Takes where the song restarted, split into passes</span><span>own tracks</span></div>
     <div data-for="music"><span>Your bins, Breakup and Edit sequences, label colors</span><span>one .xml</span></div>
+    <div><span>Run the same folder again (or drop a new card) to add just what's new</span><span>DIT days</span></div>
     <div data-for="music"><span>Sync sequences in 4K, every clip scaled to fit</span><span>3840x2160</span></div>
   </div>
 
@@ -199,7 +204,8 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
   function setMode(m) {
     mode = m;
     try { localStorage.setItem("kickoff-mode", m); } catch (e) {}
-    document.querySelectorAll(".seg button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === m)); });
+    $("rebuild").addEventListener("change", function () { post({ cmd: "rebuild", on: $("rebuild").checked }); });
+  document.querySelectorAll(".seg button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === m)); });
     $("modeNote").textContent = MODE_NOTES[m];
     document.querySelectorAll("#hints [data-for]").forEach(function (d) {
       d.hidden = d.dataset.for !== (m === "setup" ? "setup" : "music");
@@ -244,6 +250,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     $("stage").textContent = "Checking for updates";
     $("count").textContent = "";
     show("hints", false); show("modes", false);
+    if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); }
     show("run", true); show("btnsRun", true); show("details", true);
   }
 
@@ -255,6 +262,16 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
   function onEvent(e) {
     if (e.event === "stage") {
       $("stage").textContent = e.text;
+    } else if (e.event === "start" && e.add) {
+      state.total = e.clips; state.add = e.add;
+      $("dropSub").textContent = state.folder + " · adding to " + e.project;
+      $("stage").textContent = "Adding " + plural(e.clips, "new clip") + " to " + e.project;
+      $("count").textContent = e.clips ? "0 / " + e.clips : "";
+      $("prog").className = e.mode === "setup" ? "prog busy" : "prog";
+      $("bar").style.width = "0%";
+      $("sCams").textContent = "–";
+      show("stats", e.mode !== "setup");
+      $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start" && e.mode === "setup") {
       var fellBack = state.total > 0;              // it tried the song first and nothing lined up
       state.total = e.clips; state.synced = 0; state.aside = 0; state.setup = true;
@@ -337,8 +354,58 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     $("bOpen").focus();
   }
 
+  function finishAdd(e) {
+    if (e.mode === "setup") finishSetup(e); else finishMusic(e);
+    $("stage").textContent = "Import this into your open project, then drag each item where it goes (below).";
+    $("bOpen").textContent = "Import into Premiere";
+    var list = $("aside");
+    var extra = Array.prototype.slice.call(list.children).filter(function (d) { return !/Empty Edit/.test(d.textContent); });
+    list.innerHTML = "";
+    list.classList.add("moves");
+    var h = document.createElement("div");
+    h.className = "h";
+    h.textContent = "Where things go after import";
+    list.appendChild(h);
+    e.moves.forEach(function (m) {
+      var d = document.createElement("div"), a = document.createElement("span"), b = document.createElement("span");
+      d.className = "mv";
+      a.textContent = m[0]; b.textContent = m[1];
+      d.append(a, b);
+      list.appendChild(d);
+    });
+    if (extra.length) {
+      var h2 = document.createElement("div");
+      h2.className = "h";
+      h2.style.marginTop = "6px";
+      h2.textContent = "In these cards";
+      list.appendChild(h2);
+    }
+    extra.forEach(function (d) { list.appendChild(d); });
+    show("aside", true);
+  }
+
+  function finishNothing(e) {
+    $("prog").className = "prog";
+    $("bar").style.width = "100%";
+    $("stage").textContent = "Nothing new since the last run: every clip in this folder is already in " + e.project + ".";
+    $("count").textContent = "";
+    show("stats", false);
+    show("btnsRun", false);
+    show("btnsErr", true);
+    $("bRetry").hidden = true;
+  }
+
   function finish(e) {
+    $("aside").classList.remove("moves");
+    $("bOpen").textContent = "Open in Premiere";
+    $("bRetry").hidden = false;
+    if (e.nothing_new) return finishNothing(e);
+    if (e.add) return finishAdd(e);
     if (e.mode === "setup") return finishSetup(e);
+    finishMusic(e);
+  }
+
+  function finishMusic(e) {
     $("sSynced").nextElementSibling.textContent = "clips synced";
     $("sAside").nextElementSibling.textContent = "set aside";
     $("bReport").textContent = "Show report";

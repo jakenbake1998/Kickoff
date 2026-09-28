@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run by the Kickoff window for one folder: fetch the latest engine from GitHub (if online), then
-# run it with progress events for the window ($2: auto, music or setup). Offline or on any error, the installed engine is kept.
+# run it with progress events for the window ($2: auto, music or setup; $3: rebuild to start over). Offline or on any error, the installed engine is kept.
 SUPPORT="$HOME/Library/Application Support/Kickoff"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 PY="$SUPPORT/venv/bin/python3"
@@ -15,4 +15,6 @@ if [ -n "$BASE" ]; then
   rm -f "$SUPPORT/musicsync.py.run"
 fi
 command -v ffmpeg >/dev/null || { echo "error: ffmpeg isn't installed. Run the Kickoff installer again." >&2; exit 1; }
-exec "$PY" "$SUPPORT/musicsync.py" --events --mode "${2:-auto}" "$1"
+EXTRA=()
+[ "$3" = "rebuild" ] && EXTRA=(--rebuild)
+exec "$PY" "$SUPPORT/musicsync.py" --events --mode "${2:-auto}" "${EXTRA[@]}" "$1"
