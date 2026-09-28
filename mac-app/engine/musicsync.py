@@ -1850,6 +1850,43 @@ GAP_CHUNK_S = 60.0
 GAP_SHORT_S, GAP_SHORT_MIN_S = 20.0, 12.0
 
 
+RUN_WINS = 3
+
+
+def phase_run(xs, master, st, h, t, lo, hi, known):
+    """The longest run of RUN_WINS or more consecutive 10 s windows (hop 5 s) in [lo, hi] whose phase
+    peaks against the whole song all land on one position within a frame, each PHASE_AGREE clear, at
+    no known pass. Shaped like phase_gap's result, or None."""
+    starts = list(np.arange(lo, hi - PHASE_WIN_S + 1e-6, PHASE_HOP_S))
+    if len(starts) < RUN_WINS:
+        return None
+    res = [(a,) + phase_search(xs, master, a, a + PHASE_WIN_S) for a in starts]
+    best, i = None, 0
+    while i < len(res):
+        a, o, r = res[i]
+        j = i
+        if o is not None and r >= PHASE_AGREE and all(abs(o - k) >= 0.08 for k in known):
+            while j + 1 < len(res) and res[j + 1][1] is not None and res[j + 1][2] >= PHASE_AGREE \
+                    and abs(res[j + 1][1] - o) < PHASE_FRAME_S:
+                j += 1
+            n = j - i + 1
+            if n >= RUN_WINS and (best is None or n > best[0]):
+                best = (n, float(np.median([x[1] for x in res[i:j + 1]])), res[i][0],
+                        res[j][0] + PHASE_WIN_S, min(x[2] for x in res[i:j + 1]))
+        i = j + 1
+    if best is None:
+        return None
+    n, o, first, last, score = best
+    sel = (t >= first / FRAME_S) & (t < last / FRAME_S)
+    e = evaluate(master, h[sel], t[sel]) if sel.any() else None
+    if e is not None and accepted(e, st) and abs(e["offset"] - o) > 0.1:
+        return None                     # the landmarks here are sure of somewhere else
+    if e is None:
+        e = dict(A=0, R=0, N=0.0, offset=o, runner_up_offset=o, conf=0.0, strength=0.0)
+    return dict(off=o, first=first, last=last, ev=dict(e, offset=o), good=True, stray=False,
+                rescued="found by waveform: %d windows in a row at one spot" % n)
+
+
 def gap_rescue(xs, master, st, h, t, lo, hi, known):
     """A whole performance in clip stretch [lo, hi] that neither the stretch's landmarks nor one phase
     correlation of the whole stretch found (a DJI rolling through a dozen plays with the band louder
@@ -1865,6 +1902,10 @@ def gap_rescue(xs, master, st, h, t, lo, hi, known):
         # standing PHASE_ALONE clear is enough, over 12 s or more of 10 s windows that agree
         found = phase_gap(xs, master, st, h, t, lo, hi, known, min(GAP_SHORT_S, master.duration),
                           alone_only=True, min_len=GAP_SHORT_MIN_S)
+    if found is None:
+        # a short play under a loud band: three or more 10 s windows in a row that each peak on the
+        # same song position, PHASE_AGREE clear (chance doesn't line three up within a frame)
+        found = phase_run(xs, master, st, h, t, lo, hi, known)
     if found is not None:
         return found
     cands = []
@@ -2069,6 +2110,41 @@ def waveform_rescue(xs, master, guesses):
     return None
 
 
+REACH_GAP_WINS = 8          # a pass reaches across this many 10 s windows (hop 5 s) where its song is too quiet
+
+
+def phase_reach(xs, master, off, lo, hi, way):
+    """How far a pass at `off` really reaches before (way -1, from hi down to lo) or after (way 1, from
+    lo up to hi) its landmark edge. 10 s windows are walked away from the edge; one whose phase peak
+    lands on `off` within a frame, PHASE_AGREE clear, carries the edge along. A play can go quiet
+    under the band for a while (up to REACH_GAP_WINS windows), so a run of two or more such windows
+    further out still belongs to it; the walk stops at a window clearly at another song position, or
+    at a longer silence. Returns the new edge (clip seconds)."""
+    a0, b0 = in_song(xs, master, off, lo, hi)
+    if b0 - a0 < PHASE_WIN_S:
+        return hi if way < 0 else lo
+    starts = list(np.arange(b0 - PHASE_WIN_S, a0 - 1e-6, -PHASE_HOP_S)) if way < 0 else \
+        list(np.arange(a0, b0 - PHASE_WIN_S + 1e-6, PHASE_HOP_S))
+    edge = hi if way < 0 else lo
+    run, gap, far = 0, 0, None
+    for w in starts:
+        o, ratio = local_phase(xs, master, off, w, w + PHASE_WIN_S)
+        if o is not None and abs(o - off) < PHASE_FRAME_S and ratio >= PHASE_AGREE:
+            run += 1
+            far = w if way < 0 else w + PHASE_WIN_S
+            if gap == 0 or run >= 2:
+                edge, gap = far, 0
+            continue
+        run = 0
+        gap += 1
+        if gap > REACH_GAP_WINS:
+            break
+        o2, r2 = phase_search(xs, master, w, w + PHASE_WIN_S)
+        if o2 is not None and abs(o2 - off) > 0.08 and r2 >= PHASE_ALONE:
+            break                                          # another play of the song starts here
+    return edge
+
+
 def grow_passes(xs, master, passes, xs_len):
     """A pass's landmarks can miss minutes of its own play (the band louder than the playback at the
     start of a DJI take). Grow each pass into the stretch before and after it, up to its neighbours,
@@ -2078,12 +2154,10 @@ def grow_passes(xs, master, passes, xs_len):
         hi = passes[i + 1]["first"] if i + 1 < len(passes) else xs_len
         if p["first"] - lo < PHASE_WIN_S and hi - p["last"] < PHASE_WIN_S:
             continue
-        head = phase_extent(xs, master, p["off"], lo, hi, p["first"], p["first"]) \
-            if p["first"] - lo >= PHASE_WIN_S else None
-        tail = phase_extent(xs, master, p["off"], lo, hi, p["last"] - PHASE_WIN_S, p["last"] - PHASE_WIN_S) \
-            if hi - p["last"] >= PHASE_WIN_S else None
-        first = min(p["first"], head[0]) if head else p["first"]
-        last = max(p["last"], tail[1]) if tail else p["last"]
+        first = phase_reach(xs, master, p["off"], lo, p["first"], -1) \
+            if p["first"] - lo >= PHASE_WIN_S else p["first"]
+        last = phase_reach(xs, master, p["off"], p["last"], hi, 1) \
+            if hi - p["last"] >= PHASE_WIN_S else p["last"]
         if p["first"] - first < PHASE_WIN_S and last - p["last"] < PHASE_WIN_S:
             continue                                    # nothing to speak of: keep the landmark edges
         rivals = [q["off"] for q in passes if q is not p]
