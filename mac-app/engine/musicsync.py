@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.12"
+VERSION = "0.5.13"
 
 # ---------------------------------------------------------------- constants
 
@@ -2165,7 +2165,7 @@ def condense(entries, fps):
     only if that order can't fit the budget are they packed in timeline order instead. Either way
     the tracks are then ordered by their first clip. Nothing is
     cut or moved in time; its scratch audio follows it to the matching audio track."""
-    vids = [e for e in entries if e.get("vtrack")]
+    vids = [e for e in entries if e.get("vtrack") and not e.get("tail")]
     spans = {id(e): (e["start"], e["start"] + entry_span(e, fps)[1]) for e in vids}
     edges = sorted([(a, 1) for a, b in spans.values()] + [(b, -1) for a, b in spans.values()],
                    key=lambda x: (x[0], x[1]))          # an end and a start on the same frame don't overlap
@@ -2200,6 +2200,9 @@ def condense(entries, fps):
     place = {i: renum[k] for i, k in place.items()}
     out = []
     for e in entries:
+        if e.get("tail"):                                  # clips that didn't sync stay on V1 after the song
+            out.append(e)
+            continue
         if not e.get("vtrack"):
             # the song is muted here: CamsNested and Edit nest these and play the song on their own A1
             out.append(dict(e, mute=True) if e.get("atrack") else e)
@@ -2284,9 +2287,13 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             entries, tc = stringout_entries(usable, fps, label)
             xw.sequence(breakup, "%s Cam_Breakup" % letter, fps, w, h, tc, entries, label)
         placed = placements_of(cl)
-        if placed:
+        if placed and syncb is not None:
             (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label)
+            tail = unsynced_entries(cl, entries, seq_fps, preroll, master_media)
+            for e in tail:
+                e["label"] = label
+            entries += tail
             xw.sequence(syncedb, "%s Cam_Synced" % letter, seq_fps, w, h, tc, entries, label)
             seq = xw.sequence(condb, "%s Cam_Synced_Condensed" % letter, seq_fps, w, h, tc,
                               condense(entries, seq_fps), label)
@@ -2341,6 +2348,27 @@ def clip_name(c, p):
     if p.repeat_alt is not None:
         name += " (check chorus)"
     return name if name != os.path.basename(c.path) else None
+
+
+UNSYNCED_GAP_S = 60     # clips that didn't sync start this long after the song (or the last take) ends
+
+
+def unsynced_entries(clips, entries, seq_fps, preroll_s, master_media):
+    """Clips of a camera that didn't line up with the song, back to back on V1 in file order, a
+    minute after the song and every synced take have ended, each with all its camera audio on
+    A2, A3... (the song is on A1), named with why it wasn't synced."""
+    left = [c for c in clips if c.readable and c.fps and c.width and c.status != "placed"]
+    if not left:
+        return []
+    ends = [int(round(preroll_s * seq_fps)) + int(round((master_media.duration if master_media else 0) * seq_fps))]
+    ends += [e["start"] + entry_span(e, seq_fps)[1] for e in entries if e.get("media") is not None]
+    pos, out = max(ends) + int(round(UNSYNCED_GAP_S * seq_fps)), []
+    for c in left:
+        why = re.split(r"\s*[(;]", (c.reasons or ["not synced"])[0])[0].strip()
+        out.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=2, all_audio="raw",
+                        label=None, tail=True, name="%s (%s)" % (os.path.basename(c.path), why)))
+        pos += int(round(c.duration * seq_fps))
+    return out
 
 
 def placements_of(clips):
