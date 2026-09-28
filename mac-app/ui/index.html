@@ -122,10 +122,38 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .check{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12.5px;cursor:pointer;width:max-content;max-width:100%}
 .check input{accent-color:var(--accent);margin:0}
 .moves .mv span:first-child{font-weight:600}
-.list{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;display:grid;gap:5px}
-.list div{display:flex;justify-content:space-between;gap:12px}
-.list span:last-child{color:var(--muted);text-align:right}
+.list{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 6px;font-size:13px;display:grid}
 .list .h{font-size:13px;color:var(--muted);font-weight:600}
+/* the summary: one row per kind of clip, its count big, what it means, and where those clips are */
+.sumrow{display:grid;grid-template-columns:44px minmax(0,1fr) auto 14px;gap:12px;align-items:center;width:100%;text-align:left;
+  background:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:10px 8px;color:var(--ink);font:inherit;cursor:pointer}
+.sumrow:first-child{border-top:0}
+.sumrow:hover,.sumrow[aria-expanded="true"]{background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.sumrow .n{font:700 20px/1 var(--display);text-align:right;font-variant-numeric:tabular-nums}
+.sumrow .d{font-size:13.5px;line-height:1.3}
+.sumrow .tag{font-size:11.5px;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 9px;white-space:nowrap}
+.sumrow.look .n,.sumrow.look .tag{color:var(--warn)}.sumrow.look .tag{border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+.sumrow svg{color:var(--muted);transition:transform .15s}
+.sumrow[aria-expanded="true"] svg{transform:rotate(90deg)}
+/* "worth a look" in the headline: opens the list of those clips */
+.lookl{display:inline;background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--warn);cursor:pointer;
+  text-decoration:underline dotted;text-underline-offset:3px}
+.lookl:hover{text-decoration-style:solid}
+/* the clips behind a line, with a button to copy their file names */
+.clippop{position:fixed;z-index:50;width:min(460px,calc(100vw - 32px));max-height:min(420px,70vh);display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 40px rgba(0,0,0,.45);overflow:hidden}
+.clippop .ph{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px 8px;font-weight:600;font-size:13.5px}
+.clippop .ph button{border:0;background:none;color:var(--muted);font-size:18px;line-height:1;padding:2px 6px;border-radius:6px}
+.clippop .ph button:hover{color:var(--ink);background:var(--line)}
+.clippop .pl{overflow-y:auto;padding:0 14px}
+.clippop .pi{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:6px 0;border-top:1px solid var(--line);font-size:12.5px}
+.clippop .pi:first-child{border-top:0}
+.clippop .pi .f{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.clippop .pi .c,.clippop .pi .t{color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.clippop .pf{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line)}
+.clippop .pf span{color:var(--muted);font-size:12px}
+.clippop .pf button{margin-left:auto}
+.todo .note{color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:7px;margin-top:2px}
 
 .xname{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);margin:-2px 40px 0 2px}
 .xname span:first-child{font-size:13px;font-weight:600;flex:none}
@@ -977,6 +1005,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function reset() {
+    closePop();
     state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
     show("modes", true);
     ["run", "hero", "stats", "camsWrap", "aside", "todo", "error", "details", "btnsDone", "btnsRun", "btnsErr", "batch"].forEach(function (id) { show(id, false); });
@@ -1228,10 +1257,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   var ICON_SAME = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>';
   // what the XML can't do, so Jake finishes it in Premiere (html: fixed text plus escaped names)
   function todo(extra) {
-    var lines = ["Drag the imported bin&rsquo;s contents to the top of the project."].concat(extra.filter(Boolean),
+    var lines = extra.filter(Boolean).concat(
       ["Add a <b>Temp Color</b> adjustment layer to the " + esc(binName("adjustment", "Adjustment Layers")) + " bin.",
        "Select the " + esc(binName("footage", "Footage")) + " bin, right-click, <b>Proxy &gt; Create Proxies</b>."]);
-    $("todoList").innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
+    $("todoList").innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("")
+      + '<div class="note">Adding to a project you already have? Import the XML, then drag the contents of the bin Premiere makes to the top.</div>';
     show("todo", true);
   }
   function hero(tone, title, sub, chips) {
@@ -1261,7 +1291,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function finishSetup(e) {
     $("prog").className = "prog";
     $("bar").style.width = "100%";
-    $("stage").textContent = "Done. In Premiere the project imports into a bin; drag its contents to the top.";
+    $("stage").textContent = "Done.";
     $("count").textContent = "";
     $("sSynced").textContent = e.clips;
     $("sCams").textContent = e.cameras.length;
@@ -1377,11 +1407,72 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     finishMusic(e);
   }
 
+  var TAGS = { "Footage bins": "In Footage bins", "check report": "In the report", "own tracks": "On their own tracks",
+    "check chorus": "Check the chorus", "worth a look": "Worth a look", "Breakup only": "In Breakups only" };
+  // the clips behind a results line: name, camera, where it sits in the song; Copy file names
+  var pop = null, popAnchor = null, popPinned = false, popHover = false;
+  function closePop() {
+    if (pop) pop.remove();
+    if (popAnchor) popAnchor.setAttribute("aria-expanded", "false");
+    pop = popAnchor = null; popPinned = false; popHover = false;
+  }
+  function clipPop(anchor, title, items, pinned) {
+    if (pop && popAnchor === anchor) {
+      if (pinned && !popPinned) { popPinned = true; return; }
+      if (pinned) { closePop(); return; }
+      return;
+    }
+    closePop();
+    popAnchor = anchor; popPinned = pinned;
+    anchor.setAttribute("aria-expanded", "true");
+    pop = document.createElement("div");
+    pop.className = "clippop";
+    pop.setAttribute("role", "dialog");
+    pop.innerHTML = '<div class="ph"><span></span><button type="button" aria-label="Close">&times;</button></div><div class="pl"></div>'
+      + '<div class="pf"><span></span><button type="button" class="quiet">Copy file names</button></div>';
+    pop.querySelector(".ph span").textContent = title + " (" + items.length + ")";
+    var pl = pop.querySelector(".pl");
+    items.forEach(function (it) {
+      var r = document.createElement("div");
+      r.className = "pi";
+      r.innerHTML = '<span class="f"></span><span class="c"></span><span class="t"></span>';
+      r.querySelector(".f").textContent = it.file;
+      r.querySelector(".f").title = it.file;
+      r.querySelector(".c").textContent = it.cam ? camName(it.cam) : "";
+      r.querySelector(".t").textContent = it.at != null ? "at " + clock(it.at) : "";
+      pl.appendChild(r);
+    });
+    var note = pop.querySelector(".pf span"), cb = pop.querySelector(".pf button");
+    note.textContent = "One name per line, for Premiere's search box";
+    cb.addEventListener("click", function () {
+      copyText(items.map(function (it) { return it.file; }).join("\n"));
+      cb.textContent = "Copied"; note.textContent = plural(items.length, "file name") + " on the clipboard";
+      setTimeout(function () { if (cb.isConnected) cb.textContent = "Copy file names"; }, 1600);
+    });
+    pop.querySelector(".ph button").addEventListener("click", closePop);
+    pop.addEventListener("mouseenter", function () { popHover = true; });
+    pop.addEventListener("mouseleave", function () { popHover = false; if (!popPinned) setTimeout(function () { if (!popPinned && !popHover) closePop(); }, 200); });
+    document.body.appendChild(pop);
+    var r = anchor.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    var x = Math.max(16, Math.min(innerWidth - w - 16, r.right - w > 16 && anchor.classList.contains("sumrow") ? r.right - w : r.left));
+    var y = r.bottom + 6 + h > innerHeight - 12 ? Math.max(12, r.top - 6 - h) : r.bottom + 6;
+    pop.style.left = x + "px"; pop.style.top = y + "px";
+  }
+  function copyText(t) {
+    post({ cmd: "copy", text: t });                  // the app puts it on the Mac's clipboard
+    try { if (navigator.clipboard) navigator.clipboard.writeText(t).catch(function () {}); } catch (err) {}
+  }
+  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape" && pop) closePop(); });
+  document.addEventListener("mousedown", function (ev) {
+    if (pop && !pop.contains(ev.target) && !(popAnchor && popAnchor.contains(ev.target))) closePop();
+  });
+  document.addEventListener("scroll", function (ev) { if (pop && !pop.contains(ev.target)) closePop(); }, true);
+
   function finishMusic(e) {
     $("bReport").textContent = "Show report";
     $("prog").className = "prog";
     $("bar").style.width = "100%";
-    $("stage").textContent = "Done. In Premiere the project imports into a bin; drag its contents to the top.";
+    $("stage").textContent = "Done.";
     $("count").textContent = e.clips + " / " + e.clips;
     $("sSynced").textContent = e.synced;
     $("sAside").textContent = e.clips - e.synced;
@@ -1393,6 +1484,19 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     hero(e.synced && !look ? "good" : "warn",
       e.synced ? e.synced + " of " + plural(e.clips, "clip") + " synced" : "Done, but no clip lined up with the song",
       (look ? "Check the " + plural(look, "clip") + " marked worth a look before you cut. " : "") + whereTook(e), []);
+    if (look) {
+      var hs = $("heroS"), lk = document.createElement("button"), rest = hs.textContent.replace(/^Check the .*? before you cut\. /, "");
+      lk.type = "button"; lk.className = "lookl"; lk.textContent = "worth a look";
+      hs.textContent = "Check the " + plural(look, "clip") + " marked ";
+      hs.append(lk, document.createTextNode(" before you cut. " + rest));
+      var items = (e.lists || {}).worth_a_look || [];
+      if (items.length) {
+        var hov = null;
+        lk.addEventListener("click", function () { clipPop(lk, "Worth a look", items, true); });
+        lk.addEventListener("mouseenter", function () { hov = setTimeout(function () { if (!popPinned) clipPop(lk, "Worth a look", items, false); }, 180); });
+        lk.addEventListener("mouseleave", function () { clearTimeout(hov); setTimeout(function () { if (!popPinned && !popHover) closePop(); }, 200); });
+      }
+    }
     todo([e.synced ? "In <b>" + esc(e.edit_name || e.project + "_Edit") + "</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : ""]);
 
     var dur = e.song_duration || 1, cams = $("cams");
@@ -1432,20 +1536,26 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
     var list = $("aside");
     list.innerHTML = "";
-    var rows = [];
+    var rows = [], L = e.lists || {};
     e.set_aside.forEach(function (r) {
       var m = REASONS.find(function (x) { return x[0].test(r.reason); });
-      rows.push([r.count + " " + (m ? m[1] : r.reason), m ? m[2] : "check report"]);
+      rows.push([r.count, m ? m[1] : r.reason, m ? m[2] : "check report", (L.aside || {})[r.reason], "Set aside: " + (m ? m[1] : r.reason)]);
     });
-    if (e.restarted) rows.push([plural(e.restarted, "take") + " where the song restarted, split into passes", "own tracks"]);
-    if (e.check_chorus) rows.push([plural(e.check_chorus, "clip") + " only covering the chorus, placed at the first", "check chorus"]);
-    if (e.worth_a_look) rows.push([plural(e.worth_a_look, "clip") + " placed, but the waveform only partly lines up", "worth a look"]);
+    if (e.restarted) rows.push([e.restarted, (e.restarted === 1 ? "take" : "takes") + " where the song restarted, split into passes", "own tracks", L.restarted, "Takes split into passes"]);
+    if (e.check_chorus) rows.push([e.check_chorus, (e.check_chorus === 1 ? "clip" : "clips") + " only covering the chorus, placed at the first", "check chorus", L.check_chorus, "Placed at the first chorus"]);
+    if (e.worth_a_look) rows.push([e.worth_a_look, "placed, but the waveform only partly lines up", "worth a look", L.worth_a_look, "Worth a look"]);
     rows.forEach(function (r) {
-      var d = document.createElement("div");
-      var a = document.createElement("span"), b = document.createElement("span");
-      a.textContent = r[0]; b.textContent = r[1];
-      d.append(a, b);
-      list.appendChild(d);
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "sumrow" + (r[2] === "worth a look" ? " look" : "");
+      b.innerHTML = '<b class="n"></b><span class="d"></span><span class="tag"></span>'
+        + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+      b.querySelector(".n").textContent = r[0];
+      b.querySelector(".d").textContent = r[1];
+      b.querySelector(".tag").textContent = TAGS[r[2]] || r[2];
+      if (r[3] && r[3].length) b.addEventListener("click", function () { clipPop(b, r[4], r[3], true); });
+      else { b.disabled = true; b.style.cursor = "default"; b.querySelector("svg").style.visibility = "hidden"; }
+      list.appendChild(b);
     });
     show("aside", rows.length > 0);
     show("btnsRun", false);

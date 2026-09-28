@@ -218,6 +218,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "premiere": if let p = path { openInPremiere(p) }
         case "report": if let p = path { openReport(p) }
         case "reveal": if let p = path { NSWorkspace.shared.activateFileViewerSelecting([p]) }
+        case "copy":                                    // file names from the results, for Premiere's search
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(body["text"] as? String ?? "", forType: .string)
         default: break
         }
     }

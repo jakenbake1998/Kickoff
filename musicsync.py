@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.24"
+VERSION = "0.5.25"
 
 # ---------------------------------------------------------------- constants
 
@@ -2506,13 +2506,15 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song
     return entries, start_tc
 
 
+GRIDS = (4, 9, 16)             # Premiere's Multi-Camera monitor: 2x2, 3x3, 4x4, then pages of 16
+
+
 def condense(entries, fps):
-    """The same clips on fewer video tracks (fewer feeds in multicam), within the smallest of
-    2, 4, 8, 16... tracks that fits every overlap. Clips go in clip order, each on the highest
-    track that's free for its whole length, so clip 1 sits on V1 and the rest follow it down;
-    only if that order can't fit the budget are they packed in timeline order instead. Either way
-    the tracks are then ordered by their first clip. Nothing is
-    cut or moved in time; its scratch audio follows it to the matching audio track."""
+    """The same clips on fewer video tracks (fewer feeds in multicam): the smallest of Premiere's
+    multicam grids (4, 9, 16 angles, then pages of 16) that every overlap fits, and then every track of
+    that grid used. Clips are dealt out in clip order, clip 1 on V1, clip 2 on V2... and round again
+    from V1; a clip moves on to the next free track only when its own is taken at that moment.
+    Nothing is cut or moved in time; its scratch audio follows it to the matching audio track."""
     vids = [e for e in entries if e.get("vtrack") and not e.get("tail")]
     spans = {id(e): (e["start"], e["start"] + entry_span(e, fps)[1]) for e in vids}
     edges = sorted([(a, 1) for a, b in spans.values()] + [(b, -1) for a, b in spans.values()],
@@ -2521,31 +2523,18 @@ def condense(entries, fps):
     for _, d in edges:
         cur += d
         need = max(need, cur)
-    tracks = 2
-    while tracks < need:
-        tracks *= 2
-    def pack(order):                                     # each clip on the highest free track
-        busy, place = [], {}
-        for e in order:
-            a, b = spans[id(e)]
-            k = next((k for k, t in enumerate(busy) if all(b <= x or a >= y for x, y in t)), None)
-            if k is None:
-                k = len(busy)
-                busy.append([])
-            busy[k].append((a, b))
-            place[id(e)] = k + 1
-        return place
-    # clip order first (clip 1 on V1, later clips below it in order); if that needs more tracks
-    # than the budget, timeline order, which always fits in the fewest
-    place = pack(sorted(vids, key=lambda e: e["vtrack"]))
-    if max(place.values(), default=0) > tracks:
-        place = pack(sorted(vids, key=lambda e: (e["start"], e["vtrack"])))
-    # tracks top to bottom by their first clip, so V1 always holds clip 1
-    first = {}
-    for e in vids:
-        first[place[id(e)]] = min(first.get(place[id(e)], e["vtrack"]), e["vtrack"])
-    renum = {k: i + 1 for i, k in enumerate(sorted(first, key=first.get))}
-    place = {i: renum[k] for i, k in place.items()}
+    tracks = next((g for g in GRIDS if need <= g), -(-need // 16) * 16)
+    # clip n's own track is n (mod the grid): clip 1 on V1, clip 2 on V2... Going through the clips
+    # by start time, each takes its own track if that's free by then, else the next free one after
+    # it; there's always one, since no more than `tracks` clips ever play at once
+    rank = {id(e): n for n, e in enumerate(sorted(vids, key=lambda e: e["vtrack"]))}
+    ends, place = [None] * tracks, {}
+    for e in sorted(vids, key=lambda e: (spans[id(e)][0], e["vtrack"])):
+        a, b = spans[id(e)]
+        own = rank[id(e)] % tracks
+        k = next(k % tracks for k in range(own, own + tracks) if ends[k % tracks] is None or ends[k % tracks] <= a)
+        ends[k] = b
+        place[id(e)] = k + 1
     out = []
     for e in entries:
         if e.get("tail"):                                  # clips that didn't sync stay on V1 after the song
@@ -3268,7 +3257,34 @@ def main(argv=None):
           unreadable=sum(1 for c in clips if not c.readable),
           restarted=sum(1 for c in clips if c.split),
           check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None),
-          worth_a_look=len({id(c) for c, _, _ in doubtful(clips)}))   # clips, not parts
+          worth_a_look=len({id(c) for c, _, _ in doubtful(clips)}),   # clips, not parts
+          lists=clip_lists(clips, master))
+
+
+def clip_lists(clips, master):
+    """For the window's results: which clips each summary line counts ({file, cam, at}, `at` the song
+    second the clip lands at), so Jake can see them and copy their names."""
+    def item(c, p=None):
+        at = None
+        if p is not None and p.status == "placed":
+            at = round(p.offset + p.src_in * c.speed, 1)
+        elif song_spans(c):
+            at = round(min(sp[0] for sp in song_spans(c)), 1)
+        return dict(file=os.path.basename(c.path), cam=clip_cam(c), at=at)
+    if master is None:
+        return {}
+    look, seen = [], set()
+    for c, _, p in doubtful(clips):
+        if id(c) not in seen:
+            seen.add(id(c))
+            look.append(item(c, p))
+    aside = collections.defaultdict(list)
+    for c in clips:
+        if c.status != "placed":
+            aside[c.reasons[0] if c.reasons else REASON_NO_MATCH].append(item(c))
+    chorus = [item(c, p) for c in clips for p in c.parts if p.repeat_alt is not None]
+    return dict(worth_a_look=look, restarted=[item(c) for c in clips if c.split], check_chorus=chorus,
+                aside=dict(aside))
 
 
 def clip_cam(c):
@@ -3610,7 +3626,7 @@ def add_cards(args, state, restrict):
           audio=len(audio_new), unreadable=sum(1 for c in clips if not c.readable),
           restarted=sum(1 for c in clips if c.split),
           check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None),
-          worth_a_look=len(doubtful(clips)),
+          worth_a_look=len({id(c) for c, _, _ in doubtful(clips)}), lists=clip_lists(clips, master),
           moves=moves)
 
 
