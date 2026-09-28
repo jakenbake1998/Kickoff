@@ -37,13 +37,15 @@ box empty when the song is in the folder (in a `Music` folder, or named master/s
 **XML name** (under each music video, and under the list on Other projects) names the Premiere
 project file; leave it empty to use the footage folder's name.
 
-**Export XML to** (on both screens) is where the Premiere XML goes. Unless you choose a folder, it goes
+**Export XML to** (under **Options**, on both screens, with Start over) is where the Premiere XML goes. Unless you choose a folder, it goes
 at the top of the drive the footage is on (for footage on `/Volumes/26JL02/...`, in `/Volumes/26JL02`);
 footage on the Mac's own disk keeps it in the `Kickoff Exports` folder. Reports stay in `Kickoff Exports`
 either way (shoots set up before this change keep their old `Premiere Sync` folder). Kickoff remembers the folder you choose; **Use the drive** goes back to the default.
 
-When a run ends, a green **Success** panel says how many clips synced, how well (lined up cleanly,
-worth a look, set aside), where the XML was saved and how long it took. **Open XML folder** opens
+When a run ends, a panel says how many clips synced, where the XML was saved and how long it took.
+It is green when every placement looks clean and amber when some clips are worth a look, so check
+those first. **Left for you in Premiere** lists what an XML can't do: drag the imported bin to the top,
+enable Multi-Camera on the nests in `<name>_Edit`, and add a Temp Color adjustment layer. **Open XML folder** opens
 that folder with the XML selected; **New run** clears the window for the next one. If nothing is new
 since the last run, **Start over** rebuilds the project from scratch.
 

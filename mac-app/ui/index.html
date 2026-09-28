@@ -68,6 +68,14 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .seg{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:3px;width:max-content;max-width:100%}
 .seg button{border:0;background:none;padding:6px 14px;border-radius:7px;color:var(--muted);font-weight:600}
 .seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.opts{display:grid;gap:8px;color:var(--muted);font-size:12.5px}
+.opts summary{cursor:pointer;width:max-content;max-width:100%;padding:2px 0;font-weight:600;color:var(--ink)}
+.opts summary span{font-weight:400;color:var(--muted);margin-left:8px}
+.opts[open]{gap:10px}
+.todo{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;display:grid;gap:5px}
+.todo .h{font-weight:600}
+.todo #todoList{display:grid;gap:5px;color:var(--muted)}
+.todo b{color:var(--ink);font-weight:600}
 .modes p{margin:0;color:var(--muted);font-size:12.5px}
 .check{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12.5px;cursor:pointer;width:max-content;max-width:100%}
 .check input{accent-color:var(--accent);margin:0}
@@ -75,10 +83,10 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .list{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;display:grid;gap:5px}
 .list div{display:flex;justify-content:space-between;gap:12px}
 .list span:last-child{color:var(--muted);text-align:right}
-.list .h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.list .h{font-size:13px;color:var(--muted);font-weight:600}
 
 .xname{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);margin:-2px 40px 0 2px}
-.xname span:first-child{font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;flex:none}
+.xname span:first-child{font-size:13px;font-weight:600;flex:none}
 .xname input{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:7px;color:var(--ink);font:13px var(--body);padding:6px 9px}
 .xname input:focus{outline:none;border-color:var(--accent)}
 .xname .ext{flex:none}
@@ -95,7 +103,7 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .histbtn[aria-pressed="true"]{color:var(--ink);border-color:var(--accent)}
 .hhead .back{display:flex;align-items:center;gap:4px;padding:5px 10px 5px 7px;font-size:12.5px}
 .hhead h2{flex:1}
-.hero{display:grid;grid-template-columns:auto 1fr auto;gap:16px;align-items:center;padding:18px 20px;border-radius:14px;
+.hero{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:center;padding:18px 20px;border-radius:14px;
   border:1px solid color-mix(in srgb,var(--tone) 45%,transparent);background:color-mix(in srgb,var(--tone) 9%,var(--panel));--tone:var(--good)}
 .hero.warn{--tone:var(--warn)}
 .hero.plain{--tone:var(--muted)}
@@ -104,20 +112,13 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .hs{color:var(--muted);font-size:13px;margin-top:3px;overflow-wrap:anywhere}
 .hq{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
 .hq:empty{display:none}
-.ring{position:relative;width:74px;height:74px}
-.ring svg{width:100%;height:100%;transform:rotate(-90deg)}
-.ring circle{fill:none;stroke-width:3.4}
-.ring .rt{stroke:var(--line)}
-.ring .rv{stroke:var(--tone);stroke-linecap:round;transition:stroke-dasharray .6s ease}
-.ring b{position:absolute;inset:0;display:grid;place-items:center;font:700 17px var(--display);font-variant-numeric:tabular-nums}
-@media (max-width:560px){.hero{grid-template-columns:auto 1fr}.ring{display:none}}
 button svg{vertical-align:-2px;margin-right:6px}
 button.newrun{margin-left:auto;display:flex;align-items:center;padding:10px 20px;font-size:14.5px;border-radius:11px;
   color:var(--accent);border:1.5px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
 button.newrun svg{margin-right:7px}
 button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
 .builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:grid;gap:12px}
-.builds .h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.builds .h{font-size:13px;color:var(--muted);font-weight:600}
 .bgrid{display:grid;grid-template-columns:minmax(190px,230px) 1fr;gap:18px;align-items:start}
 @media (max-width:620px){.bgrid{grid-template-columns:1fr}}
 .tree{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px;display:grid;gap:3px}
@@ -128,9 +129,9 @@ button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);
 .fold{width:13px;height:10px;border-radius:2px;background:var(--muted);opacity:.55;flex:none;position:relative}
 .fold:before{content:"";position:absolute;left:0;top:-2px;width:6px;height:3px;border-radius:1px 1px 0 0;background:inherit}
 .chip{width:10px;height:10px;border-radius:3px;flex:none}
-.steps{margin:0;padding:0;list-style:none;display:grid;gap:9px;font-size:13px;line-height:1.45;counter-reset:st}
+.steps{margin:0;padding:0;list-style:none;display:grid;gap:9px;font-size:13px;line-height:1.45}
 .steps li{position:relative;padding-left:26px}
-.steps li:not(.dim):before{counter-increment:st;content:counter(st);position:absolute;left:0;top:1px;width:18px;height:18px;border-radius:50%;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font:700 11px/18px var(--body);text-align:center}
+.steps li:not(.dim):before{content:"";position:absolute;left:6px;top:7px;width:6px;height:6px;border-radius:50%;background:var(--muted)}
 .steps li.dim:before{content:"\21bb";position:absolute;left:3px;top:0;color:var(--muted)}
 .steps b{font-weight:600}
 
@@ -155,7 +156,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
 .drop.compact svg{width:24px;height:24px}
 .queue{display:grid;gap:6px}
 .qhead{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.qhead .h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.qhead .h{font-size:13px;color:var(--muted);font-weight:600}
 .qhead button{padding:3px 8px;font-size:12px}
 .qitem{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:7px 6px 7px 12px}
 .qitem svg{color:var(--accent)}
@@ -175,7 +176,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .box:hover,.box.over{background:color-mix(in srgb,var(--accent) 15%,transparent);border-color:var(--accent);border-style:solid}
 .box.filled{border-style:solid;border-color:var(--line);background:var(--panel)}
 .box.filled:hover,.box.filled.over{border-color:var(--accent)}
-.box .k{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:6px}
+.box .k{font-size:13px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:6px}
 .box .k svg{color:var(--accent)}
 .box .v{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .box .v.ph{color:var(--muted);font-weight:500}
@@ -186,16 +187,16 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .chipf button,.box .clr{border:0;background:none;color:var(--muted);padding:0 6px;font-size:14px;line-height:1.3;border-radius:4px}
 .chipf button:hover,.box .clr:hover{color:var(--ink);background:var(--line)}
 .box .clr{align-self:flex-start;margin-left:-6px;font-size:12px;font-weight:600}
-.syncto{display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--accent);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;gap:2px}
+.syncto{display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--accent);font-size:13px;font-weight:700;gap:2px}
 .job .rowx{border:0;background:none;color:var(--muted);font-size:17px;padding:0;border-radius:6px;align-self:center;height:30px}
 .job .rowx:hover{color:var(--ink);background:var(--line)}
 .addjob{justify-self:start;background:none;border:1px dashed var(--line);color:var(--muted)}
 .addjob:hover{color:var(--ink);border-color:var(--muted)}
-.jobn{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-bottom:-4px}
+.jobn{font-size:13px;color:var(--muted);font-weight:600;margin-bottom:-4px}
 @media (max-width:560px){.job{grid-template-columns:minmax(0,1fr) 30px}.job .syncto{grid-column:1;flex-direction:row;gap:6px}.job .box.foot{grid-column:1}.job .rowx{grid-row:1;grid-column:2}}
 .batch{display:grid;gap:8px}
 .export{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 8px 8px 14px}
-.export .k{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;flex:none}
+.export .k{font-size:13px;color:var(--muted);font-weight:600;flex:none}
 .export .v{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .export button{padding:5px 11px;font-size:12.5px}
 .export button.quiet{margin-left:0}
@@ -206,7 +207,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .hist{display:grid;gap:8px}
 .hhead{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .hhead h2{margin:0;font:700 18px/1.2 var(--display)}
-.day{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-top:8px}
+.day{font-size:13px;color:var(--muted);font-weight:600;margin-top:8px}
 .entry{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;display:grid;gap:4px}
 .entry .r1{display:flex;align-items:baseline;gap:10px;min-width:0}
 .entry time{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12.5px;flex:none;min-width:58px}
@@ -267,11 +268,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <div class="modes" id="modes">
     <p id="modeNote"></p>
+    <details class="opts" id="opts"><summary>Options <span id="optSum"></span></summary>
     <div class="export">
       <span class="k">Export XML to</span><span class="v" id="exportPath"></span>
       <button id="bExport">Choose…</button><button class="quiet" id="bExportReset" hidden>Use the drive</button>
     </div>
     <label class="check"><input type="checkbox" id="rebuild"> Start over: rebuild the whole project, even if this folder was run before</label>
+    </details>
   </div>
 
   <div class="builds" id="hints">
@@ -281,7 +284,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         <div class="tb"><i class="fold"></i>Footage</div>
         <div class="tc l2"><i class="chip" style="background:var(--iris)"></i>A Cam (Mini LF)</div>
         <div class="tc l2"><i class="chip" style="background:var(--mango)"></i>B Cam (FX3)</div>
-        <div class="tc l2"><i class="chip" style="background:var(--caribbean)"></i>C Cam (Action 4.1)</div>
+        <div class="tc l2"><i class="chip" style="background:var(--rose)"></i>C Cam (Action 4.1)</div>
+        <div class="tb"><i class="fold"></i>Adjustment Layers</div>
         <div class="tb"><i class="fold"></i>Sequence</div>
         <div class="tb l2"><i class="fold"></i>Breakup</div>
         <div class="tb l2" data-for="music"><i class="fold"></i>Sync</div>
@@ -289,14 +293,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         <div class="tb"><i class="fold"></i>Audio</div>
         <div class="tc l2 dim">Music &middot; SFX &middot; Captured</div>
       </div>
-      <ol class="steps">
+      <ul class="steps">
         <li><b>A bin for every camera.</b> Named after your camera folders, so &ldquo;B Cam (FX3)&rdquo; stays B Cam (FX3), with its own label color.</li>
         <li data-for="music"><b>Every clip lined up to the song.</b> One Sync sequence per camera, each take on its own track at the right spot. Takes where the song restarted are split into passes.</li>
         <li><b>A Breakup per camera.</b> All of that camera&rsquo;s clips back to back, with every audio channel, to scrub through.</li>
         <li data-for="setup"><b>No syncing.</b> Bins, Breakups and an empty Edit sequence, with audio sorted into Music, SFX and Captured.</li>
         <li><b>Ready to cut.</b> A 4K Edit sequence, and every clip scaled to fill the frame, so no black edges.</li>
         <li class="dim">Shooting over several days? Run the same folder again and Kickoff adds only the new cards.</li>
-      </ol>
+      </ul>
     </div>
   </div>
 
@@ -310,7 +314,6 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <div class="hero" id="hero" hidden>
     <div class="hicon" id="heroIcon" aria-hidden="true"></div>
     <div class="htxt"><div class="ht" id="heroT"></div><div class="hs" id="heroS"></div><div class="hq" id="heroQ"></div></div>
-    <div class="ring" id="ring" hidden><svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15.9" class="rt"/><circle cx="18" cy="18" r="15.9" class="rv" id="ringV"/></svg><b id="ringN"></b></div>
   </div>
 
   <div class="stats" id="stats" hidden>
@@ -324,6 +327,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
 
   <div class="list" id="aside" hidden></div>
+  <div class="todo" id="todo" hidden><div class="h">Left for you in Premiere</div><div id="todoList"></div></div>
   <div class="error" id="error" hidden><b id="errTitle">Kickoff hit an error</b><p id="errText"></p></div>
 
   <div class="batch" id="batch" hidden></div>
@@ -389,7 +393,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     document.querySelectorAll("#hints [data-for]").forEach(function (d) { d.hidden = d.dataset.for !== m; });
     post({ cmd: "mode", mode: m });
   }
-  $("rebuild").addEventListener("change", function () { post({ cmd: "rebuild", on: $("rebuild").checked }); });
+  $("rebuild").addEventListener("change", function () { post({ cmd: "rebuild", on: $("rebuild").checked }); optSummary(); });
   var state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
   var queue = [];                  // Other projects: folders waiting for Start
   var jobs = [{ song: null, footage: [] }];   // Music video: each song and the footage it syncs to
@@ -401,6 +405,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("exportPath").textContent = xmlDir || "The top of the drive the footage is on";
     $("exportPath").title = xmlDir || "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the Kickoff Exports folder inside it";
     $("bExportReset").hidden = !xmlDir;
+    optSummary();
+  }
+  function optSummary() {           // the closed Options line says what they are set to
+    $("optSum").textContent = "XML goes to " + (xmlDir ? base(xmlDir) : "the top of the footage drive") +
+      ($("rebuild").checked ? ", starting over" : "");
   }
   var batch = null;                // the runs Start began: { runs: [{paths, mode, name}], i, ids }
   var history = [];
@@ -411,6 +420,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function show(id, on) { $(id).hidden = !on; }
   function plural(n, one, many) { return n + " " + (n === 1 ? one : (many || one + "s")); }
   function clock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+  function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return "&#" + c.charCodeAt(0) + ";"; }); }
   function base(p) { return String(p || "").replace(/\/+$/, "").split("/").pop(); }
   function parent(p) { return String(p || "").replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/"; }
   var AUDIO = /\.(wav|aiff?|bwf|mp3|m4a|flac|aac|caf)$/i;
@@ -673,7 +683,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function reset() {
     state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
     show("modes", true);
-    ["run", "hero", "stats", "camsWrap", "aside", "error", "details", "btnsDone", "btnsRun", "btnsErr", "batch"].forEach(function (id) { show(id, false); });
+    ["run", "hero", "stats", "camsWrap", "aside", "todo", "error", "details", "btnsDone", "btnsRun", "btnsErr", "batch"].forEach(function (id) { show(id, false); });
     show("btnsStart", true);
     $("log").textContent = "";
     setTitle("Kickoff");
@@ -777,7 +787,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   var ICON_OK = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
   var ICON_WARN = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 7v6M12 17.5v.01"/></svg>';
   var ICON_SAME = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>';
-  function hero(tone, title, sub, chips, pct) {
+  // what the XML can't do, so Jake finishes it in Premiere (html: fixed text plus escaped names)
+  function todo(extra) {
+    var lines = ["Drag the imported bin&rsquo;s contents to the top of the project."].concat(extra.filter(Boolean),
+      ["Add a <b>Temp Color</b> adjustment layer to the Adjustment Layers bin."]);
+    $("todoList").innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
+    show("todo", true);
+  }
+  function hero(tone, title, sub, chips) {
     $("hero").className = "hero" + (tone === "good" ? "" : " " + tone);
     $("heroIcon").innerHTML = tone === "good" ? ICON_OK : tone === "warn" ? ICON_WARN : ICON_SAME;
     $("heroT").textContent = title;
@@ -791,11 +808,6 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       b.textContent = c[0];
       q.appendChild(b);
     });
-    show("ring", pct != null);
-    if (pct != null) {
-      $("ringN").textContent = Math.round(pct) + "%";
-      $("ringV").style.strokeDasharray = (pct * 0.999).toFixed(1) + " 100";
-    }
     show("run", false);
     show("stats", false);            // the headline carries the numbers
     show("hero", true);
@@ -849,8 +861,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     });
     show("aside", true);
     var wanted = batch && batch.runs[batch.i] && batch.runs[batch.i].mode === "music";
+    todo([]);
     if (!e.add) hero(wanted ? "warn" : "good",
-      wanted ? "Set up, but nothing was synced" : "Success: project set up",
+      wanted ? "Set up, but nothing was synced" : "Project set up",
       wanted ? "No song was found, or no clip lined up with it, so " + e.project + " has bins and Breakups but no Sync sequences. " + whereTook(e)
         : plural(e.clips, "clip") + " from " + plural(e.cameras.length, "camera") + ". " + whereTook(e),
       [[plural(e.cameras.length, "Breakup sequence"), ""], e.audio ? [plural(e.audio, "audio file"), ""] : null,
@@ -864,10 +877,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function finishAdd(e) {
     if (e.mode === "setup") finishSetup(e); else finishMusic(e);
     $("stage").textContent = "Import this into your open project, then drag each item where it goes (below).";
-    hero("good", "Success: " + plural(e.clips, "new clip") + " added to " + e.project,
+    hero("good", plural(e.clips, "new clip") + " added to " + e.project,
       "Import it into your open project, then drag each item where it goes (below). " + whereTook(e),
-      e.mode === "setup" ? [] : [[e.synced + " of " + e.clips + " synced", e.synced === e.clips ? "good" : "warn"]],
-      e.mode === "setup" || !e.clips ? null : 100 * e.synced / e.clips);
+      e.mode === "setup" ? [] : [[e.synced + " of " + e.clips + " synced", e.synced === e.clips ? "good" : "warn"]]);
+    show("todo", false);                  // an add goes into the open project: the list below says where
     $("bOpen").textContent = "Import into Premiere";
     var list = $("aside");
     var extra = Array.prototype.slice.call(list.children).filter(function (d) { return !/Empty Edit/.test(d.textContent); });
@@ -935,15 +948,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("sCamsL").textContent = e.cameras.length === 1 ? "camera" : "cameras";
     show("stats", true);
     var look = e.worth_a_look || 0, aside = e.clips - e.synced;
-    hero(e.synced ? "good" : "warn",
-      e.synced ? "Success: " + e.synced + " of " + plural(e.clips, "clip") + " synced" : "Done, but no clip lined up with the song",
-      "In Premiere the project imports into a bin; drag its contents to the top. " + whereTook(e),
-      [e.synced - look > 0 ? [(e.synced - look) + " lined up cleanly", "good"] : null,
-       look ? [look + " worth a look", "warn"] : null,
-       e.restarted ? [plural(e.restarted, "take") + " split into passes", "acc"] : null,
-       aside ? [aside + " set aside", ""] : null,
-       [plural(e.cameras.length, "camera"), ""]],
-      e.clips ? 100 * e.synced / e.clips : null);
+    // amber whenever something needs checking: a placement Jake has to fix costs more than a miss
+    hero(e.synced && !look ? "good" : "warn",
+      e.synced ? e.synced + " of " + plural(e.clips, "clip") + " synced" : "Done, but no clip lined up with the song",
+      (look ? "Check the " + plural(look, "clip") + " marked worth a look before you cut. " : "") + whereTook(e), []);
+    todo([e.synced ? "In <b>" + esc(e.project) + "_Edit</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : ""]);
 
     var dur = e.song_duration || 1, cams = $("cams");
     cams.innerHTML = "";
@@ -1012,7 +1021,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       setTimeout(runNext, 900);
       return;
     }
-    if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); }
+    if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); optSummary(); }
     if (batch.runs.length > 1) showBatch();
   }
 
@@ -1029,7 +1038,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       : ok + " of " + plural(runs.length, "music video") + " done";
     box.appendChild(hd);
     runs.forEach(function (h) { box.appendChild(entryCard(h)); });
-    ["drop", "run", "stats", "camsWrap", "aside", "error", "btnsDone", "btnsErr"].forEach(function (id) { show(id, false); });
+    ["drop", "run", "stats", "camsWrap", "aside", "todo", "error", "btnsDone", "btnsErr"].forEach(function (id) { show(id, false); });
     $("details").open = false;
     show("batch", true);
     show("btnsErr", true);
