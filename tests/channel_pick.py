@@ -54,17 +54,19 @@ def take(seed):
                   audio_layout=[1, 1])
     m.load_channels = lambda path, layout: chans
     m.sync_clip(clip, sp.MASTER, m.Settings())
-    got = [(p.offset, p.status) for p in clip.parts] if clip.split else [(clip.offset, clip.status)]
+    got = [(p.offset, p.status, p.repeat_alt) for p in clip.parts] if clip.split else \
+        [(clip.offset, clip.status, clip.repeat_alt)]
     return seed, kind, song_here, s0, got
 
 
 if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 60
     t0 = time.time()
-    right = wrong = missed = neg = neg_placed = 0
+    right = wrong = missed = neg = neg_placed = copy = 0
+    gap = sp.CHORUS[1][0] - sp.CHORUS[0][0]
     with ProcessPoolExecutor(os.cpu_count() or 2) as ex:
         for seed, kind, song_here, s0, got in ex.map(take, range(n)):
-            placed = [o for o, st in got if st == "placed"]
+            placed = [(o, alt) for o, st, alt in got if st == "placed"]
             if not song_here:
                 neg += 1
                 neg_placed += bool(placed)
@@ -72,13 +74,15 @@ if __name__ == "__main__":
             if not placed:
                 missed += 1
                 print("missed", seed, kind)
-            for o in placed:
+            for o, alt in placed:
                 if abs(o - s0) < 0.03:
                     right += 1
+                elif alt is not None and min(abs(o - s0 + k) for k in (-gap, gap)) < 0.03:
+                    copy += 1          # placed at the other copy of the pasted chorus, flagged
                 elif abs(o - s0) >= 0.15:
                     wrong += 1
                     print("WRONG", seed, kind, o, s0)
-    print("takes with song: placed right %d, missed %d, placed WRONG %d; takes without song: %d, placed %d (must be 0)"
-          % (right, missed, wrong, neg, neg_placed))
+    print("takes with song: placed right %d, at a chorus copy (flagged) %d, missed %d, placed WRONG %d; "
+          "takes without song: %d, placed %d (must be 0)" % (right, copy, missed, wrong, neg, neg_placed))
     print("%.0f s" % (time.time() - t0))
     sys.exit(1 if wrong or neg_placed else 0)
