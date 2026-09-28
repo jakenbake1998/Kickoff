@@ -175,15 +175,32 @@ def write_wav(path, x, ch=2):
         w.writeframes(data.tobytes())
 
 
+def passes_audio(song, passes, length, **kw):
+    """Scratch audio for a take where the song was stopped / restarted / jumped:
+    passes = [(clip_start, song_start, seconds)]. Room noise and the drummer carry on in between."""
+    src = np.zeros(int(length * FS))
+    for c0, s0, d in passes:
+        seg = song[int(s0 * FS):int(s0 * FS) + int(d * FS)]
+        src[int(c0 * FS):int(c0 * FS) + len(seg)] = seg
+    return room(src, **kw)
+
+
 def ff(*args):
     subprocess.run(["ffmpeg", "-v", "error", "-y", *args], check=True)
 
 
-def burn_in(name, song_offset, speed=1.0):
+def burn_in(name, song_offset, speed=1.0, passes=None):
     """Big on-screen text: clip name and the SONG time of each frame, so synced clips from
     different cameras show the same numbers when they line up."""
     font = "fontsize=40:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8"
     txt = "drawtext=text='%s':x=20:y=20:%s" % (name, font)
+    if passes:       # song time per pass; "NO SONG" between passes
+        for k, (c0, s0, d) in enumerate(passes, 1):
+            e = "%s+t" % (s0 - c0)
+            txt += (",drawtext=text='SONG %%{eif\\:%s\\:d}.%%{eif\\:mod((%s)*10\\,10)\\:d}s  pass %d':"
+                    "x=20:y=80:%s:enable='between(t,%s,%s)'" % (e, e, k, font, c0, c0 + d))
+        off = "+".join("between(t,%s,%s)" % (c0, c0 + d) for c0, _, d in passes)
+        return txt + ",drawtext=text='NO SONG':x=20:y=80:%s:enable='eq(%s,0)'" % (font, off)
     if song_offset is None:
         return txt + ",drawtext=text='NOT PLAYBACK':x=20:y=80:%s" % font
     if speed != 1.0:   # song runs `speed` x faster than the clip's own clock
@@ -193,9 +210,9 @@ def burn_in(name, song_offset, speed=1.0):
 
 
 def make_clip(path, fps, length, audio=None, acodec="aac", meta=(), size="640x360", tmp=None,
-              song_offset=None, song_speed=1.0):
+              song_offset=None, song_speed=1.0, passes=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    vf = burn_in(os.path.basename(path), song_offset, song_speed)
+    vf = burn_in(os.path.basename(path), song_offset, song_speed, passes)
     cmd = ["-f", "lavfi", "-i", "testsrc2=size=%s:rate=%s:duration=%s,%s" % (size, fps, length, vf)]
     if audio is not None:
         write_wav(tmp, audio)
@@ -248,7 +265,9 @@ def main(out):
         size = kw.pop("size", "640x360")
         song_speed = kw.get("stretch", 1.0) if kw.get("stretch", 1.0) != 1.0 else \
             (kw.get("speed", 1.0) if kw.get("speed", 1.0) >= 1.5 else 1.0)
-        if audio == "song":
+        if isinstance(audio, np.ndarray):
+            a = audio
+        elif audio == "song":
             a = camera_audio(song, offset, length, **kw)
         elif audio == "other":
             a = room(section(int(length / 2) + 1, 99)[:int(length * FS)], snr_db=10)
@@ -257,7 +276,7 @@ def main(out):
         else:
             a = None
         make_clip(path, fps, length, a, acodec=acodec, meta=meta, tmp=tmp, size=size, song_speed=song_speed,
-                  song_offset=offset if audio in ("song", None) else None)
+                  song_offset=offset if isinstance(audio, np.ndarray) or audio in ("song", None) else None)
         if sidecar is not None:
             sony_xml(path, **sidecar)
         exp[os.path.relpath(path, clips)] = {"expect": expect, "offset": offset}
@@ -282,6 +301,34 @@ def main(out):
     # C cam: GoPro, one normal-speed take and one 60p take that still has scratch audio (must sync)
     add(os.path.join(gopro, "GX010001.MP4"), "30000/1001", 30, 55.5, meta=gopro_meta, snr_db=4)
     add(os.path.join(gopro, "GX010002.MP4"), "60000/1001", 15, 42.0, meta=gopro_meta, size="480x270")
+    # Takes where the song was stopped and restarted, paused, or jumped: each pass must be split out
+    def add_passes(path, fps, length, passes, expect_each, **kw):
+        meta = kw.pop("meta", ())
+        acodec = kw.pop("acodec", "aac")
+        a = passes_audio(song, passes, length, **kw)
+        make_clip(path, fps, length, a, acodec=acodec, meta=meta, tmp=tmp, passes=passes)
+        if path.endswith(".MP4") and "A_CAM" in path:
+            sony_xml(path)
+        exp[os.path.relpath(path, clips)] = {"expect": "split", "passes": [
+            {"offset": s0 - c0, "start": c0, "end": c0 + d, "expect": e}
+            for (c0, s0, d), e in zip(passes, expect_each)]}
+
+    add_passes(os.path.join(sony, "C0007.MP4"), "24000/1001", 50, [(0, 10, 20), (24, 10, 25)],
+               ["placed", "placed"])                               # stopped, restarted from the top
+    add_passes(os.path.join(sony, "C0008.MP4"), "24000/1001", 70,
+               [(0, 20, 25), (29, 56, 16), (48, 0, 20)],            # 2nd pass is only the pasted chorus
+               ["placed", "ambiguous", "placed"])
+    add_passes(os.path.join(arri, "B001C006_260927_R1AB.mov"), "24000/1001", 40, [(0, 5, 20), (20, 60, 20)],
+               ["placed", "placed"], meta=arri_meta, acodec="pcm_s16le")      # jump, no stop
+    add_passes(os.path.join(gopro, "GX010004.MP4"), "30000/1001", 46, [(0, 30, 15), (19, 45, 25)],
+               ["placed", "placed"], meta=gopro_meta)                          # paused 4 s, resumed
+    # a 2 s false start is too short to be its own pass: the take syncs as one clip on the real pass
+    add(os.path.join(sony, "C0009.MP4"), "24000/1001", 36, 5.0, sidecar={},
+        audio=passes_audio(song, [(0, 10, 2), (5, 10, 30)], 36))
+    # the song stops mid-take and never restarts: synced as normal, the report flags the silent tail
+    add(os.path.join(arri, "B001C007_260927_R1AB.mov"), "24000/1001", 35, 40.0, meta=arri_meta,
+        acodec="pcm_s16le", audio=passes_audio(song, [(0, 40, 20)], 35))
+
     # Slow-motion takes with the song played sped up on set, so lips sync once slowed down
     add(os.path.join(sony, "C0006.MP4"), "48000/1001", 7, 41.0, sidecar={}, speed=2.0)        # varispeed
     add(os.path.join(gopro, "GX010003.MP4"), "60000/1001", 7, 70.0, meta=gopro_meta,

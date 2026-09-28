@@ -26,14 +26,16 @@ import shutil
 import subprocess
 import sys
 import urllib.parse
+import warnings
 import xml.etree.ElementTree as ET
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # ---------------------------------------------------------------- constants
 
@@ -178,7 +180,29 @@ class Clip:
     refine: str = ""
     speed: float = 1.0                   # song playback speed on set (2.0 = played at 2x)
     speed_mode: str = ""
+    check: str = ""                      # waveform check: "14/15" windows that match at the offset
+    split: bool = False                  # the song restarts / jumps inside this take (see parts)
+    parts: list = field(default_factory=list)   # Part per pass of the song; one Part when not split
     seq_start_frame: Optional[int] = None
+    notes: list = field(default_factory=list)
+
+
+@dataclass
+class Part:
+    """One stretch of a clip that sits at one place in the song. A take where the song was stopped
+    and restarted (or jumped) has one Part per pass, each placed on its own track."""
+    src_in: float                        # clip seconds (video clock)
+    src_out: float
+    offset: Optional[float] = None       # song time of the clip's first frame under this pass
+    status: str = ""
+    reason: str = ""
+    confidence: Optional[float] = None
+    aligned: int = 0
+    runner_up: int = 0
+    drift_ms: Optional[float] = None
+    refine: str = ""
+    check: str = ""
+    track: Optional[int] = None
     notes: list = field(default_factory=list)
 
 
@@ -433,6 +457,15 @@ class MasterIndex:
 
     def match(self, h, t):
         """Histogram of (master_time - clip_time) over all hash hits."""
+        res = self.hits(h, t)
+        if res is None:
+            return None
+        offs = res[1]
+        base = offs.min()
+        return np.bincount(offs - base).astype(np.float64), base
+
+    def hits(self, h, t):
+        """Every hash hit as (clip_time, master_time - clip_time), in frames."""
         hs, ts = [h], [t]
         for d in range(-DT_TOL, DT_TOL + 1):
             if d:
@@ -448,19 +481,16 @@ class MasterIndex:
             return None
         rep = np.repeat(np.arange(len(h)), cnt)
         idx = np.concatenate([np.arange(a, b) for a, b in zip(lo[cnt > 0], hi[cnt > 0])])
-        offs = self.t[idx] - t[rep]
-        base = offs.min()
-        hist = np.bincount(offs - base).astype(np.float64)
-        return hist, base
+        return t[rep], self.t[idx] - t[rep]
 
 
-def gcc_phat_offset(clip_audio, master, coarse, c0, c1, search=0.12):
+def gcc_phat_offset(clip_audio, master, coarse, c0, c1, search=0.12, min_len=2.0):
     """Refine song offset (s) of clip audio start using GCC-PHAT on clip window [c0, c1) s."""
     a0, a1 = int(c0 * SR), int(c1 * SR)
     seg = clip_audio[a0:a1]
     m0 = int(round((c0 + coarse - search) * SR))
     m1 = m0 + len(seg) + int(2 * search * SR)
-    if m0 < 0 or m1 > len(master) or len(seg) < SR * 2:
+    if m0 < 0 or m1 > len(master) or len(seg) < SR * min_len:
         return None, 0.0
     ref = master[m0:m1]
     n = 1 << int(math.ceil(math.log2(len(ref) + len(seg))))
@@ -569,10 +599,14 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         clip.notes.append("digital silence" if rms < 1e-6 else "audio level %.0f dBFS" % (20 * math.log10(rms)))
         return
 
-    peaks = find_peaks(x)
-    ev = evaluate(master, *landmarks(*peaks))
+    h, t = landmarks(*find_peaks(x))
+    ev = evaluate(master, h, t)
     if ev is None:
         clip.reasons.append(REASON_NO_MATCH)
+        return
+    # The whole clip is examined in overlapping stretches first: if the song was stopped and
+    # restarted, or jumped to another section, each pass is found and placed on its own.
+    if split_passes(clip, master, st, h, t, x, 1.0, x):
         return
     speed, mode, xs = 1.0, "", x
     if not accepted(ev, st):
@@ -583,20 +617,24 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         for k in candidate_speeds(clip):
             frac = fractions.Fraction(k).limit_denominator(20)
             xr = signal.resample_poly(x, frac.numerator, frac.denominator).astype(np.float32)
-            alt = [("varispeed", xr, evaluate(master, *landmarks(*find_peaks(xr))))]
-            # time-stretched: pitch stays, times scale by k, so pick peaks k times denser in clip time
+            alt = [("varispeed", xr, landmarks(*find_peaks(xr)))]
+            # time-stretched: pitch stays, times scale by k. Undo it with a phase vocoder, and also
+            # try peaks picked k times denser in clip time; keep whichever matches better.
+            alt.append(("time-stretched", None, landmarks(*find_peaks(unstretch(x, k)))))
             pt, pf = find_peaks(x, max(1, int(round(PEAK_T_NEIGH / k))), int(PEAKS_PER_SEC * k))
-            ts = np.round(pt * k).astype(np.int64)
-            alt.append(("time-stretched", None, evaluate(master, *landmarks(ts, pf))))
-            for m_name, xa, e in alt:
+            alt.append(("time-stretched", None, landmarks(np.round(pt * k).astype(np.int64), pf)))
+            for m_name, xa, (ha, ta) in alt:
+                e = evaluate(master, ha, ta)
                 if e is not None and (best_alt is None or e["conf"] > best_alt[3]["conf"]):
-                    best_alt = (float(frac), m_name, xa, e)
+                    best_alt = (float(frac), m_name, xa, e, ha, ta)
         if best_alt and accepted(best_alt[3], st, extra=st.speed_margin) and \
                 best_alt[3]["strength"] >= st.speed_strength and best_alt[3]["conf"] > ev["conf"] + 10:
-            speed, mode, xs, ev = best_alt
+            speed, mode, xs, ev, h, t = best_alt
             clip.speed, clip.speed_mode = speed, mode
             clip.notes.append("song played at %gx on set (%s); placed at %g%% speed"
                               % (speed, mode, 100 / speed))
+            if split_passes(clip, master, st, h, t, x, speed, xs):
+                return
 
     A, R, N, conf = ev["A"], ev["R"], ev["N"], ev["conf"]
     aoff = clip.audio_offset * speed               # audio start offset, in song seconds
@@ -604,53 +642,336 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
     coarse = ev["offset"]                           # song time of clip audio sample 0
     clip.runner_up_offset = ev["runner_up_offset"] - aoff if R else None
     clip.confidence = round(conf, 1)
+    xs_len = len(xs) / SR if xs is not None else len(x) / SR * speed
 
     if A < st.min_hashes or ev["strength"] < 0.25:
         clip.reasons.append(REASON_NO_MATCH)
         clip.notes.append("best alignment %d landmarks vs %d by chance" % (A, N))
         return
     if conf < st.threshold:
-        if (R - N) > 0.5 * (A - N):
+        # Landmarks alone aren't decisive (usually because part of the clip is a repeated chorus).
+        # A waveform comparison at both candidate positions settles it when some stretch of the
+        # clip matches only at the best one.
+        if xs is not None and R and decisive(xs, master, coarse, ev["runner_up_offset"], 0.0, xs_len):
+            clip.notes.append("confirmed by waveform check against song %.2fs"
+                              % (ev["runner_up_offset"] - aoff))
+        elif (R - N) > 0.5 * (A - N):
             clip.reasons.append(REASON_AMBIGUOUS)
             clip.notes.append("fits equally at song %.2fs and %.2fs"
                               % (coarse - aoff, clip.runner_up_offset))
+            return
         else:
             clip.reasons.append(REASON_LOW_CONF)
             clip.notes.append("best guess song %.2fs" % (coarse - aoff))
-        return
+            return
 
-    if xs is None:          # time-stretched playback: waveforms differ, landmark precision only
-        clip.offset = coarse - aoff
-        clip.refine = "landmark only (time-stretched playback, +-1 frame)"
+    offset_audio, clip.drift_ms, clip.refine, ov = refine_offset(xs, master, coarse, 0.0, xs_len)
+    if clip.refine.startswith("landmark only"):
         clip.notes.append(clip.refine)
-        clip.status = "placed"
-        return
-
-    # sub-frame refinement + drift measurement on the part of the clip that overlaps the song
-    clip_len = len(xs) / SR
-    ov0 = max(0.0, -coarse) + 0.2
-    ov1 = min(clip_len, master.duration - coarse) - 0.2
-    track = offset_track(xs, master.audio, coarse, ov0, ov1)
-    if track is not None:
-        intercept, slope = track
-        mid = (ov0 + ov1) / 2                       # centre the drift error across the clip
-        offset_audio = intercept + slope * mid
-        clip.drift_ms = round(slope * (ov1 - ov0) * 1000, 1)
-        clip.refine = "sub-frame refined"
-    else:
-        fine, q = gcc_phat_offset(xs, master.audio, coarse, ov0, ov1) if ov1 - ov0 > 3 else (None, 0)
-        if fine is not None and q > 6:
-            offset_audio = fine
-            clip.refine = "sub-frame refined"
-        else:
-            offset_audio = coarse
-            clip.refine = "landmark only (refinement too weak, +-1 frame)"
-            clip.notes.append(clip.refine)
     clip.offset = offset_audio - aoff
+    if xs is not None:
+        clip.check = check_string(wave_q(xs, master, offset_audio, *ov, drift=clip.drift_ms,
+                                         span=ov[1] - ov[0]))
     clip.status = "placed"
 
 
+def refine_offset(xs, master, coarse, lo, hi):
+    """Sub-frame offset and head-to-tail drift over clip stretch [lo, hi] (xs seconds).
+    Returns (song time of xs sample 0 as placed, drift ms or None, how it was refined, the part of
+    the stretch inside the song as (start, end), whose middle is where the placement is exact)."""
+    if xs is None:          # time-stretched playback: waveforms differ, landmark precision only
+        return coarse, None, "landmark only (time-stretched playback, +-1 frame)", (lo, hi)
+    ov0 = max(lo, -coarse) + 0.2
+    ov1 = min(hi, len(xs) / SR, master.duration - coarse) - 0.2
+    track = offset_track(xs, master.audio, coarse, ov0, ov1)
+    if track is not None:
+        intercept, slope = track
+        mid = (ov0 + ov1) / 2                       # centre the drift error across the stretch
+        return (intercept + slope * mid, round(slope * (ov1 - ov0) * 1000, 1), "sub-frame refined",
+                (ov0, ov1))
+    fine, q = gcc_phat_offset(xs, master.audio, coarse, ov0, ov1) if ov1 - ov0 > 3 else (None, 0)
+    if fine is not None and q > 6:
+        return fine, None, "sub-frame refined", (ov0, ov1)
+    return coarse, None, "landmark only (refinement too weak, +-1 frame)", (ov0, ov1)
+
+
+WAVE_WIN, WAVE_HOP = 4.0, 2.0
+WAVE_MATCH = 9.0            # GCC-PHAT peak / median: chance is about 5, a real match 15-35
+
+
+def wave_q(xs, master, off, lo, hi, drift=None, span=None, hop=WAVE_HOP):
+    """Waveform match strength of clip audio against the song at song offset `off`, in 4 s
+    windows stepping through [lo, hi]. Windows outside the song score 0. Independent of the
+    fingerprint landmarks, so it doubles as a check on them. With a measured drift (ms over `span`
+    seconds, `off` taken at the middle), the clip is first resampled to the song's speed: even a
+    0.1% speed error smears a 4 s window by 4 ms, enough to hide a real match."""
+    slope = (drift or 0.0) / 1000.0 / span if drift and span else 0.0
+    if abs(slope) > 5e-5:
+        mid = (lo + hi) / 2
+        fr = fractions.Fraction(1 + slope).limit_denominator(5000)
+        xs = signal.resample_poly(xs, fr.numerator, fr.denominator).astype(np.float32)
+        off, lo, hi = off - slope * mid, lo * (1 + slope), hi * (1 + slope)
+    out = []
+    t = lo
+    while t + WAVE_WIN <= hi + 1e-6:
+        _, q = gcc_phat_offset(xs, master.audio, off, t, t + WAVE_WIN, search=0.06)
+        out.append((t, q))
+        t += hop
+    return out
+
+
+def in_song(xs, master, off, lo, hi):
+    """The part of clip stretch [lo, hi] that lies inside the song at offset `off`."""
+    return max(lo, -off) + 0.05, min(hi, len(xs) / SR, master.duration - off) - 0.05
+
+
+def check_string(q):
+    """'14/15': windows inside the song that match (see wave_q)."""
+    vals = [v for _, v in q if v > 0]
+    return "%d/%d" % (sum(v >= WAVE_MATCH for v in vals), len(vals)) if vals else ""
+
+
+def decisive(xs, master, off, rival, lo, hi):
+    """True when some stretch of the clip matches the song only at `off`, and none only at `rival`."""
+    qa = dict(wave_q(xs, master, off, lo, hi, hop=1.0))
+    qr = dict(wave_q(xs, master, rival, lo, hi, hop=1.0))
+    # a window scoring far above chance (15+) counts double: one of those is already decisive
+    a_only = sum(1 + (a >= 15) for k, a in qa.items() if a >= WAVE_MATCH and a >= 2 * qr.get(k, 0))
+    r_only = sum(1 for k, r in qr.items() if r >= WAVE_MATCH and r >= 2 * qa.get(k, 0))
+    return a_only >= 2 and r_only == 0
+
+
+# ---------------------------------------------------------------- restarted / jumping takes
+
+PASS_BIN = int(round(1.0 / FRAME_S))     # 1 s of fingerprint frames
+MIN_PASS_S = 3.0                          # shorter bits of song (a false start) aren't split out
+PASS_KAPPA = 1.0                          # landmark hits per second a pass must beat to count
+PASS_SWITCH = 6.0                         # cost of changing offset, in hits
+
+
+def pass_candidates(tc, off):
+    """Song offsets that dominate some 5 s stretch of the clip."""
+    found = {}
+    win = 5 * PASS_BIN
+    for s in range(0, int(tc.max()) + 1 if len(tc) else 0, PASS_BIN):
+        sel = (tc >= s) & (tc < s + win)
+        if sel.sum() < 10:
+            continue
+        o = off[sel]
+        base = o.min()
+        hist = np.convolve(np.bincount(o - base), np.ones(3), "same")
+        k = int(hist.argmax())
+        if hist[k] >= 10:
+            found[k + base] = max(found.get(k + base, 0), hist[k])
+    out = []
+    for c, _ in sorted(found.items(), key=lambda kv: -kv[1]):
+        if all(abs(c - o) > 5 for o in out):
+            out.append(c)
+    return out[:16]
+
+
+def find_passes(master, h, t):
+    """Follow which song offset the clip agrees with, second by second, across the whole clip.
+
+    A Viterbi path over (candidate offsets + 'no song') scores each second by how many landmarks
+    agree with that offset, and charges for every change of offset, so a repeated chorus (which
+    agrees with two offsets at once) doesn't flip a pass, while a real restart or jump does.
+    Returns ([dict(c=offset frames, first, last, r0, r1 frames)] in clip order, hit times, hit offsets)."""
+    res = master.hits(h, t)
+    if res is None:
+        return [], None, None
+    tc, off = res
+    cands = pass_candidates(tc, off)
+    if len(cands) < 2:
+        return [], tc, off
+    nb = int(tc.max()) // PASS_BIN + 1
+    S = np.zeros((len(cands) + 1, nb))            # row 0: no song
+    for i, c in enumerate(cands, 1):
+        on = np.abs(off - c) <= 2
+        S[i] = np.minimum(np.bincount(tc[on] // PASS_BIN, minlength=nb)[:nb], 12) - PASS_KAPPA
+    K = len(S)
+    V, back = S[:, 0].copy(), np.zeros((K, nb), int)
+    for b in range(1, nb):
+        best = int(V.argmax())
+        jump = V[best] - PASS_SWITCH
+        back[:, b] = np.where(V >= jump, np.arange(K), best)
+        V = np.maximum(V, jump) + S[:, b]
+    path = np.zeros(nb, int)
+    path[-1] = int(V.argmax())
+    for b in range(nb - 1, 0, -1):
+        path[b - 1] = back[path[b], b]
+    runs = []
+    for b, s in enumerate(path):
+        if not s:
+            continue
+        c = cands[s - 1]
+        if runs and abs(runs[-1][0] - c) <= 13:   # same pass (a gap, or a few frames of drift)
+            runs[-1][2] = b + 1
+        else:
+            runs.append([c, b, b + 1])
+    out = []
+    for c, b0, b1 in runs:
+        on = np.sort(tc[(np.abs(off - c) <= 2) & (tc >= b0 * PASS_BIN) & (tc < b1 * PASS_BIN)])
+        # where the pass is first / last heard: ignore stray chance hits, want 3 within a second
+        dense = np.nonzero(on[2:] - on[:-2] <= PASS_BIN)[0] if len(on) > 2 else []
+        if len(dense):
+            out.append(dict(c=c, first=int(on[dense[0]]), last=int(on[dense[-1] + 2]),
+                            r0=b0 * PASS_BIN, r1=b1 * PASS_BIN))
+    return out, tc, off
+
+
+def pass_edges(xs, master, off, first, last):
+    """Where a pass's song really starts and stops (xs seconds). Landmark hits only bracket it to a
+    second or so (anchors pair with peaks up to 1.5 s later, and stray chance hits pile up in gaps),
+    so this slides a 1 s waveform window in 0.1 s steps across each edge. On test takes the first
+    matching window begins 0.4 s before the song does and the last one ends 0.5 s after it stops."""
+    def hit(t):
+        return gcc_phat_offset(xs, master.audio, off, t, t + 1.0, search=0.06, min_len=0.9)[1] >= WAVE_MATCH
+    n = len(xs) / SR
+    starts = [t for t in np.arange(max(0.0, first - 2.0), min(first + 4.0, n - 1.0), 0.1) if hit(t)]
+    ends = [t for t in np.arange(max(0.0, last - 4.0), min(last + 3.0, n - 1.0), 0.1) if hit(t)]
+    return (starts[0] + 0.4 if starts else first), (ends[-1] + 0.5 if ends else last)
+
+
+def continues(xs, master, tc, off, a, b):
+    """How well pass `a`'s song position also explains pass `b`'s stretch (0-1). High means b is a
+    repeated section that only looked like a jump: the same pass carries on through it."""
+    if xs is not None:
+        lo, hi = in_song(xs, master, a["off"], b["first"], b["last"])
+        q = [v for _, v in wave_q(xs, master, a["off"], lo, hi, hop=1.0)]
+        if not q and hi - lo >= 2.0:                 # shorter than one window: test it whole
+            q = [gcc_phat_offset(xs, master.audio, a["off"], lo, hi, search=0.06)[1]]
+        return sum(v >= WAVE_MATCH for v in q) / len(q) if q else 0.0
+    f0, f1 = b["first"] / FRAME_S, b["last"] / FRAME_S
+    span = (tc >= f0) & (tc <= f1)
+    own = (np.abs(off[span] - b["c"]) <= 2).sum()
+    return min(1.0, (np.abs(off[span] - a["c"]) <= 2).sum() / own) if own else 0.0
+
+
+def split_passes(clip, master, st, h, t, x, speed, xs):
+    """Split a take in which the song was played more than once (stopped and restarted, paused,
+    or jumped to another section) into one Part per pass. Returns False, touching nothing,
+    when the clip holds a single pass."""
+    xs_len = len(xs) / SR if xs is not None else len(x) / SR * speed
+    raw, tc, off = find_passes(master, h, t)
+    if len(raw) < 2:
+        return False
+    for p in raw:
+        p["off"] = p["c"] * FRAME_S
+        p["first"], p["last"] = p["first"] * FRAME_S, p["last"] * FRAME_S
+        if xs is not None:
+            p["first"], p["last"] = pass_edges(xs, master, p["off"], p["first"], p["last"])
+    raw = [p for p in raw if p["last"] - p["first"] >= MIN_PASS_S]    # stray bits, false starts
+    # a repeated chorus can make one pass look like two: merge when either side just continues
+    merged = True
+    while merged and len(raw) > 1:
+        merged = False
+        for i in range(len(raw) - 1):
+            a, b = raw[i], raw[i + 1]
+            ab, ba = continues(xs, master, tc, off, a, b), continues(xs, master, tc, off, b, a)
+            if max(ab, ba) >= 0.6:           # keep the position that explains the other better
+                keep = a if (ab, a["last"] - a["first"]) > (ba, b["last"] - b["first"]) else b
+                if min(ab, ba) >= 0.6 and xs is not None:   # both do: whichever some stretch fits only
+                    lo, hi = min(a["first"], b["first"]), max(a["last"], b["last"])
+                    keep = a if decisive(xs, master, a["off"], b["off"], lo, hi) else \
+                        b if decisive(xs, master, b["off"], a["off"], lo, hi) else keep
+                keep.update(first=min(a["first"], b["first"]), last=max(a["last"], b["last"]),
+                            r0=a["r0"], r1=b["r1"])
+                raw[i:i + 2] = [keep]
+                merged = True
+                break
+
+    passes = []
+    for p in raw:
+        sel = (t >= p["r0"]) & (t < p["r1"])
+        e = evaluate(master, h[sel], t[sel])
+        if e is None or e["A"] < st.min_hashes or e["strength"] < 0.25:
+            continue
+        o = p["off"]
+        if abs(e["offset"] - o) > 0.1:                # another offset fits this stretch better
+            e = dict(e, runner_up_offset=e["offset"], offset=o, conf=0.0)
+        lo, hi = p["first"], p["last"]
+        q = wave_q(xs, master, o, *in_song(xs, master, o, lo, hi)) if xs is not None else []
+        good = accepted(e, st)
+        if not good and xs is not None and e["R"]:
+            good = decisive(xs, master, o, e["runner_up_offset"], lo, hi)
+        if good or (q and sum(v >= WAVE_MATCH for _, v in q) >= max(1, len(q) / 3)):
+            passes.append(dict(p, ev=e, good=good))
+    if len(passes) < 2:
+        return False
+
+    passes.sort(key=lambda p: p["first"])
+    # cut where the next pass's song starts: in a gap, half a second ahead of it; in a straight
+    # jump (no gap), right at it
+    cuts = [0.0]
+    for a, b in zip(passes, passes[1:]):
+        gap = b["first"] - a["last"]
+        cuts.append(b["first"] - min(0.5, gap / 2) if gap > 0 else (a["last"] + b["first"]) / 2)
+    cuts.append(xs_len)
+    aoff = clip.audio_offset * speed
+    to_video = lambda s: min(clip.duration or s, max(0.0, s / speed + clip.audio_offset))
+    clip.split = True
+    for i, p in enumerate(passes):
+        lo, hi = cuts[i], cuts[i + 1]
+        e = p["ev"]
+        part = Part(to_video(lo), to_video(hi), confidence=round(e["conf"], 1), aligned=e["A"],
+                    runner_up=e["R"])
+        if p["good"]:
+            o, part.drift_ms, part.refine, ov = refine_offset(xs, master, p["off"], lo, hi)
+            part.offset = o - aoff
+            part.status = "placed"
+            if xs is not None:
+                part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms,
+                                                 span=ov[1] - ov[0]))
+            if part.refine.startswith("landmark only"):
+                part.notes.append(part.refine)
+        else:
+            part.status = "not placed"
+            if e["R"] and (e["R"] - e["N"]) > 0.5 * (e["A"] - e["N"]):
+                part.reason = REASON_AMBIGUOUS
+                part.notes.append("this pass starts at song %.1fs or %.1fs (repeated section)"
+                                  % (p["off"] + p["first"], e["runner_up_offset"] + p["first"]))
+            else:
+                part.reason = REASON_LOW_CONF
+                part.notes.append("this pass likely starts at song %.1fs" % (p["off"] + p["first"]))
+        clip.parts.append(part)
+    placed = [p for p in clip.parts if p.status == "placed"]
+    clip.notes.append("song restarts in this take: %d passes" % len(clip.parts))
+    if placed:
+        first = placed[0]
+        clip.status = "placed"
+        clip.offset, clip.confidence, clip.drift_ms = first.offset, first.confidence, first.drift_ms
+        clip.aligned, clip.runner_up, clip.refine = first.aligned, first.runner_up, first.refine
+    else:
+        clip.reasons.append(clip.parts[0].reason or REASON_LOW_CONF)
+        clip.confidence = clip.parts[0].confidence
+    return True
+
+
 SPEEDS = [1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]
+
+
+def unstretch(x, k, n=1024, hop=256):
+    """Slow audio down k times keeping its pitch (phase vocoder): undoes a time-stretched playback
+    (VLC, phones, most DAWs) so the song's rhythm lines up with the master again."""
+    _, _, Z = signal.stft(x, nperseg=n, noverlap=n - hop, boundary=None, padded=False)
+    if Z.shape[1] < 3:
+        return x
+    steps = np.arange(0, Z.shape[1] - 1, 1.0 / k)
+    j = steps.astype(int)
+    fr = (steps - j)[None, :]
+    mag = np.abs(Z)
+    ph = np.angle(Z)
+    omega = 2 * np.pi * hop * np.arange(Z.shape[0]) / n
+    dp = np.diff(ph, axis=1) - omega[:, None]
+    dp -= 2 * np.pi * np.round(dp / (2 * np.pi))
+    inc = omega[:, None] + dp[:, j]                     # true phase advance per hop at each step
+    acc = ph[:, :1] + np.concatenate([np.zeros((len(omega), 1)), np.cumsum(inc[:, :-1], axis=1)], axis=1)
+    out = ((1 - fr) * mag[:, j] + fr * mag[:, j + 1]) * np.exp(1j * acc)
+    with warnings.catch_warnings():        # unpadded edges: the first and last half window are faint
+        warnings.simplefilter("ignore")
+        _, y = signal.istft(out, nperseg=n, noverlap=n - hop, boundary=False)
+    return y.astype(np.float32)
 
 
 def candidate_speeds(clip):
@@ -853,16 +1174,16 @@ class Xmeml:
         return f
 
     def clipitem(self, track, cid, m, mediatype, start, frames, fps, enabled=True, label=None, scale=None,
-                 speed=1.0):
+                 speed=1.0, src_in=0, name=None):
         ci = sub(track, "clipitem", id=cid)
-        sub(ci, "name", os.path.basename(m.path))
+        sub(ci, "name", name or os.path.basename(m.path))
         sub(ci, "enabled", "TRUE" if enabled else "FALSE")
-        sub(ci, "duration", frames)
+        sub(ci, "duration", int(round(m.duration * fps)))
         add_rate(ci, fps)
         sub(ci, "start", start)
         sub(ci, "end", start + frames)
-        sub(ci, "in", 0)
-        sub(ci, "out", int(round(frames / speed)))    # source frames; timeline length is frames
+        sub(ci, "in", src_in)                          # source frames; timeline length is frames
+        sub(ci, "out", src_in + int(round(frames / speed)))
         self.file(ci, m)
         if abs(speed - 1) > 1e-6:
             add_speed(ci, 100.0 / speed, mediatype)
@@ -914,8 +1235,7 @@ class Xmeml:
         seq = sub(parent, "sequence", id=self.uid("sequence"))
         sub(seq, "uuid", "musicsync-%s-%s" % (datetime.datetime.now().strftime("%Y%m%d%H%M%S"), self.n))
         sub(seq, "name", name)
-        total = max([1] + [e["start"] + (e["nest"][1] if e.get("nest") is not None
-                                         else int(round(e["media"].duration * fps * e.get("speed", 1))))
+        total = max([1] + [e["start"] + (e["nest"][1] if e.get("nest") is not None else entry_span(e, fps)[1])
                            for e in entries])
         sub(seq, "duration", total)
         add_rate(seq, fps)
@@ -957,19 +1277,21 @@ class Xmeml:
                 add_labels(ci, e.get("label"))
                 continue
             sp = e.get("speed", 1.0)
-            m, frames = e["media"], int(round(e["media"].duration * fps * sp))
+            m = e["media"]
+            src_in, frames = entry_span(e, fps)
             items = []
             if e["vtrack"]:
                 ci = self.clipitem(vtracks[e["vtrack"] - 1], self.uid("clipitem"), m, "video",
                                    e["start"], frames, fps, label=e.get("label"),
-                                   scale=fill_scale(m, width, height), speed=sp)
+                                   scale=fill_scale(m, width, height), speed=sp, src_in=src_in,
+                                   name=e.get("name"))
                 count["v", e["vtrack"]] += 1
                 track_of[id(ci)], index_of[id(ci)] = e["vtrack"], count["v", e["vtrack"]]
                 items.append((ci, "video"))
             if e["atrack"] and m.has_audio:
                 ci = self.clipitem(atracks[e["atrack"] - 1], self.uid("clipitem"), m, "audio",
                                    e["start"], frames, fps, enabled=e.get("aenabled", True),
-                                   label=e.get("label"), speed=sp)
+                                   label=e.get("label"), speed=sp, src_in=src_in, name=e.get("name"))
                 count["a", e["atrack"]] += 1
                 track_of[id(ci)], index_of[id(ci)] = e["atrack"], count["a", e["atrack"]]
                 items.append((ci, "audio"))
@@ -979,6 +1301,16 @@ class Xmeml:
             sub(t, "locked", "FALSE")
         add_labels(seq, label)
         return seq
+
+
+def entry_span(e, fps):
+    """(source in frame, timeline length in frames) of a sequence entry; 'src' = (in s, out s)
+    picks part of the file (one pass of a restarted take), otherwise the whole file."""
+    sp = e.get("speed", 1.0)
+    if e.get("src") is None:
+        return 0, int(round(e["media"].duration * fps * sp))
+    a, b = (int(round(v * fps)) for v in e["src"])
+    return a, int(round((b - a) * sp))
 
 
 def add_scale(clipitem, scale):
@@ -1055,18 +1387,27 @@ def cam_bin_name(letter, model):
     return "%s Cam (%s)" % (letter, short) if short else "%s Cam" % letter
 
 
-def sync_entries(clips, seq_fps, preroll_s, master_media, args, label):
-    """Sync layout: song at 01:00:00:00, every clip on its own video track at its song offset."""
+def sync_entries(placements, seq_fps, preroll_s, master_media, args, label):
+    """Sync layout: song at 01:00:00:00, every clip (every pass of a restarted take) on its own
+    video track at its song offset. placements: [(Clip, Part)]."""
     song_frame = int(round(preroll_s * seq_fps))
     entries = []
     if master_media and not args.no_master_audio:
         entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1))
     first_a = 1 if args.no_master_audio else 2
-    for c in clips:
-        c.seq_start_frame = song_frame + int(round(c.offset * seq_fps))
-        entries.append(dict(media=Media.of_clip(c, seq_fps), start=c.seq_start_frame, vtrack=c.track,
-                            atrack=(first_a + c.track - 1) if args.scratch_audio != "off" else None,
-                            aenabled=args.scratch_audio == "on", label=label, speed=c.speed))
+    for c, p in placements:
+        # song time of the part's first frame, snapped so the cut sits on a whole source frame
+        a = int(round(p.src_in * seq_fps))
+        start = song_frame + int(round((p.offset + a / seq_fps * c.speed) * seq_fps))
+        if p.src_in == 0:
+            c.seq_start_frame = start
+        n = len(c.parts)
+        entries.append(dict(media=Media.of_clip(c, seq_fps), start=start, vtrack=p.track,
+                            atrack=(first_a + p.track - 1) if args.scratch_audio != "off" else None,
+                            aenabled=args.scratch_audio == "on", label=label, speed=c.speed,
+                            src=(p.src_in, p.src_out) if c.split else None,
+                            name=("%s (pass %d of %d)" % (os.path.basename(c.path), c.parts.index(p) + 1, n))
+                            if c.split else None))
     start_tc = 3600 * rate_xml(seq_fps)[0] - song_frame
     return entries, start_tc
 
@@ -1138,9 +1479,9 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             (w, h), fps = first_format(usable, seq_fps)
             entries, tc = stringout_entries(usable, fps, label)
             xw.sequence(breakup, "%s Cam_Breakup" % letter, fps, w, h, tc, entries, label)
-        placed = sorted([c for c in cl if c.status == "placed"], key=lambda c: c.track)
+        placed = placements_of(cl)
         if placed:
-            (w, h), _ = first_format(placed, seq_fps)
+            (w, h), _ = first_format([c for c, _ in placed], seq_fps)
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label)
             seq = xw.sequence(syncb, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label)
             nests.append((letter, seq, (w, h), tc))
@@ -1171,13 +1512,20 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
     return root
 
 
+def placements_of(clips):
+    """[(Clip, Part)] for every placed pass, in track order."""
+    return sorted([(c, p) for c in clips if c.status == "placed" for p in c.parts if p.status == "placed"],
+                  key=lambda cp: cp[1].track)
+
+
 def build_camera_xml(letter, clips, seq_fps, preroll, master_media, args):
     """Stand-alone sync sequence for one camera (the --per-camera output)."""
     xw = Xmeml(args.path_maps)
     root = ET.Element("xmeml", version="4")
-    (w, h), _ = first_format(clips, seq_fps)
+    pl = placements_of(clips)
+    (w, h), _ = first_format([c for c, _ in pl], seq_fps)
     label = camera_label(letter)
-    entries, tc = sync_entries(clips, seq_fps, preroll, master_media, args, label)
+    entries, tc = sync_entries(pl, seq_fps, preroll, master_media, args, label)
     xw.sequence(root, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label)
     return root
 
@@ -1193,14 +1541,38 @@ def write_xml(root, path):
 
 # ---------------------------------------------------------------- reports
 
-COLUMNS = ["file", "status", "reason", "camera", "track", "playback_speed", "offset_seconds", "offset_timecode",
-           "timeline_timecode", "confidence", "matching_landmarks", "runner_up_landmarks",
+COLUMNS = ["file", "status", "reason", "camera", "track", "pass", "clip_range", "playback_speed", "offset_seconds",
+           "offset_timecode", "timeline_timecode", "confidence", "waveform_check", "matching_landmarks",
+           "runner_up_landmarks",
            "drift_ms_head_to_tail", "drift_frames", "fps", "duration_s", "resolution", "audio",
            "camera_model", "serial", "notes"]
 
 
-def clip_row(c, seq_fps, preroll):
+def fmt_clock(s):
+    s = round(s, 1)
+    return "%d:%04.1f" % (s // 60, s % 60)
+
+
+def clip_rows(c, seq_fps, preroll):
+    """One report row per clip, or one per pass of the song for a take where it restarted."""
+    if not c.split:
+        return [clip_row(c, seq_fps, preroll)]
+    rows = []
+    for i, p in enumerate(c.parts, 1):
+        r = clip_row(c, seq_fps, preroll, p)
+        r["pass"] = "%d of %d" % (i, len(c.parts))
+        r["clip_range"] = "%s-%s" % (fmt_clock(p.src_in), fmt_clock(p.src_out))
+        rows.append(r)
+    return rows
+
+
+def clip_row(c, seq_fps, preroll, part=None):
     fps = seq_fps
+    if part is not None:                 # one pass of a restarted take: its own placement
+        c = dataclasses.replace(c, status=part.status, reasons=[part.reason] if part.reason else [],
+                                track=part.track, offset=part.offset, confidence=part.confidence,
+                                aligned=part.aligned, runner_up=part.runner_up, drift_ms=part.drift_ms,
+                                check=part.check, notes=part.notes)
     drift_frames = round(c.drift_ms / 1000 * fps, 2) if c.drift_ms is not None else ""
     return {
         "file": c.rel,
@@ -1208,12 +1580,15 @@ def clip_row(c, seq_fps, preroll):
         "reason": "; ".join(c.reasons),
         "camera": c.camera,
         "track": ("V%d" % c.track) if c.track else "",
+        "pass": "",
+        "clip_range": "",
         "playback_speed": ("%gx %s" % (c.speed, c.speed_mode)) if c.speed != 1 else "",
         "offset_seconds": "%.3f" % c.offset if c.offset is not None else "",
         "offset_timecode": fmt_tc(c.offset, fps) if c.offset is not None else "",
         "timeline_timecode": fmt_frames(3600 * rate_xml(fps)[0] + int(round(c.offset * fps)), fps)
         if c.offset is not None else "",
         "confidence": "%.1f" % c.confidence if c.confidence is not None else "",
+        "waveform_check": ("%s windows match" % c.check) if c.check else "",
         "matching_landmarks": c.aligned or "",
         "runner_up_landmarks": c.runner_up if c.aligned else "",
         "drift_ms_head_to_tail": c.drift_ms if c.drift_ms is not None else "",
@@ -1233,7 +1608,7 @@ def md_escape(s):
 
 
 def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, captured=()):
-    rows = [clip_row(c, seq_fps, preroll) for c in clips]
+    rows = [r for c in clips for r in clip_rows(c, seq_fps, preroll)]
     with open(os.path.join(out_dir, "sync_report.csv"), "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=COLUMNS)
         w.writeheader()
@@ -1267,6 +1642,36 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
         os.path.relpath(args.master, args.clips),
         ", ".join("`%s`" % os.path.relpath(p, args.clips) for p in captured) or "none found"))
     L.append("")
+    split = [c for c in clips if c.split]
+    if split:
+        L.append("## Takes where the song restarted")
+        L.append("")
+        L.append("The song was stopped and restarted, paused, or jumped to another part during these takes. "
+                 "Each pass is cut out of the clip and placed on its own track, named `(pass N of M)`.")
+        L.append("")
+        L.append("| File | Pass | Clip time | Track | Song time at cut | Status | Waveform check |")
+        L.append("|---|---|---|---|---|---|---|")
+        for c in split:
+            for i, p in enumerate(c.parts, 1):
+                L.append("| %s | %d of %d | %s-%s | %s | %s | %s | %s |" % (
+                    md_escape(c.rel), i, len(c.parts), fmt_clock(p.src_in), fmt_clock(p.src_out),
+                    ("V%d" % p.track) if p.track else "",
+                    fmt_clock(p.offset + p.src_in * c.speed) if p.offset is not None else "",
+                    p.status if p.status == "placed" else md_escape("not placed: %s; %s" % (p.reason, "; ".join(p.notes))),
+                    p.check or ""))
+        L.append("")
+    doubt = [(c, i, p) for c in clips for i, p in enumerate(c.parts, 1)
+             if p.status == "placed" and p.check and
+             int(p.check.split("/")[0]) < 0.7 * int(p.check.split("/")[1])]
+    if doubt:
+        L.append("## Worth a look")
+        L.append("")
+        L.append("Placed, but in some stretches the clip's audio doesn't match the song at that position "
+                 "(the song may stop, be talked over, or another pass may be too short to split out):")
+        L.append("")
+        for c, i, p in doubt:
+            L.append("- %s%s: %s windows match" % (c.rel, " pass %d" % i if c.split else "", p.check))
+        L.append("")
     un = [c for c in clips if c.status != "placed"]
     if un:
         L.append("## Not placed")
@@ -1295,8 +1700,8 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
         L.append("")
     L.append("## All clips")
     L.append("")
-    cols = ["file", "status", "reason", "camera", "track", "offset_timecode", "offset_seconds",
-            "confidence", "drift_frames", "fps", "audio"]
+    cols = ["file", "pass", "status", "reason", "camera", "track", "offset_timecode", "offset_seconds",
+            "confidence", "waveform_check", "drift_frames", "fps", "audio"]
     L.append("| " + " | ".join(cols) + " |")
     L.append("|" + "---|" * len(cols))
     for r in rows:
@@ -1304,7 +1709,9 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
     L.append("")
     L.append("Offsets are song time of the clip's first frame (negative means the camera rolled before the "
              "song started). Confidence (0-100) measures how decisively the best position in the song beats the "
-             "next-best one: 60 is about 2.7 standard deviations, 90+ is unmistakable.")
+             "next-best one: 60 is about 2.7 standard deviations, 90+ is unmistakable. Waveform check is a "
+             "second, independent test: the clip's audio is compared with the song at the placed position in "
+             "4-second windows, and it counts the windows that match.")
     with open(os.path.join(out_dir, "sync_report.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(L) + "\n")
 
@@ -1420,24 +1827,39 @@ def main(argv=None):
                 c.status = "not placed"
                 if not c.reasons:
                     c.reasons.append(REASON_NO_MATCH)
-            log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel,
-                                         ("%.3fs  conf %.0f" % (c.offset, c.confidence)) if c.status == "placed"
-                                         else "-- " + "; ".join(c.reasons)))
+            if c.split:
+                res = "%d passes: " % len(c.parts) + ", ".join(
+                    ("%.3fs" % p.offset) if p.status == "placed" else "(%s)" % p.reason for p in c.parts)
+            elif c.status == "placed":
+                res = "%.3fs  conf %.0f" % (c.offset, c.confidence)
+            else:
+                res = "-- " + "; ".join(c.reasons)
+            log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, res))
 
+    for c in clips:                     # a take with one pass of the song is one Part covering it all
+        if c.status == "placed" and not c.split:
+            c.parts = [Part(0.0, c.duration, offset=c.offset, status="placed", confidence=c.confidence,
+                            aligned=c.aligned, runner_up=c.runner_up, drift_ms=c.drift_ms, refine=c.refine,
+                            check=c.check)]
     labels = assign_cameras(clips, args.group_by)
     placed = [c for c in clips if c.status == "placed"]
     seq_fps = args.fps or (collections.Counter(c.fps for c in placed if c.fps).most_common(1) or
                            collections.Counter(c.fps for c in clips if c.fps).most_common(1) or [(24.0, 0)])[0][0]
-    preroll = max([0.0] + [-c.offset for c in placed])
+    preroll = max([0.0] + [-(p.offset + p.src_in * c.speed) for c in placed for p in c.parts
+                           if p.status == "placed"])
     preroll = math.ceil(preroll + 0.5)            # whole seconds, identical in every camera sequence
 
     cams = []
     for key, letter in sorted(labels.items(), key=lambda kv: kv[1]):
         cl = sorted([c for c in clips if c.camera_key == key], key=lambda c: c.rel)
-        pl = [c for c in cl if c.status == "placed"]
-        pl.sort(key=(lambda c: c.rel) if args.track_order == "name" else (lambda c: (c.offset, c.rel)))
-        for i, c in enumerate(pl, 1):
-            c.track = i
+        # one track per clip, and per pass when the song restarted in a take (passes side by side)
+        pl = [(c, p) for c in cl if c.status == "placed" for p in c.parts if p.status == "placed"]
+        pl.sort(key=(lambda cp: (cp[0].rel, cp[1].src_in)) if args.track_order == "name"
+                else (lambda cp: (cp[1].offset + cp[1].src_in * cp[0].speed, cp[0].rel)))
+        for i, (c, p) in enumerate(pl, 1):
+            p.track = i
+            if c.track is None:
+                c.track = i
         cams.append((letter, cl))
 
     _, mch, mrate = probe_audio(args.master)
@@ -1456,14 +1878,14 @@ def main(argv=None):
     for letter, cl in cams:
         key = cl[0].camera_key
         cam_files[key] = proj_file
-        pl = sorted([c for c in cl if c.status == "placed"], key=lambda c: c.track)
+        pl = [c for c in cl if c.status == "placed"]
         if args.per_camera and pl:
             model = key.split(" / ")[0]
             fname = re.sub(r"[^\w .-]+", "_", "%s Cam_Sync - %s.xml" % (letter, model))
             write_xml(build_camera_xml(letter, pl, seq_fps, preroll, master_media, args),
                       os.path.join(args.out, fname))
             cam_files[key] = fname
-            log("Wrote %s (%d tracks)" % (fname, len(pl)))
+            log("Wrote %s (%d tracks)" % (fname, len(placements_of(pl))))
 
     write_reports(clips, args.out, seq_fps, preroll, args, cam_files, labels, captured)
     log("Wrote sync_report.csv and sync_report.md")

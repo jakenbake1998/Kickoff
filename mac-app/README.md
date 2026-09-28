@@ -12,7 +12,8 @@ Drop a shoot folder on Kickoff and it writes, inside that folder, `Premiere Sync
    command there into Terminal, then run the installer again.
 4. Kickoff.app lands in your home Applications folder. Drag it to the Dock.
 
-Running the installer again updates the engine.
+Kickoff updates itself: each time it runs it fetches the latest engine from GitHub (it keeps the
+installed one when offline). Running the installer again also updates it.
 
 ## Use
 

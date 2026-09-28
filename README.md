@@ -27,7 +27,7 @@ Everything is written to `Premiere Sync` inside the shoot folder (`-o` to change
 | File | What it is |
 |---|---|
 | `White Wolf.xml` | The whole project: bins, footage, sequences, labels (below) |
-| `sync_report.csv` / `sync_report.md` | Every clip: placed or not, reason, offset, confidence, camera, track, drift |
+| `sync_report.csv` / `sync_report.md` | Every clip (every pass of a restarted take): placed or not, reason, offset, confidence, waveform check, camera, track, drift |
 | `A Cam Sync - ILME-FX3.xml` ... | Only with `--per-camera`: each sync sequence on its own |
 
 ## In Premiere
@@ -94,12 +94,47 @@ Nothing is guessed. Every clip that isn't placed gets a reason in the report:
 | `confidence below threshold` | A likely position exists but not decisively enough (`--threshold`, default 60) |
 | `unreadable file` | ffmpeg can't open it. RED `.R3D` and `.braw` are in this group; sync their proxies instead |
 
+## Takes where the song stopped, restarted or jumped
+
+Every clip's audio is followed from head to tail, second by second, against the whole song. If
+the song was stopped and started again, paused and resumed, or jumped to another section while the
+camera kept rolling, each pass is found on its own:
+
+- The clip is cut where the next pass's song starts (found to about a tenth of a second with a
+  sliding waveform comparison). In a gap, the cut sits just before the song comes back in.
+- Each pass goes on its own video track in the camera's Sync sequence, named
+  `C0007.MP4 (pass 2 of 3)`, at its own place in the song. Nothing is duplicated on disk; the
+  passes are the same file with different in and out points.
+- The report lists every pass with its clip time, track and song time, in its own section.
+- A repeated chorus doesn't count as a jump: when one position explains both stretches, it stays
+  one pass. A pass that only covers a copy-pasted chorus is listed but not placed (it fits both
+  choruses equally).
+- A bit of song shorter than 3 seconds (a false start) isn't split out.
+- A take where the song stops and never restarts syncs as one clip, and the report's "Worth a look"
+  section flags the stretch where the audio no longer matches.
+
+Tested with `tests/stress_passes.py 300`: 300 random single, restarted, paused, jumped and
+three-pass takes (600 passes, 3 to 15 dB signal-to-noise, with and without a live drummer). No pass
+was placed at a wrong position. 542 were placed exactly; the rest are passes with no more than
+3 seconds of song outside the repeated chorus, correctly left unplaced, plus one take whose two
+passes sat only 0.1 s apart in the song and was placed as one clip, 1 frame off.
+
+## Waveform check
+
+Every placement is checked a second way. Fingerprint landmarks find the position; then the clip's
+actual waveform is compared with the song at that position in 4-second windows (phase
+correlation, corrected for any drift). The report's `waveform_check` column says how many windows
+match, e.g. `14/15`. A correct placement matches in every window where the song is playing. Clips
+that match in under 70% of their windows are listed under "Worth a look". The same comparison
+settles clips the landmarks alone call borderline (part chorus, part verse): if some stretch
+matches only at the best position, the clip is placed.
+
 ## Sped-up playback (slow motion)
 
 When a clip doesn't match at normal speed, Kickoff tries the song played faster on set: 1.25x,
 1.5x, 2x, 2.5x, 3x, 4x, 5x and the clip's frame rate divided by 23.976/25/29.97. It tries both
 ways of speeding a song up: varispeed (pitch goes up) and time-stretch (pitch kept, what VLC or
-a phone does). A match found this way is placed slowed down by the same amount (a 2x match
+a phone does; its audio is slowed back down with a phase vocoder before matching). A match found this way is placed slowed down by the same amount (a 2x match
 lands at 50% speed), so the lips line up with the normal-speed song. The report's
 `playback_speed` column shows the speed and method. Time-stretched matches are accurate to about
 one frame; varispeed matches get the same sub-frame refinement as normal ones. A sped-up match has
@@ -156,7 +191,10 @@ python3 musicsync.py /tmp/synth/clips
 python3 tests/check.py /tmp/synth/expected.json "/tmp/synth/clips/Premiere Sync/sync_report.csv"
 ```
 
-`make_synthetic.py` builds a song with a pasted chorus and 12 clips from an FX3, an Alexa and a
+`make_synthetic.py` builds a song with a pasted chorus and 20 clips from an FX3, an Alexa and a
 GoPro whose audio is the song played into a reverberant room with a live drummer, noise and a
 limiter. It includes slow motion with and without audio, B-roll with different music, a chorus-only
-clip, a silent clip, an unreadable R3D and a 0.1% speed mismatch.
+clip, a silent clip, an unreadable R3D, a 0.1% speed mismatch, sped-up playback (varispeed and
+time-stretched), and takes where the song was restarted, paused, jumped, played three times, false
+started, or stopped for good. The video burns in the clip name and the song time of every frame
+(`NO SONG` between passes), so synced clips show the same number across tracks.
