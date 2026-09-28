@@ -3620,7 +3620,8 @@ def main(argv=None):
 
     if master is not None:
         event("start", project=project_name, folder=args.clips, song=os.path.basename(args.master),
-              song_duration=round(master.duration, 2), clips=len(clips), version=VERSION, mode="music")
+              song_duration=round(master.duration, 2), clips=len(clips), version=VERSION, mode="music",
+              cams=collections.Counter(clip_cam(c) for c in clips))
         match_all(clips, master, args)
         if shift is not None:
             move_to_song(clips, shift)
@@ -3739,6 +3740,22 @@ def move_to_song(clips, shift):
                     setattr(obj, k, getattr(obj, k) - shift)
 
 
+def clip_cam(c):
+    """The camera a clip is filed under while syncing, for the window: "A" from an "A Cam (...)"
+    folder (or the card's reel letter), else its top folder."""
+    return camera_letter_hint(c) or c.top_folder or ""
+
+
+def song_spans(c):
+    """[start, end] in song seconds of each placed stretch of a clip, for the window's song map."""
+    if c.status != "placed":
+        return []
+    if c.split:
+        return [[round(p.offset + p.src_in * c.speed, 2), round(p.offset + p.src_out * c.speed, 2)]
+                for p in c.parts if p.status == "placed"]
+    return [[round(c.offset, 2), round(c.offset + (c.duration or 0) * c.speed, 2)]] if c.offset is not None else []
+
+
 def match_all(clips, master, args):
     """Sync every clip to the song (in parallel), logging and reporting each as it finishes."""
     st = Settings(threshold=args.threshold, min_hashes=args.min_landmarks, max_fps=args.max_fps,
@@ -3774,7 +3791,8 @@ def match_all(clips, master, args):
                 res = "-- " + "; ".join(c.reasons)
             log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, res))
             event("clip", done=done, total=len(clips), file=c.rel, status=c.status,
-                  passes=len(c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "")
+                  passes=len(c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "",
+                  cam=clip_cam(c), spans=song_spans(c))
             placed += c.status == "placed"
             tried += c.status == "placed" or (c.reasons[:1] in ([REASON_NO_MATCH], [REASON_LOW_CONF]))
             if args.mode == "auto" and not getattr(args, "song_certain", True) and not placed \
@@ -3977,6 +3995,7 @@ def add_cards(args, state, restrict):
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         list(ex.map(probe, clips))
     event("start", project=name, folder=args.clips, song=os.path.basename(args.master or ""),
+          cams=collections.Counter(clip_cam(c) for c in clips),
           song_duration=round(master.duration, 2) if master else 0, clips=len(clips), version=VERSION,
           mode=args.mode, add=n)
     if master is not None and clips:
