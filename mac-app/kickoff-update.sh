@@ -28,6 +28,16 @@ if get mac-app/ui/index.html && grep -q "window.Kickoff" "$TMP/index.html" \
   cp "$TMP/index.html" "$SUPPORT/ui/index.html.upd" && mv "$SUPPORT/ui/index.html.upd" "$SUPPORT/ui/index.html"
   changed="${changed:+$changed, }window"
 fi
+# the Dock/Finder icon: swapped into the app, which Finder and the Dock pick up once it's touched
+if [ -n "$APP" ] && [ -d "$APP/Contents/Resources" ] && get mac-app/icon/AppIcon.icns \
+   && [ "$(head -c 4 "$TMP/AppIcon.icns")" = "icns" ] \
+   && ! cmp -s "$TMP/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"; then
+  cp "$TMP/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns.upd" \
+    && mv "$APP/Contents/Resources/AppIcon.icns.upd" "$APP/Contents/Resources/AppIcon.icns"
+  touch "$APP"
+  codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+  changed="${changed:+$changed, }icon"
+fi
 if [ -n "$APP" ] && [ -d "$APP/Contents/MacOS" ] && get mac-app/Kickoff.swift \
    && ! cmp -s "$TMP/Kickoff.swift" "$SUPPORT/Kickoff.swift"; then
   if xcrun swiftc -O -o "$TMP/Kickoff" "$TMP/Kickoff.swift" -framework Cocoa -framework WebKit >/dev/null 2>&1; then
@@ -38,7 +48,7 @@ if [ -n "$APP" ] && [ -d "$APP/Contents/MacOS" ] && get mac-app/Kickoff.swift \
   fi
 fi
 case "$changed" in
-  *window*|*app*) echo "Updated: $changed. The new window shows next time you open Kickoff." ;;
+  *window*|*app*|*icon*) echo "Updated: $changed. The new window shows next time you open Kickoff." ;;
   ?*) echo "Updated: $changed" ;;
 esac
 exit 0
