@@ -164,7 +164,7 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .top{align-items:flex-start}
 .histbtn{display:flex;align-items:center;gap:7px;padding:7px 13px;font-size:12.5px;color:var(--muted);border-radius:10px;margin-left:auto}
 .histbtn svg{margin-right:0}
-.modeswitch{display:grid;grid-template-columns:1fr 1fr;width:100%;padding:4px;border-radius:12px}
+.modeswitch{display:grid;grid-template-columns:1fr 1fr 1fr;width:100%;padding:4px;border-radius:12px}
 .modeswitch button{padding:10px 14px;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;border-radius:9px}
 .modeswitch button svg{margin:0}
 /* a run going while Settings or History is open: the tabs fade into a small progress bar in the same spot,
@@ -474,6 +474,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <div class="tabswrap" id="tabsWrap">
   <div class="seg tabs modeswitch" role="tablist" aria-label="Kind of project">
     <button data-view="music" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Music video</button>
+    <button data-view="narrative" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>Narrative</button>
     <button data-view="setup" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>Other projects</button>
   </div>
   <button class="minirun" id="miniRun" inert><span class="mlabel" id="miniLabel">Back to syncing</span><span class="mtrack" id="miniTrack"><i id="miniBar"></i></span><span class="mcount" id="miniCount"></span></button>
@@ -558,7 +559,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       </div>
       <div class="prog" id="prog"><i id="bar"></i></div>
       <div class="status"><span id="stage">Starting</span><span><span id="count"></span><span id="eta"></span></span></div>
-      <div class="livebox" id="mapBox" hidden><h3>Where the takes land in the song</h3><div class="lanes" id="lanes"></div><div class="laxis"><span></span><div id="laxis"></div><span></span></div></div>
+      <div class="livebox" id="mapBox" hidden><h3 id="mapHead">Where the takes land in the song</h3><div class="lanes" id="lanes"></div><div class="laxis"><span></span><div id="laxis"></div><span></span></div></div>
       <div class="livebox" id="feedBox" hidden><h3>Just now</h3><div class="feed" id="feed"></div></div>
     </div>
   </div>
@@ -576,7 +577,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <div class="resgrid">
   <div id="camsWrap" hidden>
-    <div class="camsHead"><span></span><span>Where each camera has footage in the song</span><span>Synced</span></div>
+    <div class="camsHead"><span></span><span id="camsHead">Where each camera has footage in the song</span><span>Synced</span></div>
     <div class="cams" id="cams"></div>
   </div>
 
@@ -627,6 +628,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     [/^no audio/, "no audio (slow motion?)", "Footage bins"],
     [/^slow motion/, "slow motion", "Footage bins"],
     [/^high frame rate/, "high frame rate", "Footage bins"],
+    [/^no match to any audio/, "no match to any audio file (B-roll?)", "Footage bins"],
+    [/^lines up with no audio/, "lines up between audio files", "check report"],
+    [/^timecode outside/, "timecode outside every audio file", "Footage bins"],
+    [/^no timecode/, "no timecode", "Footage bins"],
     [/^no match/, "no match to the song (B-roll?)", "Footage bins"],
     [/^audio track is silent/, "silent audio", "Footage bins"],
     [/^ambiguous/, "fits two places in the song", "check report"],
@@ -637,8 +642,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   ];
   var MODE_NOTES = {
     music: "Each song syncs only to the footage beside it. Add a row for every music video; they run one after another.",
-    setup: "Commercials and other jobs: bins, Breakups and an Edit sequence, no syncing. Drop the shoot folder, or cards."
+    setup: "Commercials and other jobs: bins, Breakups and an Edit sequence, no syncing. Drop the shoot folder, or cards.",
+    narrative: "Dialogue scenes: drop the footage and the sound recordist's audio files (or their folder). Each clip lines up with its audio by timecode, or by the camera's scratch audio."
   };
+  function listMode() { return mode === "setup" || mode === "narrative"; }   // one drop box and a list
   // the screen picks the kind of job: Music video (song -> footage rows) or Other projects (set up only)
   var mode = "music";
   try { mode = localStorage.getItem("kickoff-screen") || "music"; } catch (e) {}
@@ -724,7 +731,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function add(paths, target, row) {
     if (!ready()) return;
     paths = paths || [];
-    if (mode === "setup") {
+    if (listMode()) {
       paths.forEach(function (p) { if (queue.indexOf(p) < 0) queue.push(p); });
       return renderStage();
     }
@@ -899,10 +906,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function runsToStart() {                // [{paths, mode, name}], or a reason Start is off
-    if (mode === "setup") {
+    if (listMode()) {
       var folders = queue.filter(function (p) { return !isSong(p); });
-      return folders.length ? [{ paths: queue.slice(), mode: "setup", name: label(queue), xml: setupName.trim(), queue: true }]
-        : "Add the shoot folder or cards.";
+      return folders.length ? [{ paths: queue.slice(), mode: mode, name: label(queue), xml: setupName.trim(), queue: true }]
+        : mode === "narrative" ? "Add the footage and the audio files." : "Add the shoot folder or cards.";
     }
     var used = jobs.filter(function (j) { return j.song || j.footage.length; });
     if (!used.length) return "Add a song and the footage to sync to it.";
@@ -973,7 +980,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       txt.style.minWidth = "0";
       var nm = document.createElement("div"), pt = document.createElement("div");
       nm.className = "nm"; pt.className = "pt";
-      nm.textContent = base(p) + (isSong(p) ? "  (song)" : "");
+      nm.textContent = base(p) + (isSong(p) ? (mode === "narrative" ? "  (audio)" : "  (song)") : "");
       pt.textContent = parent(p);
       pt.title = p;
       txt.append(nm, pt);
@@ -1048,7 +1055,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     var name = folders.length ? projectName(folders) : label(paths);     // the card has a folder icon: the footage is its title
     var of = batch && batch.runs.length > 1 ? "Music video " + (batch.i + 1) + " of " + batch.runs.length + " · " : "";
     $("dropTitle").textContent = name;
-    $("dropSub").textContent = of + (song ? "song: " + base(song) : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
+    var nAudio = paths.filter(isSong).length;
+    $("dropSub").textContent = of + (mode === "narrative" ? (nAudio ? "with " + plural(nAudio, "audio file") : "audio from the folder")
+      : song ? "song: " + base(song) : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
     setTitle("Kickoff — " + name);
     $("prog").className = "prog busy";
     $("bar").style.width = "";
@@ -1144,6 +1153,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       ax.appendChild(sp);
     });
     $("feed").innerHTML = '<div class="none">Clips show up here as they sync.</div>';
+    $("mapHead").textContent = e.mode === "narrative" ? "Where the takes land in the audio" : "Where the takes land in the song";
     show("rhead", true); show("mapBox", d > 0 && keys.length > 0); show("feedBox", true);
     show("stats", false);                        // the big count carries the numbers
     $("run").classList.add("live");
@@ -1178,6 +1188,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     var m = REASONS.find(function (x) { return x[0].test(e.reason || ""); });
     var what = !placed ? "set aside: " + (m ? m[1] : e.reason || "didn\u2019t sync")
       : e.passes > 1 ? "song restarted, " + e.passes + " passes"
+      : e.audio ? "with " + e.audio + (e.by ? " by " + e.by : "")
       : e.spans && e.spans.length ? "at " + clock(e.spans[0][0]) + " in the song" : "synced";
     var row = document.createElement("div");
     row.className = "frow new";
@@ -1224,7 +1235,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start") {
       state.total = e.clips; state.tClips = Date.now(); state.done = 0;
-      $("dropSub").textContent = runOf() + "song: " + songOf(e);
+      $("dropSub").textContent = runOf() + (e.mode === "narrative" ? "synced to " + e.song : "song: " + songOf(e));
       $("stage").textContent = "Syncing " + plural(e.clips, "clip") + " to " + e.song;
       $("count").textContent = "0 / " + e.clips;
       $("prog").className = "prog";
@@ -1497,7 +1508,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         lk.addEventListener("mouseleave", function () { clearTimeout(hov); setTimeout(function () { if (!popPinned && !popHover) closePop(); }, 200); });
       }
     }
-    todo([e.synced ? "In <b>" + esc(e.edit_name || e.project + "_Edit") + "</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : ""]);
+    todo([e.synced && e.mode !== "narrative" ? "In <b>" + esc(e.edit_name || e.project + "_Edit") + "</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : "",
+          e.mode === "narrative" && e.synced ? "Everything is in <b>" + esc(e.sync_name || e.project + "_Sync") + "</b>: each audio file with its clips over it." : ""]);
+    $("camsHead").textContent = e.mode === "narrative" ? "Where each camera has footage, audio file by audio file" : "Where each camera has footage in the song";
 
     var dur = e.song_duration || 1, cams = $("cams");
     cams.innerHTML = "";
@@ -1530,7 +1543,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     });
     var axis = document.createElement("div");
     axis.className = "axis";
-    axis.innerHTML = "<span></span><div><span>0:00</span><span>song " + clock(dur / 2) + "</span><span>" + clock(dur) + "</span></div><span></span>";
+    axis.innerHTML = "<span></span><div><span>0:00</span><span>" + (e.mode === "narrative" ? "" : "song ") + clock(dur / 2) + "</span><span>" + clock(dur) + "</span></div><span></span>";
     cams.appendChild(axis);
     show("camsWrap", e.cameras.length > 0);
 
@@ -1744,7 +1757,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       if (running()) return;
       clearTimeout(nextTimer); nextTimer = null;
       if (resultShowing()) leaveResult();
-      var m = h.mode === "setup" ? "setup" : "music";
+      var m = h.mode === "setup" || h.mode === "narrative" ? h.mode : "music";
       showView(m);
       var stem = h.xml ? base(h.xml).replace(/\.xml$/i, "") : "";
       var name = typeof h.name === "string" ? h.name : stem !== h.project ? stem : "";
@@ -1865,7 +1878,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     sync_size: "3840x2160", start_hour: 1, track_order: "name", labels: {}, bins: DEFAULT_BINS,
     names: { breakup: "{cam}_Breakup", synced: "{cam}_Synced", condensed: "{cam}_Synced_Condensed",
              nested: "{project}_CamsNested", edit: "{project}_Edit" },
-    unsynced: true, unsynced_gap_s: 60, place_repeats: true, skip_folders: []
+    unsynced: true, unsynced_gap_s: 60, place_repeats: true, skip_folders: [],
+    timecode_narrative: true, timecode_music: false
   };
   // bins Kickoff fills: they can be renamed and moved, not removed
   var REQUIRED = { footage: 1, breakup: 1, sync: 1, synced: 1, condensed: 1, edit: 1, music: 1 };
@@ -2052,6 +2066,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       g = group("A take that fits two identical choruses", "When a section of the song repeats exactly, a take can line up with both copies.");
       row(g, "Put it", select([["1", "At the first copy, named (check chorus)"], ["0", "Set it aside"]], settings.place_repeats ? "1" : "0",
         function (v) { settings.place_repeats = v === "1"; }));
+      P.appendChild(g);
+      g = group("Timecode", "Timecode only works when the camera and the audio were jammed to the same clock.");
+      row(g, "Narrative", select([["1", "Timecode first, else the camera's scratch audio"], ["0", "Scratch audio only"]],
+        settings.timecode_narrative ? "1" : "0", function (v) { settings.timecode_narrative = v === "1"; }));
+      row(g, "Music video", select([["0", "By the song's sound"], ["1", "By timecode, when the song file carries it"]],
+        settings.timecode_music ? "1" : "0", function (v) { settings.timecode_music = v === "1"; }));
       P.appendChild(g);
     }
   }
@@ -2301,7 +2321,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       document.querySelectorAll(".box.over").forEach(function (b) { b.classList.remove("over"); });
       var el = on && x != null ? document.elementFromPoint(x, y) : null, box = el && el.closest ? el.closest(".box") : null;
       if (box) box.classList.add("over");
-      $("drop").classList.toggle("over", !!on && mode === "setup");
+      $("drop").classList.toggle("over", !!on && listMode());
     },
     info: function (i) {
       if (i.version) $("ver").textContent = "Engine " + i.version;
