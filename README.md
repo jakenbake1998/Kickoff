@@ -95,12 +95,14 @@ to the top of the project. The tree is:
 ```
 Adjustment Layers                    (placeholder; Temp Color can't come through XML)
 Footage / A Cam (Mini LF), B Cam (FX3), ...   every clip of that camera, bin and clips label colored
-Sequence / Breakup   "A Cam_Breakup" ...: every clip of the camera back to back in file order
+Sequence / Breakup   "A Cam_Breakup" ...: every clip of the camera back to back in file order, every camera audio
+                      channel on its own track, all on
          / Sync      "<Project>_CamsNested": each condensed sequence nested on V1 (A), V2 (B)..., song on A1
                 / Synced              "A Cam_Synced" ...: every synced clip on its own video track
                 / Synced Condensed    "A Cam_Synced_Condensed" ...: the same clips on 2, 4, 8 or 16...
                                       tracks (the fewest that fit, none cut or moved), clip 1 on V1 and
-                                      the rest in order below it, so multicam has fewer feeds
+                                      the rest in order below it, so multicam has fewer feeds; the song
+                                      track is muted so CamsNested/Edit play it once
          / Edit      "<Project>_Edit": a copy of <Project>_CamsNested, to cut in
                 / Working, Past      (placeholders)
 Audio / Music        the song (+ anything else in a Music folder)

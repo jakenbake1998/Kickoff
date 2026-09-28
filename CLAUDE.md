@@ -41,7 +41,7 @@ The full list is in the `jake-editing-rules` skill. The ones code changes most o
 - Clips always scale to FILL the frame with no black edges, never "Scale to Frame Size".
 - Sync sequences are 3840x2160 and the song starts at 01:00:00:00. "A Cam_Synced" (Sequence > Sync > Synced) has one take per video track; "A Cam_Synced_Condensed" (Sync > Synced Condensed) packs the same clips onto the smallest of 2, 4, 8, 16... tracks that fits, without cutting any, keeping clip order (clip 1 on V1, the rest following down). CamsNested and the Edit sequence nest the condensed ones as plain nests (not multicam source sequences) with multicam enabled.
 - Label colors: A Iris, B Mango, C Rose, then any other distinct colors.
-- Camera audio stays audible: keep every channel, with the synced scratch channel on top.
+- Camera audio stays audible: keep every channel, with the synced scratch channel on top. Master clips and Breakups carry every channel of the file in camera order, all on (the XML lists each stream/channel; a Mini LF has 5 mono streams). The song track is muted in the Condensed sequences.
 - The project XML goes where Jake picks in the window ("Export XML to"). If he picks nothing, it goes at the top of the drive the footage is on (`/Volumes/<drive>`, the window passes `--xml-dir drive`). Footage on the Mac's own disk falls back to `Kickoff Exports`.
 - Reports and the project state file (`kickoff-project.json`) always go in `Kickoff Exports` inside the shoot folder (older runs used `Premiere Sync`, which is still found).
 - Proxy, preview, render, Generations and Exports folders are skipped when scanning.
