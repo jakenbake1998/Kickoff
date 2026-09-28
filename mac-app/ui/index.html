@@ -100,6 +100,27 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .modeswitch{display:grid;grid-template-columns:1fr 1fr;width:100%;padding:4px;border-radius:12px}
 .modeswitch button{padding:10px 14px;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;border-radius:9px}
 .modeswitch button svg{margin:0}
+/* a run going while Settings or History is open: the tabs fade into a small progress bar in the same spot,
+   and it turns back into the tabs (the run's tab lit) on the way back */
+.tabswrap{position:relative}
+.tabswrap .modeswitch,.minirun{transition:opacity .35s ease,transform .35s ease}
+.minirun{position:absolute;inset:0;display:flex;align-items:center;gap:16px;padding:0 18px;border-radius:12px;border:1px solid color-mix(in srgb,var(--accent) 55%,transparent);
+  background:var(--panel);color:var(--ink);font:600 14px var(--body);opacity:0;transform:scale(.985);pointer-events:none}
+.minirun:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--panel))}
+.tabswrap.busy .modeswitch{opacity:0;transform:scale(.985);pointer-events:none}
+.tabswrap.busy .minirun{opacity:1;transform:none;pointer-events:auto}
+.minirun .mlabel{flex:none;display:flex;align-items:center;gap:6px}
+.minirun .mlabel:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.minirun .mtrack{flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.minirun .mtrack i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.minirun .mtrack.busy i{width:30%;animation:slide 1.2s ease-in-out infinite}
+.minirun .mcount{flex:none;color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.minirun.done .mlabel:before,.minirun.done .mtrack i{background:var(--good)}
+.minirun.fail .mlabel:before,.minirun.fail .mtrack i{background:var(--bad)}
+/* back to the tabs: the lit tab grows out of the progress fill */
+.tabswrap.morph .modeswitch button[aria-pressed="true"]{animation:pillIn .45s cubic-bezier(.3,.7,.3,1) both}
+@keyframes pillIn{from{clip-path:inset(42% calc(100% - var(--fill,30%)) 42% 0 round 3px)}to{clip-path:inset(0 0 0 0 round 9px)}}
+@media (prefers-reduced-motion:reduce){.tabswrap .modeswitch,.minirun{transition:none}.tabswrap.morph .modeswitch button{animation:none!important}}
 #bStart{width:100%;padding:15px 20px;font:700 17px var(--display);border-radius:12px;letter-spacing:.01em}
 #bStart:not(:disabled){box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 28%,transparent)}
 #bStart:disabled{opacity:.45;cursor:default}
@@ -383,9 +404,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <button class="histbtn" id="bHist" aria-pressed="false" title="Every run so far"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>History</button>
   </div>
   </div>
+  <div class="tabswrap" id="tabsWrap">
   <div class="seg tabs modeswitch" role="tablist" aria-label="Kind of project">
     <button data-view="music" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Music video</button>
     <button data-view="setup" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>Other projects</button>
+  </div>
+  <button class="minirun" id="miniRun" inert><span class="mlabel" id="miniLabel">Back to syncing</span><span class="mtrack" id="miniTrack"><i id="miniBar"></i></span><span class="mcount" id="miniCount"></span></button>
   </div>
 
   <section id="vHist" class="hist" hidden>
@@ -941,7 +965,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     state.paths = paths;
     state.folder = paths.filter(function (p) { return !isSong(p); })[0] || paths[0];
     state.t0 = Date.now();
-    showView(mode);
+    if (!$("vRun").hidden) showView(mode);      // the next video of a batch leaves Settings or History open
     show("jobsWrap", false); show("queue", false); show("btnsStart", false); show("hints", false); show("modes", false);
     var d = $("drop");
     d.className = "drop";
@@ -973,8 +997,35 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (!running() || !state.t0) { clearInterval(tick); tick = null; $("eta").textContent = ""; return; }
     var left = timeLeft();
     $("eta").textContent = clock((Date.now() - state.t0) / 1000) + " elapsed" + (left ? " · " + left : "");
+    updateMini();
   }
   function songOf(e) { var sg = state.paths.filter(isSong)[0]; return sg ? base(sg) : e.song || ""; }
+  var miniEnd = null;              // a run ended while Settings or History was open: "done", "stopped" or "error"
+  function updateMini() {
+    var wrap = $("tabsWrap"), live = running(), on = $("vRun").hidden && (live || !!miniEnd);
+    if (!$("vRun").hidden) miniEnd = null;
+    if (on !== wrap.classList.contains("busy")) {
+      wrap.classList.toggle("busy", on);
+      document.querySelector(".modeswitch").inert = on;
+      $("miniRun").inert = !on;
+      if (!on) {                                  // the fill turns back into the run's tab
+        wrap.style.setProperty("--fill", $("miniBar").style.width || "30%");
+        wrap.classList.remove("morph"); void wrap.offsetWidth; wrap.classList.add("morph");
+        setTimeout(function () { wrap.classList.remove("morph"); }, 500);
+      }
+    }
+    if (!on) return;
+    var pct = state.total && state.done ? Math.min(100, 100 * state.done / state.total) : 0;
+    $("miniRun").className = "minirun" + (live ? "" : miniEnd === "done" ? " done" : " fail");
+    $("miniLabel").textContent = live ? "Back to syncing" : miniEnd === "done" ? "Done: see results"
+      : miniEnd === "stopped" ? "Stopped: see why" : "Kickoff hit an error: see why";
+    $("miniTrack").className = "mtrack" + (live && !pct ? " busy" : "");
+    $("miniBar").style.width = live ? (pct ? pct.toFixed(1) + "%" : "") : "100%";
+    var left = live ? timeLeft() : "";
+    $("miniCount").textContent = live && state.total && state.done != null && !state.setup
+      ? state.done + " of " + state.total + (left ? " · " + left : "") : "";
+  }
+  $("miniRun").addEventListener("click", function () { showView(mode); });
   function setCounts() {
     $("sSynced").textContent = state.synced;
     $("sAside").textContent = state.aside;
@@ -1017,6 +1068,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       if (e.status === "placed") state.synced++; else state.aside++;
       state.done = e.done; state.total = e.total;
       setCounts();
+      updateMini();
       $("bar").style.width = (100 * e.done / e.total).toFixed(1) + "%";
       $("count").textContent = e.done + " / " + e.total;
       $("stage").textContent = base(e.file) + (e.status === "placed"
@@ -1262,6 +1314,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function onExit(code) {
     var stoppedByUser = code === -15 || code === 15;
     if (!(code === 0 && state.result)) failed(code, stoppedByUser);
+    setTimeout(function () {                    // after this exit is dealt with (the next video may be starting)
+      if ($("vRun").hidden && !running()) miniEnd = code === 0 && state.result ? "done" : stoppedByUser ? "stopped" : "error";
+      updateMini();
+    }, 0);
     if (!batch) return;
     if (!stoppedByUser && batch.i < batch.runs.length - 1) {   // on to the next music video
       batch.i++;
@@ -1468,6 +1524,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     show("vHist", v === "hist");
     show("vSet", v === "set");
     document.querySelectorAll(".modeswitch button").forEach(function (b) { b.setAttribute("aria-pressed", String(!aside && b.dataset.view === v)); });
+    updateMini();
     $("bHist").setAttribute("aria-pressed", String(v === "hist"));
     $("bSet").setAttribute("aria-pressed", String(v === "set"));
     if (v === "set") renderSettings();
