@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.20"
+VERSION = "0.5.21"
 
 # ---------------------------------------------------------------- constants
 
@@ -1184,8 +1184,10 @@ def doubtful(clips):
         if p.phase is not None:
             return p.phase < PHASE_AGREE
         return bool(p.check) and int(p.check.split("/")[0]) < 0.7 * int(p.check.split("/")[1])
+    def found_by_waveform(p):    # a play only the waveform heard: likely real, but worth an eye
+        return any(n.startswith("found by waveform") for n in p.notes)
     return [(c, i, p) for c in clips for i, p in enumerate(c.parts, 1)
-            if p.status == "placed" and p.repeat_alt is None and weak(p)]
+            if p.status == "placed" and p.repeat_alt is None and (weak(p) or found_by_waveform(p))]
 
 
 def decisive(xs, master, off, rival, lo, hi):
@@ -2931,7 +2933,9 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
                  "(the song may stop, be talked over, or another pass may be too short to split out):")
         L.append("")
         for c, i, p in doubt:
-            L.append("- %s%s: %s windows match" % (c.rel, " pass %d" % i if c.split else "", p.check))
+            why = "found by the waveform alone, not the landmarks" \
+                if any(n.startswith("found by waveform") for n in p.notes) else "%s windows match" % p.check
+            L.append("- %s%s: %s" % (c.rel, " pass %d" % i if c.split else "", why))
         L.append("")
     un = [c for c in clips if c.status != "placed"]
     if un:
