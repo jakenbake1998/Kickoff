@@ -77,6 +77,24 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .list span:last-child{color:var(--muted);text-align:right}
 .list .h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
 
+.builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:grid;gap:12px}
+.builds .h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.bgrid{display:grid;grid-template-columns:minmax(190px,230px) 1fr;gap:18px;align-items:start}
+@media (max-width:620px){.bgrid{grid-template-columns:1fr}}
+.tree{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px;display:grid;gap:3px}
+.tree>div{display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tree .l2{padding-left:18px}
+.tree .tb{font-weight:600}
+.tree .dim,.steps .dim{color:var(--muted)}
+.fold{width:13px;height:10px;border-radius:2px;background:var(--muted);opacity:.55;flex:none;position:relative}
+.fold:before{content:"";position:absolute;left:0;top:-2px;width:6px;height:3px;border-radius:1px 1px 0 0;background:inherit}
+.chip{width:10px;height:10px;border-radius:3px;flex:none}
+.steps{margin:0;padding:0;list-style:none;display:grid;gap:9px;font-size:13px;line-height:1.45;counter-reset:st}
+.steps li{position:relative;padding-left:26px}
+.steps li:not(.dim):before{counter-increment:st;content:counter(st);position:absolute;left:0;top:1px;width:18px;height:18px;border-radius:50%;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font:700 11px/18px var(--body);text-align:center}
+.steps li.dim:before{content:"\21bb";position:absolute;left:3px;top:0;color:var(--muted)}
+.steps b{font-weight:600}
+
 .error{border:1px solid color-mix(in srgb,var(--bad) 60%,transparent);background:color-mix(in srgb,var(--bad) 10%,transparent);border-radius:10px;padding:12px 14px;display:grid;gap:4px}
 .error b{color:var(--bad)}
 .error p{margin:0;font-family:var(--mono);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
@@ -216,17 +234,30 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <label class="check"><input type="checkbox" id="rebuild"> Start over: rebuild the whole project, even if this folder was run before</label>
   </div>
 
-  <div class="list" id="hints">
-    <div class="h">What it builds</div>
-    <div data-for="setup"><span>Your bins, a footage bin per camera, label colors</span><span>one .xml</span></div>
-    <div data-for="setup"><span>A Breakup sequence per camera</span><span>A Cam_Breakup&hellip;</span></div>
-    <div data-for="setup"><span>An empty Edit sequence to cut in</span><span>3840x2160</span></div>
-    <div data-for="setup"><span>Audio sorted into Music, SFX and Captured</span><span>no syncing</span></div>
-    <div data-for="music"><span>Every clip synced to the song by its audio</span><span>A Cam_Sync, B Cam_Sync&hellip;</span></div>
-    <div data-for="music"><span>Takes where the song restarted, split into passes</span><span>own tracks</span></div>
-    <div data-for="music"><span>Your bins, Breakup and Edit sequences, label colors</span><span>one .xml</span></div>
-    <div><span>Run the same footage again (or a new card) to add just what's new</span><span>DIT days</span></div>
-    <div data-for="music"><span>Sync sequences in 4K, every clip scaled to fit</span><span>3840x2160</span></div>
+  <div class="builds" id="hints">
+    <div class="h">What you get in Premiere</div>
+    <div class="bgrid">
+      <div class="tree" aria-label="The project as it appears in Premiere">
+        <div class="tb"><i class="fold"></i>Footage</div>
+        <div class="tc l2"><i class="chip" style="background:var(--iris)"></i>A Cam (Mini LF)</div>
+        <div class="tc l2"><i class="chip" style="background:var(--mango)"></i>B Cam (FX3)</div>
+        <div class="tc l2"><i class="chip" style="background:var(--caribbean)"></i>C Cam (Action 4.1)</div>
+        <div class="tb"><i class="fold"></i>Sequence</div>
+        <div class="tb l2"><i class="fold"></i>Breakup</div>
+        <div class="tb l2" data-for="music"><i class="fold"></i>Sync</div>
+        <div class="tb l2"><i class="fold"></i>Edit</div>
+        <div class="tb"><i class="fold"></i>Audio</div>
+        <div class="tc l2 dim">Music &middot; SFX &middot; Captured</div>
+      </div>
+      <ol class="steps">
+        <li><b>A bin for every camera.</b> Named after your camera folders, so &ldquo;B Cam (FX3)&rdquo; stays B Cam (FX3), with its own label color.</li>
+        <li data-for="music"><b>Every clip lined up to the song.</b> One Sync sequence per camera, each take on its own track at the right spot. Takes where the song restarted are split into passes.</li>
+        <li><b>A Breakup per camera.</b> All of that camera&rsquo;s clips back to back, with every audio channel, to scrub through.</li>
+        <li data-for="setup"><b>No syncing.</b> Bins, Breakups and an empty Edit sequence, with audio sorted into Music, SFX and Captured.</li>
+        <li><b>Ready to cut.</b> A 4K Edit sequence, and every clip scaled to fill the frame, so no black edges.</li>
+        <li class="dim">Shooting over several days? Run the same folder again and Kickoff adds only the new cards.</li>
+      </ol>
+    </div>
   </div>
 
   <div id="run" hidden>

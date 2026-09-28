@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 
 # ---------------------------------------------------------------- constants
 
@@ -174,6 +174,8 @@ class Clip:
     capture_fps: Optional[float] = None
     width: int = 0
     height: int = 0
+    par: float = 1.0                     # pixel aspect (anamorphic 2x: 2.0)
+    rotation: int = 0                    # degrees the player turns the picture (phones shot upright: 90)
     vcodec: str = ""
     has_audio: bool = False
     audio_channels: int = 0
@@ -232,8 +234,10 @@ class Part:
 BRANDS = [("gopro", "GoPro"), ("dji", "DJI"), ("arri", "ARRI"), ("alexa", "ARRI"),
           ("red digital", "RED"), ("sony", "Sony"), ("canon", "Canon"),
           ("panasonic", "Panasonic"), ("blackmagic", "Blackmagic"),
-          ("fujifilm", "Fujifilm"), ("nikon", "Nikon"), ("apple", "Apple"),
+          ("fujifilm", "Fujifilm"), ("nikon", "Nikon"),
           ("insta360", "Insta360"), ("z cam", "Z CAM")]
+# no "apple": every ProRes/QuickTime file mentions Apple (codec, handler), whatever shot it. iPhones
+# name themselves in com.apple.quicktime.model, which is read first.
 
 
 def sony_sidecar(path):
@@ -296,6 +300,15 @@ def probe(clip: Clip):
         clip.width = int(v.get("width") or 0)
         clip.height = int(v.get("height") or 0)
         clip.vcodec = v.get("codec_name") or "unknown"
+        sar = re.match(r"^(\d+):(\d+)$", v.get("sample_aspect_ratio") or "")
+        if sar and int(sar.group(1)) and int(sar.group(2)):
+            clip.par = int(sar.group(1)) / int(sar.group(2))
+        rot = next((sd.get("rotation") for sd in v.get("side_data_list") or [] if "rotation" in sd),
+                   (v.get("tags") or {}).get("rotate"))
+        try:
+            clip.rotation = int(round(float(rot or 0))) % 360
+        except ValueError:
+            pass
         vstart = float(v.get("start_time") or 0)
         if v.get("duration"):
             clip.duration = float(v["duration"])
@@ -465,7 +478,28 @@ def find_clips(clips_dir, master_path, skip_dirs=()):
             # else the first folder under the one dropped
             cam = next((d for d in parts if CAM_FOLDER.match(d)), parts[0] if parts else "")
             out.append(Clip(path=p, rel=rel, top_folder=cam))
-    return out
+    return drop_copies(out)
+
+
+def drop_copies(clips):
+    """The same file copied into two places (a card copied twice, a selects folder) counts once:
+    same name and same size. The copy in a camera folder is kept, else the first by path."""
+    seen, out, dropped = {}, [], []
+    for c in sorted(clips, key=lambda c: (not CAM_FOLDER.match(c.top_folder), c.rel)):
+        try:
+            key = (os.path.basename(c.path).lower(), os.path.getsize(c.path))
+        except OSError:
+            key = (c.path,)
+        if key in seen:
+            dropped.append((c.rel, seen[key]))
+            continue
+        seen[key] = c.rel
+        out.append(c)
+    for rel, kept in dropped[:20]:
+        log("Skipped %s: a copy of %s" % (rel, kept))
+    if len(dropped) > 20:
+        log("Skipped %d more copies of files already found" % (len(dropped) - 20))
+    return sorted(out, key=lambda c: c.rel)
 
 
 # ---------------------------------------------------------------- audio + fingerprints
@@ -1440,6 +1474,16 @@ def accepted(ev, st, extra=0.0):
 
 # ---------------------------------------------------------------- camera grouping
 
+def folder_camera(name):
+    """(letter, camera name) from a camera folder: "C Cam (Action 4.1)" -> ("C", "Action 4.1"),
+    "Camera B" -> ("B", ""); None for any other folder."""
+    m = CAM_FOLDER.match(name or "")
+    if not m:
+        return None
+    paren = re.search(r"\(([^)]*)\)\s*$", name)
+    return (m.group(1) or m.group(2) or m.group(3)).upper(), (paren.group(1).strip() if paren else "")
+
+
 def camera_letter_hint(clip):
     """The camera letter the shoot's own folders give ("A Cam (Mini LF)", "Camera B"), else the reel."""
     m = CAM_FOLDER.match(clip.top_folder)
@@ -1462,15 +1506,19 @@ def assign_cameras(clips, group_by, prior=None, prior_folders=None):
         elif group_by == "model":
             c.camera_key = model
         else:
-            # a folder named for the camera wins: two identical DJIs in C Cam and D Cam stay apart
-            ident = (("folder " + c.top_folder) if CAM_FOLDER.match(c.top_folder)
-                     else ("serial " + c.serial) if c.serial else ("reel " + c.reel_letter) if c.reel_letter
+            # a folder named for the camera decides, whatever the files say: "C Cam (Action 4.1)" is
+            # C Cam, in every Day folder, even when some of its files read DJI and others don't
+            f = folder_camera(c.top_folder)
+            if f:
+                c.camera_key = "Camera folder " + f[0]
+                continue
+            ident = (("serial " + c.serial) if c.serial else ("reel " + c.reel_letter) if c.reel_letter
                      else ("folder " + c.top_folder) if c.top_folder else "")
             c.camera_key = model + (" / " + ident if ident else "")
     # clips with no readable model (e.g. an unreadable raw file) join the camera they were filed with
     known = [c for c in clips if c.model]
     for c in clips:
-        if c.model:
+        if c.model or c.camera_key.startswith("Camera folder "):
             continue
         mates = [k for k in known if (c.reel_letter and k.reel_letter == c.reel_letter) or
                  (c.top_folder and k.top_folder == c.top_folder)]
@@ -1486,7 +1534,13 @@ def assign_cameras(clips, group_by, prior=None, prior_folders=None):
         letters = collections.Counter(camera_letter_hint(c) for c in cl if camera_letter_hint(c))
         hints[key] = letters.most_common(1)[0][0] if letters else ""
     used, labels = {v[0] for v in prior.values()}, {}
+    for key in groups:                       # camera folders keep their own letter
+        if key.startswith("Camera folder "):
+            labels[key] = key[-1]
+    used |= set(labels.values())
     for key in groups:
+        if key in labels:
+            continue
         if key in prior:
             labels[key] = prior[key][0]
         else:           # same model and letter as a camera already in the project: the same camera
@@ -1549,6 +1603,29 @@ def add_labels(parent, label):
         sub(lb, "label2", label)
 
 
+def premiere_audio(layout, pick):
+    """(audio clips Premiere makes of a file, which one holds the sync channel). Premiere keeps a
+    mono or stereo stream as one clip and splits a stream of 3+ channels into mono clips; an ARRI
+    Mini LF's 5 mono streams are 5 clips, its scratch mic the 4th. pick: load_channels' label."""
+    layout = [max(1, n) for n in (layout or [1])]
+    first, n = [], 0
+    for ch in layout:
+        first.append(n)
+        n += 1 if ch <= 2 else ch
+    m = re.match(r"^(?:stream (\d+) )?channel (\d+)$", pick or "")
+    if not m:
+        return n, 0
+    if m.group(1):
+        i, c = int(m.group(1)) - 1, int(m.group(2)) - 1
+    elif len(layout) <= 1:
+        i, c = 0, int(m.group(2)) - 1
+    else:
+        i, c = int(m.group(2)) - 1, 0
+    if i >= len(layout):
+        return n, 0
+    return n, first[i] + 1 + (c if layout[i] > 2 else 0)
+
+
 @dataclass
 class Media:
     """A source file as it appears in the XML."""
@@ -1562,11 +1639,22 @@ class Media:
     width: int = 1920
     height: int = 1080
     timecode: str = ""
+    par: float = 1.0
+    rotation: int = 0
+    audio_tracks: int = 1        # audio clips Premiere makes of the file (a mono stream each, or a stereo pair)
+    audio_pick: int = 0          # which of them holds the channel the sync used (1-based; 0: not known)
 
     @staticmethod
     def of_clip(c, fallback_fps):
+        tracks, pick = premiere_audio(c.audio_layout, c.audio_pick)
         return Media(c.path, c.fps or fallback_fps, c.duration, True, c.has_audio,
-                     max(1, c.audio_channels), c.audio_rate, c.width or 1920, c.height or 1080, c.timecode)
+                     max(1, c.audio_channels), c.audio_rate, c.width or 1920, c.height or 1080, c.timecode,
+                     c.par or 1.0, c.rotation, tracks, pick)
+
+    def shown_size(self):
+        """Width and height of the picture as Premiere shows it: anamorphic unsqueezed, phones upright."""
+        w, h = self.width * (self.par or 1.0), self.height
+        return (h, w) if self.rotation % 180 == 90 else (w, h)
 
 
 class Xmeml:
@@ -1599,8 +1687,9 @@ class Xmeml:
             add_rate(sc, m.fps)
             sub(sc, "width", m.width)
             sub(sc, "height", m.height)
-            sub(sc, "anamorphic", "FALSE")
-            sub(sc, "pixelaspectratio", "square")
+            if abs((m.par or 1.0) - 1) < 0.01:      # anything else: Premiere reads it from the file
+                sub(sc, "anamorphic", "FALSE")
+                sub(sc, "pixelaspectratio", "square")
             sub(sc, "fielddominance", "none")
         if m.has_audio:
             a = sub(media, "audio")
@@ -1611,7 +1700,7 @@ class Xmeml:
         return f
 
     def clipitem(self, track, cid, m, mediatype, start, frames, fps, enabled=True, label=None, scale=None,
-                 speed=1.0, src_in=0, name=None):
+                 speed=1.0, src_in=0, name=None, strack=1):
         ci = sub(track, "clipitem", id=cid)
         sub(ci, "name", name or os.path.basename(m.path))
         sub(ci, "enabled", "TRUE" if enabled else "FALSE")
@@ -1627,7 +1716,7 @@ class Xmeml:
         if mediatype == "audio":
             st = sub(ci, "sourcetrack")
             sub(st, "mediatype", "audio")
-            sub(st, "trackindex", 1)
+            sub(st, "trackindex", strack)
         if scale is not None and abs(scale - 100) > 0.01:
             add_scale(ci, scale)
         add_labels(ci, label)
@@ -1648,10 +1737,14 @@ class Xmeml:
         if m.has_video:
             t = sub(sub(media, "video"), "track")
             items.append((self.clipitem(t, self.uid("clipitem"), m, "video", 0, frames, m.fps), "video"))
+        track_of = {}
         if m.has_audio:
-            t = sub(sub(media, "audio"), "track")
-            items.append((self.clipitem(t, self.uid("clipitem"), m, "audio", 0, frames, m.fps), "audio"))
-        self._link(items, {id(ci): 1 for ci, _ in items}, {id(ci): 1 for ci, _ in items})
+            au = sub(media, "audio")
+            for k in range(1, max(1, m.audio_tracks) + 1):
+                ci = self.clipitem(sub(au, "track"), self.uid("clipitem"), m, "audio", 0, frames, m.fps, strack=k)
+                items.append((ci, "audio"))
+                track_of[id(ci)] = k
+        self._link(items, {id(ci): track_of.get(id(ci), 1) for ci, _ in items}, {id(ci): 1 for ci, _ in items})
         add_labels(clip, label)
         return clip
 
@@ -1693,7 +1786,10 @@ class Xmeml:
         sub(asc, "samplerate", 48000)
 
         nv = max([0] + [e["vtrack"] or 0 for e in entries])
-        na = max([0] + [e["atrack"] or 0 for e in entries])
+        for e in entries:
+            if e.get("atrack") and e.get("media") is not None:
+                e["asrc"] = audio_sources(e["media"], e.get("aenabled", True), e.get("all_audio"))
+        na = max([0] + [(e["atrack"] + len(e.get("asrc") or [1]) - 1) if e["atrack"] else 0 for e in entries])
         vtracks = [sub(video, "track") for _ in range(max(nv, 1))]
         atracks = [sub(audio, "track") for _ in range(na)]
         count = collections.Counter()
@@ -1726,18 +1822,34 @@ class Xmeml:
                 track_of[id(ci)], index_of[id(ci)] = e["vtrack"], count["v", e["vtrack"]]
                 items.append((ci, "video"))
             if e["atrack"] and m.has_audio:
-                ci = self.clipitem(atracks[e["atrack"] - 1], self.uid("clipitem"), m, "audio",
-                                   e["start"], frames, fps, enabled=e.get("aenabled", True),
-                                   label=e.get("label"), speed=sp, src_in=src_in, name=e.get("name"))
-                count["a", e["atrack"]] += 1
-                track_of[id(ci)], index_of[id(ci)] = e["atrack"], count["a", e["atrack"]]
-                items.append((ci, "audio"))
+                for k, (strack, on) in enumerate(e["asrc"]):
+                    at = e["atrack"] + k
+                    ci = self.clipitem(atracks[at - 1], self.uid("clipitem"), m, "audio",
+                                       e["start"], frames, fps, enabled=on, label=e.get("label"), speed=sp,
+                                       src_in=src_in, name=e.get("name"), strack=strack)
+                    count["a", at] += 1
+                    track_of[id(ci)], index_of[id(ci)] = at, count["a", at]
+                    items.append((ci, "audio"))
             self._link(items, track_of, index_of)
         for t in vtracks + atracks:
             sub(t, "enabled", "TRUE")
             sub(t, "locked", "FALSE")
         add_labels(seq, label)
         return seq
+
+
+def audio_sources(m, enabled=True, every=False):
+    """[(source audio clip, enabled)] a sequence entry puts on consecutive audio tracks. The channel
+    the sync heard (the scratch mic) comes first and plays; with every=True the file's other
+    channels follow, switched off when the scratch channel is known (on a Mini LF they are near
+    silence and timecode), so they are there to switch on."""
+    if not m.has_video:
+        return [(1, enabled)]
+    pick = m.audio_pick or 1
+    out = [(pick, enabled)]
+    if every:
+        out += [(k, enabled and not m.audio_pick) for k in range(1, max(1, m.audio_tracks) + 1) if k != pick]
+    return out
 
 
 def entry_span(e, fps):
@@ -1786,18 +1898,21 @@ def add_speed(clipitem, percent, mediatype):
 
 
 def fill_scale(m, width, height, fit="fill"):
-    """Scale (%) that makes a clip fill the sequence frame, cropping the overflow ("fill"), or fit
-    inside it whole ("fit", Premiere's Scale to Frame Size: a 4480x3096 open gate in UHD is 69.77)."""
+    """Scale (%) that makes a clip fill the sequence frame edge to edge, cropping the overflow ("fill":
+    a 4480x3096 open gate in UHD is 85.71, no black edges), or fit inside it whole ("fit", Premiere's
+    Scale to Frame Size, 69.77, which leaves bars)."""
     if not m.has_video or not m.width or not m.height:
         return None
-    return 100.0 * (max if fit == "fill" else min)(width / m.width, height / m.height)
+    w, h = m.shown_size()
+    return 100.0 * (max if fit == "fill" else min)(width / w, height / h)
 
 
 def first_format(clips, fallback_fps):
     """Frame size of the first clip in filename order; frame rate most common among them."""
     first = next((c for c in sorted(clips, key=lambda c: c.rel) if c.width), None)
     fps = collections.Counter(c.fps for c in clips if c.fps).most_common(1)
-    return ((first.width, first.height) if first else (1920, 1080)), (fps[0][0] if fps else fallback_fps)
+    size = tuple(int(round(v)) for v in Media.of_clip(first, fallback_fps).shown_size()) if first else (1920, 1080)
+    return size, (fps[0][0] if fps else fallback_fps)
 
 
 def short_camera_name(model):
@@ -1820,7 +1935,12 @@ def short_camera_name(model):
     return m
 
 
-def cam_bin_name(letter, model):
+def cam_bin_name(letter, cl):
+    """"C Cam (Action 4.1)": the name in the camera folder, else the model the files report."""
+    named = [f[1] for f in (folder_camera(c.top_folder) for c in cl) if f and f[1]]
+    if named:
+        return "%s Cam (%s)" % (letter, collections.Counter(named).most_common(1)[0][0])
+    model = next((c.model for c in cl if c.model), "")
     short = short_camera_name(model)
     return "%s Cam (%s)" % (letter, short) if short else "%s Cam" % letter
 
@@ -1854,7 +1974,7 @@ def stringout_entries(clips, fps, label):
     entries, pos = [], 0
     for c in clips:
         m = Media.of_clip(c, fps)
-        entries.append(dict(media=m, start=pos, vtrack=1, atrack=1, label=label))
+        entries.append(dict(media=m, start=pos, vtrack=1, atrack=1, label=label, all_audio=True))
         pos += int(round(c.duration * fps))
     return entries, 3600 * rate_xml(fps)[0]
 
@@ -1899,7 +2019,7 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
     footage = bin_(top, "Footage")
     for letter, cl in cams:
         label = camera_label(letter)
-        b = bin_(footage, cam_bin_name(letter, cl[0].model if cl else ""), label)
+        b = bin_(footage, cam_bin_name(letter, cl), label)
         usable = [c for c in cl if c.readable and c.fps]
         for c in usable:
             xw.master_clip(b, Media.of_clip(c, seq_fps), label)
@@ -1921,7 +2041,7 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         if placed:
             (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label)
-            seq = xw.sequence(syncb, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label, fit="fit")
+            seq = xw.sequence(syncb, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label)
             nests.append((letter, seq, (w, h), tc))
     maybe_empty(breakup, ["Sequence", "Breakup"], bool(len(breakup)))
     if syncb is not None:
@@ -1981,7 +2101,7 @@ def build_camera_xml(letter, clips, seq_fps, preroll, master_media, args):
     (w, h) = args.sync_size or first_format([c for c, _ in pl], seq_fps)[0]
     label = camera_label(letter)
     entries, tc = sync_entries(pl, seq_fps, preroll, master_media, args, label)
-    xw.sequence(root, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label, fit="fit")
+    xw.sequence(root, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label)
     return root
 
 
@@ -2089,7 +2209,8 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
     for key, letter in sorted(labels.items(), key=lambda kv: kv[1]):
         cl = [c for c in clips if c.camera_key == key]
         p = sum(1 for c in cl if c.status == "placed")
-        L.append("| %s Cam | %s | %s | %d | %d | %s |" % (letter, camera_label(letter), md_escape(key), p,
+        L.append("| %s Cam | %s | %s | %d | %d | %s |" % (letter, camera_label(letter), md_escape(
+            cam_bin_name(letter, cl)[len(letter) + 5:].strip("()") or key), p,
                                                           len(cl) - p, cam_files.get(key, "")
                                                           if p else "(nothing placed)"))
     L.append("")
@@ -2218,7 +2339,7 @@ def main(argv=None):
                     help="put each clip's scratch audio on its own audio track (default: present but disabled)")
     ap.add_argument("--no-master-audio", action="store_true", help="don't put the master song on A1")
     ap.add_argument("--sync-size", default="3840x2160", metavar="WxH",
-                    help="frame size of the Sync and Edit sequences, every clip scaled to fit it "
+                    help="frame size of the Sync and Edit sequences, every clip scaled to fill it "
                          "(default 3840x2160; 'first' uses the camera's first clip, like Breakup)")
     ap.add_argument("--set-aside-repeats", dest="place_repeats", action="store_false",
                     help="set aside clips that fit two identical copies of a section (a pasted chorus) "
@@ -2407,7 +2528,7 @@ def main(argv=None):
         cam_files[key] = proj_file
         pl = [c for c in cl if c.status == "placed"]
         if args.per_camera and pl:
-            model = key.split(" / ")[0]
+            model = cam_bin_name(letter, cl)[len(letter) + 5:].strip("()") or key.split(" / ")[0]
             fname = re.sub(r"[^\w .-]+", "_", "%s Cam_Sync - %s.xml" % (letter, model))
             write_xml(build_camera_xml(letter, pl, seq_fps, preroll, master_media, args),
                       os.path.join(args.xml_out, fname))
@@ -2428,7 +2549,7 @@ def main(argv=None):
         pl = [(c, p) for c in cl if c.status == "placed" for p in c.parts if p.status == "placed"]
         spans = sorted([round(p.offset + p.src_in * c.speed, 2),
                         round(p.offset + p.src_out * c.speed, 2)] for c, p in pl)
-        cam_events.append(dict(letter=letter, name=cam_bin_name(letter, cl[0].model), label=camera_label(letter),
+        cam_events.append(dict(letter=letter, name=cam_bin_name(letter, cl), label=camera_label(letter),
                                clips=len(cl), synced=sum(c.status == "placed" for c in cl), spans=spans))
     aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH
                                 for c in clips if c.status != "placed") if master is not None else {}
@@ -2780,8 +2901,7 @@ def build_add_xml(name, cams, seq_fps, preroll, master_media, audio_bins, args):
     moves = []
     for letter, cl, card, new_cam in cams:
         label = camera_label(letter)
-        model = next((c.model for c in cl if c.model), "")
-        cam_name = cam_bin_name(letter, model)
+        cam_name = cam_bin_name(letter, cl)
         suffix = "" if new_cam else " Card %d" % card
         bname = cam_name if new_cam else "%s Cam Card %d" % (letter, card)
         b = bin_(top, bname, label)
@@ -2799,7 +2919,7 @@ def build_add_xml(name, cams, seq_fps, preroll, master_media, audio_bins, args):
         if placed:
             (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label, song=new_cam)
-            xw.sequence(top, "%s Cam_Sync%s" % (letter, suffix), seq_fps, w, h, tc, entries, label, fit="fit")
+            xw.sequence(top, "%s Cam_Sync%s" % (letter, suffix), seq_fps, w, h, tc, entries, label)
             moves.append(["%s Cam_Sync%s" % (letter, suffix),
                           "Sequence > Sync, then nest it in the Edit sequence on a new track" if new_cam else
                           "Sequence > Sync, then onto a new top track of %s Cam_Sync, at its start" % letter])

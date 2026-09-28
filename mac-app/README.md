@@ -57,6 +57,10 @@ The window is built on your Mac by the installer (it uses Apple's Command Line T
 build fails, the installer puts in the simple version instead: a folder picker, then a Terminal
 window with progress.
 
+In Premiere, each camera folder becomes its own bin and letter: `C Cam (Action 4.1)` on the drive is
+C Cam (Action 4.1) in Premiere, whatever the files themselves say. Every clip is scaled to fill the
+frame (no black edges), and every audio channel comes in, the one Kickoff synced on first.
+
 Folder conventions it understands:
 - the song: in a `Music` folder, or named master/song/mix, or the only audio file
 - sound effects: anything under a folder called `SFX`

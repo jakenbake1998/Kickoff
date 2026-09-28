@@ -107,11 +107,12 @@ Premiere's XML import drops empty bins, so a bin that would be empty gets a blan
 Label colors: A Cam Iris, B Cam Mango, C Cam Rose, then Caribbean, Forest, Lavender, Cerulean,
 Yellow... applied to that camera's bin, its clips and both of its sequences.
 
-Sync sequences (and the Edit sequence) are 3840x2160, with every clip scaled to fit the frame the
-way Premiere's Scale to Frame Size does: 1080p at 200%, 3200x1800 at 120%, a 4480x3096 open gate
-at 69.77% (`--sync-size WxH` to change, `--sync-size first` to use the camera's first clip).
-Breakup sequences take the frame size of the camera's first clip (filename order); clips with a
-different size are scaled to fill that frame.
+Sync sequences (and the Edit sequence) are 3840x2160, with every clip scaled to fill the frame edge
+to edge, cropping what overflows, so there are never black edges: 1080p at 200%, 3200x1800 at 120%,
+a 4480x3096 open gate at 85.71% (`--sync-size WxH` to change, `--sync-size first` to use the
+camera's first clip). Breakup sequences take the frame size of the camera's first clip (filename
+order), filled the same way. Anamorphic footage is measured unsqueezed and phone clips shot upright
+as upright.
 
 Sync sequences: the song's first sample sits at **01:00:00:00** in every one, so they line up
 when nested. V1..Vn are the synced clips in filename order (`--track-order offset` sorts by song
@@ -250,15 +251,24 @@ channel of every audio stream, skips silent ones and timecode (a constant-level 
 tries the rest against the song and keeps the one that matches best. The report notes which one
 (`scratch audio on channel 4`).
 
+Every channel comes into Premiere. Breakup sequences carry all of a clip's audio on consecutive
+tracks, the scratch channel on the top one and playing, the others below and switched off (on a
+Mini LF they are near silence and timecode); with one audio track, that's all there is. Sync
+sequences carry the scratch channel only. Premiere makes one audio clip per mono or stereo stream
+and one per channel of a stream with 3 or more.
+
 ## Camera grouping
 
-Clips are grouped by camera model from the file metadata (ffprobe tags, Sony `M01.XML` sidecars,
+A folder named for the camera decides first, at any depth (`Footage/Day 1/C Cam (Action 4.1)`):
+its letter is the camera letter, the name in brackets is the bin name (`C Cam (Action 4.1)`), and
+every file in it is that camera whatever its metadata says, in every Day folder. The same file found
+twice (same name and size, e.g. copied into a selects folder) counts once, the copy in the camera
+folder.
+
+Footage outside camera folders is grouped by camera model from the file metadata (ffprobe tags, Sony `M01.XML` sidecars,
 GoPro firmware string), then split by body using, in order: the serial number, the camera letter in
-ARRI/RED style names (`A001C003`, `B002_C004`), or the top-level folder under the clips folder. A
-folder named for the camera at any depth (`Footage/Day 1/C Cam (Action 4.1)`) wins over all of those,
-so two identical cameras in `C Cam` and `D Cam` stay apart and each day's `A Cam` is the same camera.
-Camera letters come from those folders (`A Cam (Mini LF)`, `A_CAM`, `Camera B`), then reel names
-(`A001C003`), otherwise A, B, C... in order. `--group-by model` or `--group-by folder` forces one rule.
+ARRI/RED style names (`A001C003`, `B002_C004`), or the top-level folder under the clips folder.
+Its letters come from reel names (`A001C003`), otherwise the next free letter. `--group-by model` or `--group-by folder` forces one rule.
 
 ## Options
 
@@ -275,7 +285,7 @@ Camera letters come from those folders (`A Cam (Mini LF)`, `A_CAM`, `Camera B`),
 --no-master-audio     leave the song off A1
 --mode auto|music|setup   music video (sync) or project setup only (default: auto)
 --set-aside-repeats   don't place chorus-only clips at the first chorus
---sync-size 3840x2160 frame size of the Sync and Edit sequences (clips scaled to fit)
+--sync-size 3840x2160 frame size of the Sync and Edit sequences (clips scaled to fill)
 --rebuild             build the whole project again instead of adding what's new
 --path-map OLD=NEW    rewrite media paths in the XML (repeatable)
 -j 8                  parallel files; use -j 2 when reading from a single spinning drive
