@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.9"
+VERSION = "0.5.10"
 
 # ---------------------------------------------------------------- constants
 
@@ -2097,23 +2097,53 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song
 
 
 def condense(entries, fps):
-    """The same clips packed onto as few video tracks as possible (fewer feeds in multicam): each,
-    in timeline order, drops to the lowest track that's free for its whole length. Nothing is cut
-    or moved in time; its scratch audio follows it to the matching audio track."""
-    out, ends = [], []
-    for e in sorted(entries, key=lambda e: (e["vtrack"] is None, e["start"], e.get("vtrack") or 0)):
+    """The same clips on fewer video tracks (fewer feeds in multicam), within the smallest of
+    2, 4, 8, 16... tracks that fits every overlap. Clips go in clip order, each on the highest
+    track that's free for its whole length, so clip 1 sits on V1 and the rest follow it down;
+    only if that order can't fit the budget are they packed in timeline order instead. Either way
+    the tracks are then ordered by their first clip. Nothing is
+    cut or moved in time; its scratch audio follows it to the matching audio track."""
+    vids = [e for e in entries if e.get("vtrack")]
+    spans = {id(e): (e["start"], e["start"] + entry_span(e, fps)[1]) for e in vids}
+    edges = sorted([(a, 1) for a, b in spans.values()] + [(b, -1) for a, b in spans.values()],
+                   key=lambda x: (x[0], x[1]))          # an end and a start on the same frame don't overlap
+    need, cur = 0, 0
+    for _, d in edges:
+        cur += d
+        need = max(need, cur)
+    tracks = 2
+    while tracks < need:
+        tracks *= 2
+    def pack(order):                                     # each clip on the highest free track
+        busy, place = [], {}
+        for e in order:
+            a, b = spans[id(e)]
+            k = next((k for k, t in enumerate(busy) if all(b <= x or a >= y for x, y in t)), None)
+            if k is None:
+                k = len(busy)
+                busy.append([])
+            busy[k].append((a, b))
+            place[id(e)] = k + 1
+        return place
+    # clip order first (clip 1 on V1, later clips below it in order); if that needs more tracks
+    # than the budget, timeline order, which always fits in the fewest
+    place = pack(sorted(vids, key=lambda e: e["vtrack"]))
+    if max(place.values(), default=0) > tracks:
+        place = pack(sorted(vids, key=lambda e: (e["start"], e["vtrack"])))
+    # tracks top to bottom by their first clip, so V1 always holds clip 1
+    first = {}
+    for e in vids:
+        first[place[id(e)]] = min(first.get(place[id(e)], e["vtrack"]), e["vtrack"])
+    renum = {k: i + 1 for i, k in enumerate(sorted(first, key=first.get))}
+    place = {i: renum[k] for i, k in place.items()}
+    out = []
+    for e in entries:
         if not e.get("vtrack"):
             out.append(e)
             continue
-        end = e["start"] + entry_span(e, fps)[1]
-        k = next((i for i, t in enumerate(ends) if t <= e["start"]), None)
-        if k is None:
-            k = len(ends)
-            ends.append(end)
-        else:
-            ends[k] = end
+        k = place[id(e)]
         d = e["atrack"] - e["vtrack"] if e.get("atrack") else None
-        out.append(dict(e, vtrack=k + 1, atrack=(k + 1 + d) if d is not None else None))
+        out.append(dict(e, vtrack=k, atrack=(k + d) if d is not None else None))
     return out
 
 
