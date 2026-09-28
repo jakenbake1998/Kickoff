@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 let support = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Kickoff")
 let historyFile = support.appendingPathComponent("history.json")
+let settingsFile = support.appendingPathComponent("settings.json")   // the Settings page, read by the engine
 let audioExtensions: Set<String> = ["wav", "aif", "aiff", "bwf", "mp3", "m4a", "flac", "aac", "caf"]
 let videoExtensions: Set<String> = ["mov", "mp4", "mxf", "m4v", "mts", "m2ts", "avi", "mkv", "r3d", "braw",
                                     "insv", "360", "wmv", "webm"]
@@ -108,6 +109,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         window.contentView = web
         window.center()
         window.setFrameAutosaveName("KickoffMain")
+        // open at the screen's full height (under the menu bar, above the Dock), wide enough for
+        // the page to fit without scrolling
+        if let vis = (window.screen ?? NSScreen.main)?.visibleFrame {
+            let w = min(vis.width, max(window.frame.width, 1180))
+            window.setFrame(NSRect(x: vis.midX - w / 2, y: vis.minY, width: w, height: vis.height), display: true)
+        }
         window.makeKeyAndOrderFront(nil)
 
         let ui = support.appendingPathComponent("ui")
@@ -166,6 +173,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             ready = true
             if !updateNote.isEmpty { js("Kickoff.info(\(json(["update": updateNote])))") }
             js("Kickoff.history(\(json(loadHistory())))")
+            if let data = try? Data(contentsOf: settingsFile),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                js("Kickoff.settings && Kickoff.settings(\(json(obj)))")
+            }
             if !pending.isEmpty {
                 let urls = pending
                 pending = []
@@ -190,6 +201,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             if let id = body["id"] as? String {
                 saveHistory(loadHistory().filter { ($0["id"] as? String) != id })
                 js("Kickoff.history(\(json(loadHistory())))")
+            }
+        case "settings":
+            if let obj = body["settings"] as? [String: Any],
+               let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted]) {
+                try? data.write(to: settingsFile, options: .atomic)
+            } else {
+                try? FileManager.default.removeItem(at: settingsFile)      // reset to defaults
             }
         case "history-clear":
             saveHistory([])
@@ -283,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         env["PYTHONUNBUFFERED"] = "1"
         env["KICKOFF_XML_DIR"] = xmlDir
         env["KICKOFF_NAME"] = xmlName
+        env["KICKOFF_SETTINGS"] = settingsFile.path
         p.environment = env
         let out = Pipe(), err = Pipe()
         p.standardOutput = out

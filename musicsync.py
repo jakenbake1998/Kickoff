@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.14"
+VERSION = "0.5.15"
 
 # ---------------------------------------------------------------- constants
 
@@ -68,7 +68,152 @@ CAM_FOLDER = re.compile(r"^(?:(?i:cam(?:era)?)(?:[ _-]+([A-Za-z])|([A-Z]))(?![A-
 
 
 def skip_dir(name):
-    return name.startswith(".") or name.upper() in SKIP_DIRS or bool(SKIP_DIR_RE.search(name))
+    return name.startswith(".") or name.upper() in SKIP_DIRS or bool(SKIP_DIR_RE.search(name)) or \
+        name.lower() in (x.lower() for x in SETTINGS["skip_folders"])
+
+# ---------------------------------------------------------------- settings (the window's Settings page)
+
+# The house bin structure. "role" marks a bin Kickoff fills; it can be renamed or moved but must stay.
+DEFAULT_BINS = [
+    {"name": "Adjustment Layers", "role": "adjustment"},
+    {"name": "Footage", "role": "footage"},
+    {"name": "Sequence", "children": [
+        {"name": "Breakup", "role": "breakup"},
+        {"name": "Sync", "role": "sync", "children": [
+            {"name": "Synced", "role": "synced"},
+            {"name": "Synced Condensed", "role": "condensed"}]},
+        {"name": "Edit", "role": "edit", "children": [{"name": "Working"}, {"name": "Past"}]}]},
+    {"name": "Audio", "children": [
+        {"name": "Music", "role": "music"},
+        {"name": "SFX", "role": "sfx"},
+        {"name": "Captured", "role": "captured"}]},
+]
+REQUIRED_ROLES = ("footage", "breakup", "sync", "synced", "condensed", "edit", "music")
+DEFAULT_SETTINGS = {
+    "sync_size": "3840x2160",       # Sync, CamsNested and Edit sequences; "first": the camera's first clip
+    "start_hour": 1,                # the song starts at 01:00:00:00 (1 to 23: the preroll needs room before it)
+    "track_order": "name",          # clips on V1, V2... in file order ("offset": song order)
+    "labels": {},                   # camera letter -> Premiere label name (unset: CAMERA_LABELS)
+    "bins": DEFAULT_BINS,
+    "names": {"breakup": "{cam}_Breakup", "synced": "{cam}_Synced", "condensed": "{cam}_Synced_Condensed",
+              "nested": "{project}_CamsNested", "edit": "{project}_Edit"},
+    "unsynced": True,               # clips that didn't sync go on V1 after the song
+    "unsynced_gap_s": 60,
+    "place_repeats": True,          # a take that fits two identical choruses: first copy, marked
+    "skip_folders": [],             # extra folder names never scanned (on top of proxies, renders...)
+}
+SETTINGS = json.loads(json.dumps(DEFAULT_SETTINGS))
+
+
+def bin_roles(bins, out=None):
+    out = {} if out is None else out
+    for b in bins:
+        if b.get("role"):
+            out[b["role"]] = b
+        bin_roles(b.get("children") or [], out)
+    return out
+
+
+def load_settings(path):
+    """The Settings page's choices (a JSON file the window writes), over the defaults. Anything
+    missing or unusable keeps its default, so an old or hand-edited file can't break a run."""
+    global SETTINGS
+    s = json.loads(json.dumps(DEFAULT_SETTINGS))
+    if not path or not os.path.isfile(path):
+        SETTINGS = s
+        return s
+    try:
+        with open(path, encoding="utf-8") as fh:
+            user = json.load(fh)
+    except (OSError, ValueError) as e:
+        log("Settings file unreadable (%s): using the defaults" % e)
+        SETTINGS = s
+        return s
+    if not isinstance(user, dict):
+        user = {}
+    size = str(user.get("sync_size", s["sync_size"]))
+    if size == "first" or re.match(r"^\d{2,5}x\d{2,5}$", size):
+        s["sync_size"] = size
+    if isinstance(user.get("start_hour"), int) and 1 <= user["start_hour"] <= 23:
+        s["start_hour"] = user["start_hour"]
+    if user.get("track_order") in ("name", "offset"):
+        s["track_order"] = user["track_order"]
+    if isinstance(user.get("labels"), dict):
+        s["labels"] = {k.upper(): v for k, v in user["labels"].items()
+                       if isinstance(k, str) and len(k) == 1 and k.isalpha() and v in PREMIERE_LABELS}
+    bins = user.get("bins")
+
+    def clean(bl):
+        out = []
+        for b in bl if isinstance(bl, list) else []:
+            if isinstance(b, dict) and str(b.get("name", "")).strip():
+                nb = {"name": str(b["name"]).strip()[:120]}
+                if b.get("role") in ROLE_NAMES:
+                    nb["role"] = b["role"]
+                kids = clean(b.get("children"))
+                if kids:
+                    nb["children"] = kids
+                out.append(nb)
+        return out
+    if bins is not None:
+        cb = clean(bins)
+        roles = bin_roles(cb)
+        if all(r in roles for r in REQUIRED_ROLES) and \
+                sum(1 for _ in _walk(cb) if _.get("role")) == len(roles):       # each role once
+            s["bins"] = cb
+        else:
+            log("Settings: the bin list is missing a bin Kickoff fills, so the default bins are used")
+    if isinstance(user.get("names"), dict):
+        for k, v in user["names"].items():
+            if k in s["names"] and isinstance(v, str) and v.strip():
+                s["names"][k] = v.strip()[:120]
+    if isinstance(user.get("unsynced"), bool):
+        s["unsynced"] = user["unsynced"]
+    if isinstance(user.get("unsynced_gap_s"), (int, float)) and 0 <= user["unsynced_gap_s"] <= 3600:
+        s["unsynced_gap_s"] = user["unsynced_gap_s"]
+    if isinstance(user.get("place_repeats"), bool):
+        s["place_repeats"] = user["place_repeats"]
+    if isinstance(user.get("skip_folders"), list):
+        s["skip_folders"] = [str(x).strip() for x in user["skip_folders"] if str(x).strip()][:50]
+    SETTINGS = s
+    return s
+
+
+ROLE_NAMES = ("adjustment", "footage", "breakup", "sync", "synced", "condensed", "edit", "music", "sfx",
+              "captured")
+
+
+def _walk(bins):
+    for b in bins:
+        yield b
+        yield from _walk(b.get("children") or [])
+
+
+def bin_path(role):
+    """Where a Kickoff bin sits, as the Settings tree has it: "Sequence > Sync > Synced"."""
+    def find(bins, path):
+        for b in bins:
+            here = path + [b["name"]]
+            if b.get("role") == role:
+                return here
+            got = find(b.get("children") or [], here)
+            if got:
+                return got
+        return None
+    return " > ".join(find(SETTINGS["bins"], []) or [role.capitalize()])
+
+
+def seq_name(kind, letter=None, project=None, suffix=""):
+    """A sequence's name from the Settings pattern: {cam} is "A Cam", {project} the project."""
+    pat = SETTINGS["names"].get(kind) or DEFAULT_SETTINGS["names"][kind]
+    out = pat.replace("{cam}", "%s Cam" % letter if letter else "").replace("{project}", project or "")
+    return out.strip() + suffix
+
+
+def start_frames(fps):
+    """Timeline frame the song starts at (01:00:00:00 unless Settings says another hour)."""
+    return SETTINGS["start_hour"] * 3600 * rate_xml(fps)[0]
+
 
 NTSC_RATES = {23.976: 24, 29.97: 30, 47.952: 48, 59.94: 60, 119.88: 120}
 
@@ -1876,7 +2021,12 @@ CAMERA_LABELS = ["Iris", "Mango", "Rose", "Yellow", "Cerulean", "Caribbean", "La
                  "Forest", "Tan", "Violet", "Purple", "Blue", "Teal", "Green", "Brown"]
 
 
+PREMIERE_LABELS = set(CAMERA_LABELS)      # all 16 of Premiere's label colors
+
+
 def camera_label(letter):
+    if letter in SETTINGS["labels"]:
+        return SETTINGS["labels"][letter]
     return CAMERA_LABELS[(ord(letter) - ord("A")) % len(CAMERA_LABELS)]
 
 
@@ -2285,7 +2435,7 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song
                             aenabled=args.scratch_audio == "on", label=label, speed=c.speed,
                             src=(p.src_in, p.src_out) if c.split or p.src_in > 0 else None,
                             name=clip_name(c, p)))
-    start_tc = 3600 * rate_xml(seq_fps)[0] - song_frame
+    start_tc = start_frames(seq_fps) - song_frame
     return entries, start_tc
 
 
@@ -2352,7 +2502,7 @@ def stringout_entries(clips, fps, label):
         m = Media.of_clip(c, fps)
         entries.append(dict(media=m, start=pos, vtrack=1, atrack=1, label=label, all_audio="raw"))
         pos += int(round(c.duration * fps))
-    return entries, 3600 * rate_xml(fps)[0]
+    return entries, start_frames(fps)
 
 
 def bin_(parent, name, label=None):
@@ -2379,36 +2529,50 @@ def placeholder(xw, parent, out_dir, bin_path, fps):
 
 
 def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins, args):
-    """One XMEML that recreates the house bin structure (see README)."""
+    """One XMEML that recreates the house bin structure (see README; the Settings page can rename,
+    add, remove, reorder and nest bins, so bins are found by what Kickoff puts in them)."""
     xw = Xmeml(args.path_maps)
     root = ET.Element("xmeml", version="4")
     proj = sub(root, "project")
     sub(proj, "name", name)
     top = sub(proj, "children")
+    setup_only = getattr(args, "mode", "music") == "setup"          # no song: no Sync sequences
 
     def maybe_empty(parent, path, has_items):
         if not has_items and args.placeholders:
             placeholder(xw, parent, args.out, path, seq_fps)
 
-    adj = bin_(top, "Adjustment Layers")
-    maybe_empty(adj, ["Adjustment Layers"], False)
-    footage = bin_(top, "Footage")
+    # the bins, in the order and nesting of Settings; role -> (children element, path of names)
+    where, empty_ok = {}, []
+
+    def make(parent, bins, path):
+        for b in bins:
+            if setup_only and b.get("role") in ("sync", "synced", "condensed"):
+                continue
+            ch = bin_(parent, b["name"])
+            here = path + [b["name"]]
+            if b.get("role"):
+                where[b["role"]] = (ch, here)
+            else:
+                empty_ok.append((ch, here))
+            make(ch, b.get("children") or [], here)
+    make(top, SETTINGS["bins"], [])
+
+    footage, fpath = where["footage"]
     for letter, cl in cams:
         label = camera_label(letter)
         b = bin_(footage, cam_bin_name(letter, cl), label)
         usable = [c for c in cl if c.readable and c.fps]
         for c in usable:
             xw.master_clip(b, Media.of_clip(c, seq_fps), label)
-        maybe_empty(b, ["Footage", "%s Cam" % letter], bool(usable))
+        maybe_empty(b, fpath + ["%s Cam" % letter], bool(usable))
 
-    seqs = bin_(top, "Sequence")
-    breakup = bin_(seqs, "Breakup")
-    setup_only = getattr(args, "mode", "music") == "setup"          # no song: no Sync sequences
-    syncb = bin_(seqs, "Sync") if not setup_only else None
+    breakup, bpath = where["breakup"]
+    syncb = where["sync"][0] if not setup_only else None
     # every take on its own track in Sync > Synced; the same packed onto as few tracks as can hold
     # them in Sync > Synced Condensed, which is what CamsNested and Edit nest (fewer multicam feeds)
-    syncedb = bin_(syncb, "Synced") if syncb is not None else None
-    condb = bin_(syncb, "Synced Condensed") if syncb is not None else None
+    syncedb = where["synced"][0] if syncb is not None else None
+    condb = where["condensed"][0] if syncb is not None else None
     nests = []
     for letter, cl in cams:
         label = camera_label(letter)
@@ -2416,27 +2580,25 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         if usable:
             (w, h), fps = first_format(usable, seq_fps)
             entries, tc = stringout_entries(usable, fps, label)
-            xw.sequence(breakup, "%s Cam_Breakup" % letter, fps, w, h, tc, entries, label)
+            xw.sequence(breakup, seq_name("breakup", letter), fps, w, h, tc, entries, label)
         placed = placements_of(cl)
         if placed and syncb is not None:
             (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label)
-            tail = unsynced_entries(cl, entries, seq_fps, preroll, master_media)
+            tail = unsynced_entries(cl, entries, seq_fps, preroll, master_media) if SETTINGS["unsynced"] else []
             for e in tail:
                 e["label"] = label
             entries += tail
-            xw.sequence(syncedb, "%s Cam_Synced" % letter, seq_fps, w, h, tc, entries, label)
-            seq = xw.sequence(condb, "%s Cam_Synced_Condensed" % letter, seq_fps, w, h, tc,
+            xw.sequence(syncedb, seq_name("synced", letter), seq_fps, w, h, tc, entries, label)
+            seq = xw.sequence(condb, seq_name("condensed", letter), seq_fps, w, h, tc,
                               condense(entries, seq_fps), label)
             nests.append((letter, seq, (w, h), tc))
-    maybe_empty(breakup, ["Sequence", "Breakup"], bool(len(breakup)))
+    maybe_empty(breakup, bpath, bool(len(breakup)))
     if syncb is not None:
-        maybe_empty(syncedb, ["Sequence", "Sync", "Synced"], bool(nests))
-        maybe_empty(condb, ["Sequence", "Sync", "Synced Condensed"], bool(nests))
+        maybe_empty(syncedb, where["synced"][1], bool(nests))
+        maybe_empty(condb, where["condensed"][1], bool(nests))
 
-    edit = bin_(seqs, "Edit")
-    for sub_name in ("Working", "Past"):
-        maybe_empty(bin_(edit, sub_name), ["Sequence", "Edit", sub_name], False)
+    edit = where["edit"][0]
     if nests:
         # every camera's condensed sync sequence nested on its own track (A on V1, B on V2...), song on A1:
         # "<name>_CamsNested" in the Sync bin, and the same again as the Edit sequence Jake
@@ -2451,23 +2613,52 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             if master_media and not args.no_master_audio:
                 entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1, tall=True))
             return entries
-        # written after the sync sequences it nests: they must be defined before they're referenced
-        xw.sequence(syncb, "%s_CamsNested" % name, seq_fps, w, h, tc, all_cams())
-        xw.sequence(edit, "%s_Edit" % name, seq_fps, w, h, tc, all_cams())
+        xw.sequence(syncb, seq_name("nested", project=name), seq_fps, w, h, tc, all_cams())
+        xw.sequence(edit, seq_name("edit", project=name), seq_fps, w, h, tc, all_cams())
     elif setup_only:
         # an empty sequence to cut in, at the delivery size, starting at 01:00:00:00
         usable = [c for c in clips if c.readable and c.fps and c.width]
         (w, h) = args.sync_size or (first_format(usable, seq_fps)[0] if usable else (3840, 2160))
-        xw.sequence(edit, "%s_Edit" % name, seq_fps, w, h, 3600 * rate_xml(seq_fps)[0], [])
+        xw.sequence(edit, seq_name("edit", project=name), seq_fps, w, h, start_frames(seq_fps), [])
+    maybe_empty(edit, where["edit"][1], bool(len(edit)))
 
-    audio = bin_(top, "Audio")
-    for bname in ("Music", "SFX", "Captured"):
-        b = bin_(audio, bname)
-        items = ([master_media] if bname == "Music" and master_media else []) + audio_bins.get(bname, [])
+    # audio by folder: a bin removed in Settings sends its files on (SFX to Captured, then to Music)
+    home = {"Music": "music", "SFX": next(r for r in ("sfx", "captured", "music") if r in where),
+            "Captured": next(r for r in ("captured", "music") if r in where)}
+    filled = collections.Counter()
+    for kind in ("Music", "SFX", "Captured"):
+        items = ([master_media] if kind == "Music" and master_media else []) + audio_bins.get(kind, [])
         for m in items:
-            xw.master_clip(b, m)
-        maybe_empty(b, ["Audio", bname], bool(items))
+            xw.master_clip(where[home[kind]][0], m)
+        filled[home[kind]] += len(items)
+    for role in ("adjustment", "music", "sfx", "captured"):
+        if role in where:
+            maybe_empty(where[role][0], where[role][1], bool(filled[role]))
+    for ch, path in empty_ok:
+        maybe_empty(ch, path, bool(len(ch)))
+    defined_before_use(root)
     return root
+
+
+def defined_before_use(root):
+    """A nested sequence must be written out before anything references it. Settings can put the
+    Edit bin above the Sync bin, so where a reference comes first in the file, the two swap: the
+    full sequence goes where it's first used, the bin keeps a reference (as Premiere writes them)."""
+    seen = set()
+    full = {s.get("id"): s for s in root.iter("sequence") if len(s)}
+    for s in list(root.iter("sequence")):
+        sid = s.get("id")
+        if len(s):
+            seen.add(sid)
+        elif sid not in seen and sid in full:
+            d = full[sid]
+            for k in list(d):
+                d.remove(k)
+                s.append(k)
+            for k, v in d.attrib.items():
+                s.set(k, v)
+            full[sid] = s
+            seen.add(sid)
 
 
 def clip_name(c, p):
@@ -2516,7 +2707,7 @@ def build_camera_xml(letter, clips, seq_fps, preroll, master_media, args):
     (w, h) = args.sync_size or first_format([c for c, _ in pl], seq_fps)[0]
     label = camera_label(letter)
     entries, tc = sync_entries(pl, seq_fps, preroll, master_media, args, label)
-    xw.sequence(root, "%s Cam_Synced" % letter, seq_fps, w, h, tc, entries, label)
+    xw.sequence(root, seq_name("synced", letter), seq_fps, w, h, tc, entries, label)
     return root
 
 
@@ -2575,7 +2766,7 @@ def clip_row(c, seq_fps, preroll, part=None):
         "playback_speed": ("%gx %s" % (c.speed, c.speed_mode)) if c.speed != 1 else "",
         "offset_seconds": "%.3f" % c.offset if c.offset is not None else "",
         "offset_timecode": fmt_tc(c.offset, fps) if c.offset is not None else "",
-        "timeline_timecode": fmt_frames(3600 * rate_xml(fps)[0] + int(round(c.offset * fps)), fps)
+        "timeline_timecode": fmt_frames(start_frames(fps) + int(round(c.offset * fps)), fps)
         if c.offset is not None else "",
         "confidence": "%.1f" % c.confidence if c.confidence is not None else "",
         "waveform_check": ("%s windows match" % c.check) if c.check else "",
@@ -2724,6 +2915,10 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
 # ---------------------------------------------------------------- main
 
 def main(argv=None):
+    # the window's Settings page (a JSON file) sets the defaults below; flags still win over it
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--settings", default=os.environ.get("KICKOFF_SETTINGS"))
+    load_settings(pre.parse_known_args(argv)[0].settings)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", metavar="[MASTER] FOLDER",
                     help="a shoot folder (the song is found inside it), or a master song then a clips folder; "
@@ -2771,7 +2966,11 @@ def main(argv=None):
     ap.add_argument("--rebuild", action="store_true",
                     help="build the whole project again even if this folder was run before (by default a "
                          "second run only adds the cards that are new since then)")
+    ap.add_argument("--settings", metavar="JSON",
+                    help="the Kickoff window's settings file (bins, sequence size and names, label colors...)")
     ap.add_argument("--events", action="store_true", help=argparse.SUPPRESS)   # for the Kickoff window
+    ap.set_defaults(sync_size=SETTINGS["sync_size"], track_order=SETTINGS["track_order"],
+                    place_repeats=SETTINGS["place_repeats"])
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
     global EVENTS
@@ -2991,7 +3190,7 @@ def main(argv=None):
                                clips=len(cl), synced=sum(c.status == "placed" for c in cl), spans=spans))
     aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH
                                 for c in clips if c.status != "placed") if master is not None else {}
-    event("done", project=project_name, out=args.out, xml=os.path.join(args.xml_out, proj_file),
+    event("done", project=project_name, edit_name=seq_name("edit", project=project_name), out=args.out, xml=os.path.join(args.xml_out, proj_file),
           report=report, song_duration=round(master.duration, 2) if master is not None else 0,
           mode=args.mode, clips=len(clips), synced=len(placed), cameras=cam_events,
           set_aside=[dict(reason=r, count=n) for r, n in collections.Counter(aside).most_common()],
@@ -3346,33 +3545,34 @@ def build_add_xml(name, cams, seq_fps, preroll, master_media, audio_bins, args):
         usable = [c for c in cl if c.readable and c.fps]
         for c in usable:
             xw.master_clip(b, Media.of_clip(c, seq_fps), label)
-        moves.append([bname, "Footage" if new_cam else "Footage > %s (as a bin inside it)" % cam_name])
+        moves.append([bname, bin_path("footage") if new_cam else "%s > %s (as a bin inside it)" % (bin_path("footage"), cam_name)])
         sized = [c for c in usable if c.width]
         if sized:
             (w, h), fps = first_format(sized, seq_fps)
             entries, tc = stringout_entries(sized, fps, label)
-            xw.sequence(top, "%s Cam_Breakup%s" % (letter, suffix), fps, w, h, tc, entries, label)
-            moves.append(["%s Cam_Breakup%s" % (letter, suffix), "Sequence > Breakup"])
+            xw.sequence(top, seq_name("breakup", letter, suffix=suffix), fps, w, h, tc, entries, label)
+            moves.append([seq_name("breakup", letter, suffix=suffix), bin_path("breakup")])
         placed = placements_of(cl)
         if placed:
             (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label, song=new_cam)
-            xw.sequence(top, "%s Cam_Synced%s" % (letter, suffix), seq_fps, w, h, tc, entries, label)
-            moves.append(["%s Cam_Synced%s" % (letter, suffix),
-                          "Sequence > Sync > Synced, then onto a new top track of %s Cam_Synced, at its start"
-                          % letter if not new_cam else "Sequence > Sync > Synced"])
-            xw.sequence(top, "%s Cam_Synced_Condensed%s" % (letter, suffix), seq_fps, w, h, tc,
+            xw.sequence(top, seq_name("synced", letter, suffix=suffix), seq_fps, w, h, tc, entries, label)
+            moves.append([seq_name("synced", letter, suffix=suffix),
+                          "%s, then onto a new top track of %s, at its start"
+                          % (bin_path("synced"), seq_name("synced", letter)) if not new_cam else bin_path("synced")])
+            xw.sequence(top, seq_name("condensed", letter, suffix=suffix), seq_fps, w, h, tc,
                         condense(entries, seq_fps), label)
-            moves.append(["%s Cam_Synced_Condensed%s" % (letter, suffix),
-                          "Sequence > Sync > Synced Condensed, then nest it in the Edit sequence on a new track"
-                          if new_cam else "Sequence > Sync > Synced Condensed, then onto a new top track of "
-                          "%s Cam_Synced_Condensed, at its start" % letter])
+            moves.append([seq_name("condensed", letter, suffix=suffix),
+                          "%s, then nest it in the Edit sequence on a new track" % bin_path("condensed")
+                          if new_cam else "%s, then onto a new top track of %s, at its start"
+                          % (bin_path("condensed"), seq_name("condensed", letter))])
     for bname in ("Music", "SFX", "Captured"):
         if audio_bins.get(bname):
             b = bin_(top, "%s (new)" % bname)
             for m_ in audio_bins[bname]:
                 xw.master_clip(b, m_)
-            moves.append(["%s (new)" % bname, "Audio > %s" % bname])
+            role = bname.lower()
+            moves.append(["%s (new)" % bname, bin_path(role if role in bin_roles(SETTINGS["bins"]) else "music")])
     return root, moves
 
 

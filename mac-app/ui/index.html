@@ -26,7 +26,7 @@ body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--body);-webkit-use
 .titlebar{height:38px;-webkit-app-region:drag;display:flex;align-items:center;justify-content:center;color:var(--muted);font-weight:600;font-size:13px;border-bottom:1px solid var(--line)}
 .native .titlebar{display:none}
 .native main{height:100%}
-main{height:calc(100% - 38px);overflow-y:auto;padding:22px 24px 24px;display:flex;flex-direction:column;gap:18px}
+main{height:calc(100% - 38px);overflow-y:auto;padding:18px 24px 18px;display:flex;flex-direction:column;gap:14px}
 .brand{display:flex;align-items:center;gap:14px}
 .logo{width:48px;height:48px;border-radius:12px;background:var(--accent);display:grid;place-items:center;flex:none}
 .logo svg{width:26px;height:26px}
@@ -124,11 +124,11 @@ button.stop{margin-left:auto;display:flex;align-items:center;padding:10px 22px;f
 button.stop svg{margin-right:8px}
 button.stop:hover{background:color-mix(in srgb,var(--bad) 22%,transparent);border-color:var(--bad)}
 button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
-.builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:grid;gap:12px}
+.builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;display:grid;gap:10px}
 .builds .h{font-size:13px;color:var(--muted);font-weight:600}
 .bgrid{display:grid;grid-template-columns:minmax(190px,230px) 1fr;gap:18px;align-items:start}
 @media (max-width:620px){.bgrid{grid-template-columns:1fr}}
-.tree{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px;display:grid;gap:3px}
+.tree{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px;line-height:1.4;display:grid;gap:1px}
 .tree>div{display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tree .l2{padding-left:18px}
 .tree .tb{font-weight:600}
@@ -230,6 +230,47 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .entry .acts button{padding:4px 10px;font-size:12px}
 .entry .acts button.del{margin-left:auto;background:none;border-color:transparent;color:var(--muted)}
 .empty{color:var(--muted);text-align:center;padding:48px 12px;border:1px dashed var(--line);border-radius:12px}
+/* one screen, no page scroll: long lists scroll inside their own box instead */
+#jobs{max-height:40vh;overflow-y:auto;padding-right:2px}
+#vHist,#vSet{display:flex;flex-direction:column;gap:12px;flex:1;min-height:0}
+#vHist[hidden],#vSet[hidden]{display:none!important}
+#histList{flex:1;min-height:0;overflow-y:auto;align-content:start}
+.resgrid{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
+.resgrid>#camsWrap{flex:1.3 1 420px;min-width:0}
+.resside{flex:1 1 300px;min-width:0;display:grid;gap:12px}
+.resside:not(:has(> :not([hidden]))){display:none}
+.hbtns{display:flex;gap:8px;margin-left:auto}
+.hbtns .histbtn{margin-left:0}
+.custom{justify-self:start;margin:6px 0 0!important;padding:6px 12px!important;font-size:12.5px;color:var(--accent)!important;border:1px solid color-mix(in srgb,var(--accent) 50%,transparent)!important;background:none}
+.custom:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.treecol{display:grid;gap:4px;align-content:start}
+
+/* Settings */
+.snote{color:var(--muted);font-size:12.5px;margin:-6px 0 0}
+.stabs{width:auto}
+.spane{flex:1;min-height:0;overflow-y:auto;display:grid;gap:14px;align-content:start;padding-right:4px}
+.sgroup{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:grid;gap:10px}
+.sgroup h3{margin:0;font:700 15px var(--display)}
+.sgroup p{margin:0;color:var(--muted);font-size:12.5px}
+.srow{display:grid;grid-template-columns:minmax(140px,210px) 1fr;gap:12px;align-items:center;font-size:13px}
+.srow .k{color:var(--muted);font-weight:600}
+.srow .hint{color:var(--muted);font-size:12px}
+.sgroup input[type=text],.sgroup input[type=number],.sgroup select{background:var(--bg);border:1px solid var(--line);border-radius:7px;color:var(--ink);font:13px var(--body);padding:6px 9px;min-width:0}
+.sgroup input:focus,.sgroup select:focus{outline:none;border-color:var(--accent)}
+.sgroup input[type=number]{width:80px}
+.lrow{display:grid;grid-template-columns:70px 16px 180px;gap:10px;align-items:center;font-size:13px}
+.lrow .chip{width:16px;height:16px;border-radius:4px}
+.lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:8px 20px}
+.btree{display:grid;gap:4px}
+.brow{display:flex;align-items:center;gap:6px;font-size:13px;min-width:0}
+.brow input{width:220px}
+.brow .tag2{color:var(--muted);font-size:12px;white-space:nowrap}
+.brow .ib{padding:3px 7px;font-size:12px;line-height:1.2;background:none;border-color:transparent;color:var(--muted);min-width:26px}
+.brow .ib:hover:not(:disabled){color:var(--ink);border-color:var(--line)}
+.brow .ib:disabled{opacity:.25}
+.brow .ib.x:hover:not(:disabled){color:var(--bad)}
+.addbin{justify-self:start;background:none;border:1px dashed var(--line);color:var(--muted);padding:5px 12px;font-size:12.5px}
+.addbin:hover{color:var(--ink);border-color:var(--muted)}
 .foot{font-size:11.5px;color:var(--muted);display:flex;justify-content:space-between;gap:10px}
 [hidden]{display:none!important}
 </style>
@@ -242,7 +283,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-2-5H5z"/><path d="M3 9v10a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9"/><path d="M8 4l2 5M13 4l2 5"/></svg></div>
     <div><h1>Kickoff</h1><div class="tag">Drop a shoot folder. Get a Premiere project.</div></div>
   </div>
+  <div class="hbtns">
+  <button class="histbtn" id="bSet" aria-pressed="false" title="Bins, sequence size and names, label colors"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
   <button class="histbtn" id="bHist" aria-pressed="false" title="Every run so far"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>History</button>
+  </div>
   </div>
   <div class="seg tabs modeswitch" role="tablist" aria-label="Kind of project">
     <button data-view="music" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Music video</button>
@@ -254,7 +298,24 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div id="histList" class="hist"></div>
   </section>
 
-  <section id="vRun" style="display:flex;flex-direction:column;gap:18px;flex:1">
+  <section id="vSet" hidden>
+    <div class="hhead"><button class="back" id="bSetBack"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>Back</button><h2>Settings</h2><button class="quiet" id="bSetReset">Reset to defaults</button></div>
+    <p class="snote">Saved on this Mac and used for every run from now on.</p>
+    <div class="seg stabs" id="sTabs">
+      <button data-pane="seq" aria-pressed="true">Sequences</button>
+      <button data-pane="labels" aria-pressed="false">Label colors</button>
+      <button data-pane="bins" aria-pressed="false">Folder structure</button>
+      <button data-pane="files" aria-pressed="false">Files</button>
+      <button data-pane="sync" aria-pressed="false">Syncing</button>
+    </div>
+    <div class="spane" id="pane-seq"></div>
+    <div class="spane" id="pane-labels" hidden></div>
+    <div class="spane" id="pane-bins" hidden></div>
+    <div class="spane" id="pane-files" hidden></div>
+    <div class="spane" id="pane-sync" hidden></div>
+  </section>
+
+  <section id="vRun" style="display:flex;flex-direction:column;gap:14px;flex:1">
 
   <div class="jobs" id="jobsWrap">
     <div class="jobs" id="jobs"></div>
@@ -287,26 +348,16 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <div class="builds" id="hints">
     <div class="h">What you get in Premiere</div>
     <div class="bgrid">
-      <div class="tree" aria-label="The project as it appears in Premiere">
-        <div class="tb"><i class="fold"></i>Footage</div>
-        <div class="tc l2"><i class="chip" style="background:var(--iris)"></i>A Cam (Mini LF)</div>
-        <div class="tc l2"><i class="chip" style="background:var(--mango)"></i>B Cam (FX3)</div>
-        <div class="tc l2"><i class="chip" style="background:var(--rose)"></i>C Cam (Action 4.1)</div>
-        <div class="tb"><i class="fold"></i>Adjustment Layers</div>
-        <div class="tb"><i class="fold"></i>Sequence</div>
-        <div class="tb l2"><i class="fold"></i>Breakup</div>
-        <div class="tb l2" data-for="music"><i class="fold"></i>Sync</div>
-        <div class="tc l2 dim" data-for="music" style="padding-left:36px">Synced &middot; Synced Condensed</div>
-        <div class="tb l2"><i class="fold"></i>Edit</div>
-        <div class="tb"><i class="fold"></i>Audio</div>
-        <div class="tc l2 dim">Music &middot; SFX &middot; Captured</div>
+      <div class="treecol">
+        <div class="tree" id="tree" aria-label="The project as it appears in Premiere"></div>
+        <button class="custom" id="bCustom">Customize</button>
       </div>
       <ul class="steps">
         <li><b>A bin for every camera.</b> Named after your camera folders, so &ldquo;B Cam (FX3)&rdquo; stays B Cam (FX3), with its own label color.</li>
         <li data-for="music"><b>Every clip lined up to the song.</b> Per camera, a Synced sequence with each take on its own track at the right spot, and a Condensed copy packed onto as few tracks as possible for multicam. Takes where the song restarted are split into passes.</li>
         <li><b>A Breakup per camera.</b> All of that camera&rsquo;s clips back to back, with every audio channel, to scrub through.</li>
         <li data-for="setup"><b>No syncing.</b> Bins, Breakups and an empty Edit sequence, with audio sorted into Music, SFX and Captured.</li>
-        <li><b>Ready to cut.</b> A 4K Edit sequence, and every clip scaled to fill the frame, so no black edges.</li>
+        <li><b>Ready to cut.</b> A <span id="sizeWord">4K</span> Edit sequence, and every clip scaled to fill the frame, so no black edges.</li>
         <li class="dim">Shooting over several days? Run the same folder again and Kickoff adds only the new cards.</li>
       </ul>
     </div>
@@ -326,13 +377,17 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <p class="stats" id="stats" hidden><b id="sSynced">0</b> synced so far, <b id="sAside">0</b> set aside<span hidden><b id="sCams"></b><span id="sCamsL"></span></span></p>
 
+  <div class="resgrid">
   <div id="camsWrap" hidden>
     <div class="camsHead"><span></span><span>Where each camera has footage in the song</span><span>Synced</span></div>
     <div class="cams" id="cams"></div>
   </div>
 
+  <div class="resside">
   <div class="list" id="aside" hidden></div>
   <div class="todo" id="todo" hidden><div class="h">Left for you to do in Premiere</div><div id="todoList"></div></div>
+  </div>
+  </div>
   <div class="error" id="error" hidden><b id="errTitle">Kickoff hit an error</b><p id="errText"></p></div>
 
   <div class="batch" id="batch" hidden></div>
@@ -396,6 +451,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     try { localStorage.setItem("kickoff-screen", m); } catch (e) {}
     $("modeNote").textContent = MODE_NOTES[m];
     document.querySelectorAll("#hints [data-for]").forEach(function (d) { d.hidden = d.dataset.for !== m; });
+    if ($("tree")) renderTree();
     post({ cmd: "mode", mode: m });
   }
   $("rebuild").addEventListener("change", function () { post({ cmd: "rebuild", on: $("rebuild").checked }); optSummary(); });
@@ -797,8 +853,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   // what the XML can't do, so Jake finishes it in Premiere (html: fixed text plus escaped names)
   function todo(extra) {
     var lines = ["Drag the imported bin&rsquo;s contents to the top of the project."].concat(extra.filter(Boolean),
-      ["Add a <b>Temp Color</b> adjustment layer to the Adjustment Layers bin.",
-       "Select the Footage bin, right-click, <b>Proxy &gt; Create Proxies</b>."]);
+      ["Add a <b>Temp Color</b> adjustment layer to the " + esc(binName("adjustment", "Adjustment Layers")) + " bin.",
+       "Select the " + esc(binName("footage", "Footage")) + " bin, right-click, <b>Proxy &gt; Create Proxies</b>."]);
     $("todoList").innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
     show("todo", true);
   }
@@ -956,7 +1012,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     hero(e.synced && !look ? "good" : "warn",
       e.synced ? e.synced + " of " + plural(e.clips, "clip") + " synced" : "Done, but no clip lined up with the song",
       (look ? "Check the " + plural(look, "clip") + " marked worth a look before you cut. " : "") + whereTook(e), []);
-    todo([e.synced ? "In <b>" + esc(e.project) + "_Edit</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : ""]);
+    todo([e.synced ? "In <b>" + esc(e.edit_name || e.project + "_Edit") + "</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : ""]);
 
     var dur = e.song_duration || 1, cams = $("cams");
     cams.innerHTML = "";
@@ -1196,16 +1252,20 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     return card;
   }
 
-  function showView(v) {             // "music", "setup" or "hist"
-    if (v !== "hist" && v !== mode) {
+  function showView(v) {             // "music", "setup", "hist" or "set"
+    var aside = v === "hist" || v === "set";
+    if (!aside && v !== mode) {
       if (running()) v = mode;                  // a run in progress: stay on its screen
       else setMode(v);                          // a finished run stays on screen until New run
     }
-    show("vRun", v !== "hist");
+    show("vRun", !aside);
     show("vHist", v === "hist");
-    document.querySelectorAll(".tabs button").forEach(function (b) { b.setAttribute("aria-pressed", String(v !== "hist" && b.dataset.view === v)); });
+    show("vSet", v === "set");
+    document.querySelectorAll(".modeswitch button").forEach(function (b) { b.setAttribute("aria-pressed", String(!aside && b.dataset.view === v)); });
     $("bHist").setAttribute("aria-pressed", String(v === "hist"));
-    if (v === "hist") renderHistory(); else if (!running() && $("batch").hidden && $("btnsDone").hidden && $("btnsErr").hidden) renderStage();
+    $("bSet").setAttribute("aria-pressed", String(v === "set"));
+    if (v === "set") renderSettings();
+    if (v === "hist") renderHistory(); else if (aside) return; else if (!running() && $("batch").hidden && $("btnsDone").hidden && $("btnsErr").hidden) renderStage();
   }
   document.querySelectorAll(".tabs button").forEach(function (b) {
     b.addEventListener("click", function () { showView(b.dataset.view); });
@@ -1264,6 +1324,258 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   $("bClear").addEventListener("click", function () { queue = []; renderStage(); });
   $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
 
+
+  // ---- Settings: saved on this Mac (the app writes settings.json, which the engine reads)
+  var DEFAULT_BINS = [
+    { name: "Adjustment Layers", role: "adjustment" },
+    { name: "Footage", role: "footage" },
+    { name: "Sequence", children: [
+      { name: "Breakup", role: "breakup" },
+      { name: "Sync", role: "sync", children: [{ name: "Synced", role: "synced" }, { name: "Synced Condensed", role: "condensed" }] },
+      { name: "Edit", role: "edit", children: [{ name: "Working" }, { name: "Past" }] }] },
+    { name: "Audio", children: [{ name: "Music", role: "music" }, { name: "SFX", role: "sfx" }, { name: "Captured", role: "captured" }] }
+  ];
+  var DEFAULTS = {
+    sync_size: "3840x2160", start_hour: 1, track_order: "name", labels: {}, bins: DEFAULT_BINS,
+    names: { breakup: "{cam}_Breakup", synced: "{cam}_Synced", condensed: "{cam}_Synced_Condensed",
+             nested: "{project}_CamsNested", edit: "{project}_Edit" },
+    unsynced: true, unsynced_gap_s: 60, place_repeats: true, skip_folders: []
+  };
+  // bins Kickoff fills: they can be renamed and moved, not removed
+  var REQUIRED = { footage: 1, breakup: 1, sync: 1, synced: 1, condensed: 1, edit: 1, music: 1 };
+  var ROLE_NOTE = { footage: "a bin per camera goes in here", breakup: "Breakup sequences", sync: "CamsNested",
+    synced: "Synced sequences", condensed: "Condensed sequences", edit: "the Edit sequence", music: "the song",
+    sfx: "files from SFX folders", captured: "boom, lav and recorder audio", adjustment: "for your Temp Color layer" };
+  var LABEL_ORDER = ["Iris", "Mango", "Rose", "Yellow", "Cerulean", "Caribbean", "Lavender", "Magenta",
+    "Forest", "Tan", "Violet", "Purple", "Blue", "Teal", "Green", "Brown"];
+  var SIZES = [["3840x2160", "3840 x 2160 (UHD 4K)"], ["4096x2160", "4096 x 2160 (DCI 4K)"], ["1920x1080", "1920 x 1080 (HD)"],
+    ["2160x3840", "2160 x 3840 (vertical 4K)"], ["1080x1920", "1080 x 1920 (vertical HD)"], ["2160x2160", "2160 x 2160 (square)"],
+    ["first", "Match each camera's first clip"]];
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  var settings = clone(DEFAULTS);
+  function adopt(obj) {                    // saved settings over the defaults
+    var s = clone(DEFAULTS);
+    if (obj && typeof obj === "object") Object.keys(DEFAULTS).forEach(function (k) {
+      if (obj[k] === undefined || obj[k] === null) return;
+      if (k === "names") Object.keys(s.names).forEach(function (n) { if (obj.names[n]) s.names[n] = obj.names[n]; });
+      else s[k] = obj[k];
+    });
+    settings = s;
+  }
+  try { adopt(JSON.parse(localStorage.getItem("kickoff-settings") || "null")); } catch (e) {}
+  var saveTimer = null;
+  function saveSettings() {
+    try { localStorage.setItem("kickoff-settings", JSON.stringify(settings)); } catch (e) {}
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () { post({ cmd: "settings", settings: settings }); }, 300);
+    renderTree();
+  }
+  function walkBins(list, fn, depth, path) {
+    (list || []).forEach(function (b, i) {
+      var p = (path || []).concat(i);
+      fn(b, depth || 0, p);
+      walkBins(b.children, fn, (depth || 0) + 1, p);
+    });
+  }
+  function findRole(role) { var f = null; walkBins(settings.bins, function (b) { if (b.role === role) f = b; }); return f; }
+  function binName(role, dflt) { var b = findRole(role); return b ? b.name : dflt; }
+  function hasRequired(b) { var r = !!REQUIRED[b.role]; walkBins(b.children, function (c) { if (REQUIRED[c.role]) r = true; }); return r; }
+  function labelFor(letter) { return settings.labels[letter] || LABEL_ORDER[(letter.charCodeAt(0) - 65) % LABEL_ORDER.length]; }
+
+  // the "What you get in Premiere" tree, as Settings has it
+  function renderTree() {
+    var html = [], setup = mode === "setup";
+    function skip(b) { return setup && /^(sync|synced|condensed)$/.test(b.role || ""); }
+    (function draw(list, d) {
+      list = list.filter(function (b) { return !skip(b); });
+      // bins with nothing inside them, side by side on one line ("Music · SFX · Captured"), so the tree stays short
+      if (d > 0 && list.length > 1 && list.every(function (b) { return !(b.children || []).length && b.role !== "footage"; })) {
+        html.push('<div class="tc dim" style="padding-left:' + (d * 18) + 'px">' + list.map(function (b) { return esc(b.name); }).join(" &middot; ") + '</div>');
+        return;
+      }
+      list.forEach(function (b) {
+        html.push('<div class="tb" style="padding-left:' + (d * 18) + 'px"><i class="fold"></i>' + esc(b.name) + '</div>');
+        if (b.role === "footage") [["A", "A Cam (Mini LF)"], ["B", "B Cam (FX3)"], ["C", "C Cam (Action 4.1)"]].forEach(function (c) {
+          html.push('<div class="tc" style="padding-left:' + ((d + 1) * 18) + 'px"><i class="chip" style="background:var(' +
+            (CAM_COLORS[labelFor(c[0])] || "--muted") + ')"></i>' + c[1] + '</div>');
+        });
+        draw(b.children || [], d + 1);
+      });
+    })(settings.bins, 0);
+    $("tree").innerHTML = html.join("");
+    var sz = settings.sync_size;
+    $("sizeWord").textContent = sz === "first" ? "camera-size" : /^(3840|4096)x2160$/.test(sz) ? "4K" :
+      sz === "1920x1080" ? "HD" : /x/.test(sz) && +sz.split("x")[1] > +sz.split("x")[0] ? "vertical" : sz.replace("x", " x ");
+  }
+
+  // ---- the Settings page
+  var pane = "seq";
+  function el(tag, attrs, html) {
+    var e = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) { if (k === "class") e.className = attrs[k]; else e.setAttribute(k, attrs[k]); });
+    if (html != null) e.innerHTML = html;
+    return e;
+  }
+  function group(title, note) {
+    var g = el("div", { class: "sgroup" }, "<h3>" + esc(title) + "</h3>" + (note ? "<p>" + note + "</p>" : ""));
+    return g;
+  }
+  function row(g, label, control, hint) {
+    var r = el("div", { class: "srow" });
+    r.appendChild(el("span", { class: "k" }, esc(label)));
+    var c = el("span", {}); c.appendChild(control);
+    if (hint) c.appendChild(el("span", { class: "hint" }, " " + hint));
+    r.appendChild(c); g.appendChild(r); return control;
+  }
+  function select(opts, value, onchange) {
+    var s = el("select");
+    opts.forEach(function (o) { var op = el("option", { value: o[0] }, esc(o[1])); if (String(o[0]) === String(value)) op.selected = true; s.appendChild(op); });
+    s.addEventListener("change", function () { onchange(s.value); saveSettings(); });
+    return s;
+  }
+  function text(value, onchange, width) {
+    var t = el("input", { type: "text", spellcheck: "false" }); t.value = value;
+    if (width) t.style.width = width + "px";
+    t.addEventListener("input", function () { onchange(t.value); saveSettings(); });
+    return t;
+  }
+
+  function renderSettings() {
+    ["seq", "labels", "bins", "files", "sync"].forEach(function (k) { $("pane-" + k).hidden = k !== pane; $("pane-" + k).innerHTML = ""; });
+    document.querySelectorAll("#sTabs button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.pane === pane)); });
+    var P = $("pane-" + pane), g;
+    if (pane === "seq") {
+      g = group("Sequence size", "Synced, Condensed, CamsNested and Edit. Every clip is scaled to fill it, no black edges. Breakups always match the camera.");
+      row(g, "Frame size", select(SIZES, settings.sync_size, function (v) { settings.sync_size = v; }));
+      var hours = []; for (var h = 1; h <= 23; h++) hours.push([h, String(h).padStart(2, "0") + ":00:00:00"]);
+      row(g, "Song starts at", select(hours, settings.start_hour, function (v) { settings.start_hour = +v; }));
+      row(g, "Takes on V1, V2...", select([["name", "In file order"], ["offset", "In song order"]], settings.track_order,
+        function (v) { settings.track_order = v; }));
+      P.appendChild(g);
+      g = group("Sequence names", "{cam} becomes the camera (A Cam), {project} the project name.");
+      [["breakup", "Breakup"], ["synced", "Synced"], ["condensed", "Synced Condensed"], ["nested", "All cameras nested"], ["edit", "Edit"]].forEach(function (n) {
+        row(g, n[1], text(settings.names[n[0]], function (v) { settings.names[n[0]] = v.trim() || DEFAULTS.names[n[0]]; }, 260));
+      });
+      P.appendChild(g);
+    } else if (pane === "labels") {
+      g = group("Camera label colors", "Premiere's label colors for each camera's bin, clips and sequences.");
+      var grid = el("div", { class: "lgrid" });
+      "ABCDEFGH".split("").forEach(function (L) {
+        var r = el("div", { class: "lrow" });
+        r.appendChild(el("span", { class: "k" }, L + " Cam"));
+        var chip = el("i", { class: "chip" }); chip.style.background = "var(" + CAM_COLORS[labelFor(L)] + ")";
+        r.appendChild(chip);
+        r.appendChild(select(LABEL_ORDER.map(function (n) { return [n, n]; }), labelFor(L), function (v) {
+          settings.labels[L] = v; chip.style.background = "var(" + CAM_COLORS[v] + ")";
+        }));
+        grid.appendChild(r);
+      });
+      g.appendChild(grid);
+      g.appendChild(el("p", {}, "Cameras after H start over from the top of Premiere's list."));
+      P.appendChild(g);
+    } else if (pane === "bins") {
+      g = group("Folder structure", "Rename a bin by typing, move it with the arrows (&larr; &rarr; take it out of or into the bin above), add or remove bins. Bins Kickoff fills can be renamed and moved but not removed.");
+      var t = el("div", { class: "btree" });
+      walkBins(settings.bins, function (b, d, path) { t.appendChild(binRow(b, d, path)); });
+      g.appendChild(t);
+      var add = el("button", { class: "addbin" }, "+ Add a bin");
+      add.addEventListener("click", function () { settings.bins.push({ name: "New bin" }); saveSettings(); renderSettings(); focusLast(); });
+      g.appendChild(add);
+      P.appendChild(g);
+    } else if (pane === "files") {
+      g = group("Project XML", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
+      var v = el("span", { class: "hint" }, esc(xmlDir || "The top of the drive the footage is on"));
+      var b = el("button", {}, "Choose…");
+      b.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
+      var wrap = el("span", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }); wrap.appendChild(v); wrap.appendChild(b);
+      if (xmlDir) { var r0 = el("button", { class: "quiet", style: "margin-left:0" }, "Use the drive"); r0.addEventListener("click", function () { setXmlDir(""); renderSettings(); }); wrap.appendChild(r0); }
+      row(g, "Export XML to", wrap);
+      P.appendChild(g);
+      g = group("Folders Kickoff skips", "Proxies, previews, renders, Generations and Exports are always skipped. Add any other folder names to leave out, separated by commas.");
+      row(g, "Also skip", text(settings.skip_folders.join(", "), function (v) {
+        settings.skip_folders = v.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+      }, 320));
+      P.appendChild(g);
+    } else if (pane === "sync") {
+      g = group("Clips that don't sync", "Kept in the Footage bins either way.");
+      row(g, "In the Synced sequences", select([["1", "On V1 after the song"], ["0", "Leave them out"]], settings.unsynced ? "1" : "0",
+        function (v) { settings.unsynced = v === "1"; renderSettings(); }));
+      if (settings.unsynced) {
+        var n = el("input", { type: "number", min: "0", max: "600", step: "5" }); n.value = settings.unsynced_gap_s;
+        n.addEventListener("input", function () { var x = Math.max(0, Math.min(600, +n.value || 0)); settings.unsynced_gap_s = x; saveSettings(); });
+        row(g, "Starting", n, "seconds after the song ends");
+      }
+      P.appendChild(g);
+      g = group("A take that fits two identical choruses", "When a section of the song repeats exactly, a take can line up with both copies.");
+      row(g, "Put it", select([["1", "At the first copy, named (check chorus)"], ["0", "Set it aside"]], settings.place_repeats ? "1" : "0",
+        function (v) { settings.place_repeats = v === "1"; }));
+      P.appendChild(g);
+    }
+  }
+  function focusLast() { var ins = $("pane-bins").querySelectorAll("input"); if (ins.length) { ins[ins.length - 1].focus(); ins[ins.length - 1].select(); } }
+  function at(path) {                      // [list, index] for a bin's path
+    var list = settings.bins;
+    for (var i = 0; i < path.length - 1; i++) list = list[path[i]].children;
+    return [list, path[path.length - 1]];
+  }
+  function binRow(b, depth, path) {
+    var r = el("div", { class: "brow" });
+    r.style.paddingLeft = (depth * 26) + "px";
+    var li = at(path), list = li[0], i = li[1];
+    function btn(label, title, ok, fn, cls) {
+      var x = el("button", { class: "ib" + (cls ? " " + cls : ""), title: title }, label);
+      x.disabled = !ok;
+      x.addEventListener("click", function () { fn(); if (!b.children || !b.children.length) delete b.children; saveSettings(); renderSettings(); });
+      r.appendChild(x);
+    }
+    btn("&uarr;", "Move up", i > 0, function () { list.splice(i - 1, 0, list.splice(i, 1)[0]); });
+    btn("&darr;", "Move down", i < list.length - 1, function () { list.splice(i + 1, 0, list.splice(i, 1)[0]); });
+    btn("&larr;", "Take it out of " + (depth ? at(path.slice(0, -1))[0][path[path.length - 2]].name : ""), depth > 0, function () {
+      var pl = at(path.slice(0, -1)), p = pl[0][pl[1]];
+      p.children.splice(i, 1);
+      if (!p.children.length) delete p.children;
+      pl[0].splice(pl[1] + 1, 0, b);
+    });
+    btn("&rarr;", i > 0 ? "Put it inside " + list[i - 1].name : "", i > 0, function () {
+      var into = list[i - 1];
+      list.splice(i, 1);
+      (into.children = into.children || []).push(b);
+    });
+    r.appendChild(el("i", { class: "fold" }));
+    var inp = el("input", { type: "text", spellcheck: "false" }); inp.value = b.name;
+    inp.addEventListener("input", function () { b.name = inp.value.trim() || "Bin"; saveSettings(); });
+    r.appendChild(inp);
+    var add = el("button", { class: "ib", title: "Add a bin inside " + b.name }, "+ inside");
+    add.addEventListener("click", function () { (b.children = b.children || []).push({ name: "New bin" }); saveSettings(); renderSettings(); });
+    r.appendChild(add);
+    if (hasRequired(b)) {
+      r.appendChild(el("span", { class: "tag2" }, b.role && ROLE_NOTE[b.role] ? "Kickoff fills this: " + ROLE_NOTE[b.role] : "holds a bin Kickoff fills"));
+    } else {
+      btn("&#10005;", "Remove " + b.name, true, function () { list.splice(i, 1); }, "x");
+      if (b.role && ROLE_NOTE[b.role]) r.appendChild(el("span", { class: "tag2" }, ROLE_NOTE[b.role]));
+    }
+    return r;
+  }
+  document.querySelectorAll("#sTabs button").forEach(function (b) {
+    b.addEventListener("click", function () { pane = b.dataset.pane; renderSettings(); });
+  });
+  $("bSetReset").addEventListener("click", function () {
+    var bt = $("bSetReset");
+    if (!bt.dataset.armed) {                    // two clicks: the window has no confirm dialog
+      bt.dataset.armed = "1"; bt.textContent = "Click again to reset everything";
+      setTimeout(function () { delete bt.dataset.armed; bt.textContent = "Reset to defaults"; }, 4000);
+      return;
+    }
+    delete bt.dataset.armed; bt.textContent = "Reset to defaults";
+    settings = clone(DEFAULTS);
+    try { localStorage.removeItem("kickoff-settings"); } catch (e) {}
+    post({ cmd: "settings", settings: null });
+    renderTree(); renderSettings();
+  });
+  $("bSet").addEventListener("click", function () { showView($("vSet").hidden ? "set" : mode); });
+  $("bSetBack").addEventListener("click", function () { showView(mode); });
+  $("bCustom").addEventListener("click", function () { pane = "bins"; showView("set"); });
+
   window.Kickoff = {
     started: started,
     event: onEvent,
@@ -1271,11 +1583,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     exit: onExit,
     add: function (paths) { add(paths); },
     drop: drop,
-    picked: function (paths, target, row) { if (target === "export") setXmlDir(paths[0]); else add(paths, target, row); },
+    picked: function (paths, target, row) {
+      if (target === "export") { setXmlDir(paths[0]); if (!$("vSet").hidden) renderSettings(); } else add(paths, target, row);
+    },
+    settings: function (obj) { adopt(obj); renderTree(); if (!$("vSet").hidden) renderSettings(); },
     history: function (list) { history = Array.isArray(list) ? list : []; renderHistory(); },
     dragging: function (on, x, y) {
       if (running()) return;
-      if (on && !$("vHist").hidden) showView(mode);
+      if (on && (!$("vHist").hidden || !$("vSet").hidden)) showView(mode);
       document.querySelectorAll(".box.over").forEach(function (b) { b.classList.remove("over"); });
       var el = on && x != null ? document.elementFromPoint(x, y) : null, box = el && el.closest ? el.closest(".box") : null;
       if (box) box.classList.add("over");

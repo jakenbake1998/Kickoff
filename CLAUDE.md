@@ -16,6 +16,7 @@ So anything on main is live. **Jake sends notes in batches. Log them, investigat
 - `mac-app/ui/index.html` is the whole window (HTML/CSS/JS in a WKWebView). It must keep `window.Kickoff`, or the updater refuses it.
 - `mac-app/Kickoff.swift` is the AppKit shell. The engine reports progress as `@@kickoff {json}` lines (`--events`).
 - `tests/` holds the synthetic footage generator and the accuracy checks.
+- Settings (the window's Settings page) are saved by the app to `~/Library/Application Support/Kickoff/settings.json`; the engine reads it through `KICKOFF_SETTINGS` or `--settings`. Bins are found by role (footage, breakup, sync, synced, condensed, edit, music, sfx, captured, adjustment), so they can be renamed, moved and nested. With no settings file the output is exactly the defaults below.
 
 ## Testing before any push
 
