@@ -1223,6 +1223,38 @@ def song_search(xs, master, lo, hi):
     return int(np.argmax(cc)) / SR - lo
 
 
+PHASE_EXCL_S = 0.25        # the runner-up peak is looked for this far or more from the best one
+PHASE_AGREE = 1.35         # best/runner-up ratio enough when the landmarks' best guess lands on the same spot
+PHASE_ALONE = 1.8          # ... and without them (random clips and the band's other songs stay under ~1.25)
+PHASE_FRAME_S = 0.045      # "the same spot": within about a frame
+
+
+def phase_search(xs, master, lo, hi):
+    """(offset, ratio): the best song offset for clip stretch [lo, hi] by phase correlation of the
+    whole stretch against the whole song (see song_search), and how far that peak stands above the
+    best one anywhere else in the song (runner-up at least PHASE_EXCL_S away). Unlike the 4 s window
+    count, the whole stretch is weighed at once, which is what separates real camera audio (room,
+    band, crowd over the playback) from chance: chance stays near 1.0-1.25."""
+    seg = xs[int(max(0.0, lo) * SR):int(hi * SR)]
+    if len(seg) < SR:
+        return None, 0.0
+    n = 1 << int(math.ceil(math.log2(len(master.audio) + len(seg))))
+    X = np.fft.rfft(master.audio, n) * np.conj(np.fft.rfft(seg, n))
+    freqs = np.fft.rfftfreq(n, 1 / SR)
+    X[(freqs < 150) | (freqs > 4000)] = 0
+    X /= np.maximum(np.abs(X), 1e-12)
+    cc = np.fft.irfft(X, n)
+    # lags cover the clip starting before the song too (negative offsets wrap to the end)
+    cc = np.concatenate([cc[n - len(seg):], cc[:len(master.audio)]])
+    k = int(np.argmax(cc))
+    peak = float(cc[k])
+    ex = int(PHASE_EXCL_S * SR)
+    rest = np.concatenate([cc[:max(0, k - ex)], cc[k + ex + 1:]])
+    second = float(rest.max()) if len(rest) else 0.0
+    off = (k - len(seg)) / SR - max(0.0, lo)
+    return off, (peak / second if second > 0 else 0.0)
+
+
 def stray_song(xs, master, st, h, t, lo, hi, known):
     """Song audio in clip stretch [lo, hi] (outside every known pass) at a position of its own, e.g.
     a false start before the real take. Returns a pass dict, or None when the stretch holds no song
