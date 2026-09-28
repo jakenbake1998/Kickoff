@@ -1878,9 +1878,12 @@ def audio_sources(m, enabled=True, every=False):
     """[(source audio clip, enabled)] a sequence entry puts on consecutive audio tracks. The channel
     the sync heard (the scratch mic) comes first and plays; with every=True the file's other
     channels follow, switched off when the scratch channel is known (on a Mini LF they are near
-    silence and timecode), so they are there to switch on."""
+    silence and timecode), so they are there to switch on. every="raw" (Breakups): every channel in
+    the camera's own order, all on, exactly as the file has them."""
     if not m.has_video:
         return [(1, enabled)]
+    if every == "raw":
+        return [(k, True) for k in range(1, max(1, m.audio_tracks) + 1)]
     pick = m.audio_pick or 1
     out = [(pick, enabled)]
     if every:
@@ -2057,11 +2060,12 @@ def condense(entries, fps):
 
 
 def stringout_entries(clips, fps, label):
-    """Breakup layout: every clip of the camera back to back on V1/A1, in filename order."""
+    """Breakup layout: every clip of the camera back to back on V1, in filename order, with all of
+    its audio channels as the camera recorded them on A1, A2... (none moved, muted or dropped)."""
     entries, pos = [], 0
     for c in clips:
         m = Media.of_clip(c, fps)
-        entries.append(dict(media=m, start=pos, vtrack=1, atrack=1, label=label, all_audio=True))
+        entries.append(dict(media=m, start=pos, vtrack=1, atrack=1, label=label, all_audio="raw"))
         pos += int(round(c.duration * fps))
     return entries, 3600 * rate_xml(fps)[0]
 
