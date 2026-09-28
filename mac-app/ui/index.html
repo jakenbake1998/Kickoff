@@ -258,7 +258,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 #vRun>*{flex:none}
 #vRun>#hints{flex:0 1 auto;min-height:0;overflow-y:auto}
 /* spare height is shared above the content and above the buttons, so a short screen sits mid-window */
-#vRun>.vtop{margin-top:auto;margin-bottom:-16px;height:0}
+#vRun>.vtop{margin-top:auto;margin-bottom:-16px;height:0}   /* pinned in px by pinStage() before Start */
 #vHist,#vSet{display:flex;flex-direction:column;gap:12px;flex:1;min-height:0}
 #vHist[hidden],#vSet[hidden]{display:none!important}
 #histList{flex:1;min-height:0;overflow-y:auto;align-content:start}
@@ -840,7 +840,27 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     var note = typeof runs === "string" && (music ? jobs.some(function (j) { return j.song || j.footage.length; }) : false) ? runs : "";
     $("modeNote").textContent = note || MODE_NOTES[mode];
     saveBoxes();
+    pinStage();
   }
+  // The Song/Footage row (or the drop box) stays where it is while things are added: the empty screen
+  // is centred once for this window height, and rows that appear later go below without moving it.
+  var pinned = null;               // { h: window height, mode, top: px from the screen's top to the first box }
+  function firstBox() { return mode === "music" ? document.querySelector("#jobs .box") : $("drop"); }
+  function pinStage() {
+    var sp = document.querySelector("#vRun > .vtop"), m = document.querySelector("main"), run = $("vRun");
+    if (run.hidden) return;
+    if (running() || resultShowing()) { sp.style.marginTop = ""; pinned = null; return; }
+    var at = function () { return firstBox().getBoundingClientRect().top - run.getBoundingClientRect().top; };
+    if (!pinned || pinned.h !== window.innerHeight || pinned.mode !== mode) {
+      sp.style.marginTop = "";                   // centred the usual way, then held there
+      pinned = { h: window.innerHeight, mode: mode, top: at() };
+    }
+    var cur = parseFloat(getComputedStyle(sp).marginTop) || 0;
+    sp.style.marginTop = Math.max(0, cur + pinned.top - at()) + "px";
+    var over = m.scrollHeight - m.clientHeight;  // too tall for the window: move up only as far as needed
+    if (over > 0) sp.style.marginTop = Math.max(0, parseFloat(sp.style.marginTop) - over) + "px";
+  }
+  window.addEventListener("resize", function () { pinned = null; if (!$("vRun").hidden) pinStage(); });
 
   function renderQueue() {
     var list = $("qList");
@@ -936,6 +956,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("stage").textContent = "Checking for updates";
     $("count").textContent = "";
     show("run", true); show("btnsRun", true); show("details", true);
+    document.querySelector("#vRun > .vtop").style.marginTop = ""; pinned = null;   // the run screen centres as before
   }
 
   function setCounts() {
