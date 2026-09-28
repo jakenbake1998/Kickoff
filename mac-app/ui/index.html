@@ -49,10 +49,9 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .status span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .status span:last-child{font-variant-numeric:tabular-nums;flex:none}
 
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
-.stat b{display:block;font:700 26px/1.1 var(--display);font-variant-numeric:tabular-nums}
-.stat span{font-size:12px;color:var(--muted)}
+/* progress in plain words while a run goes: "28 synced so far, 6 set aside" */
+.stats{margin:0;color:var(--muted);font-size:14px}
+.stats b{color:var(--ink);font:700 16px var(--display);font-variant-numeric:tabular-nums}
 
 .cams{display:grid;gap:9px}
 .cam{display:grid;grid-template-columns:minmax(90px,150px) 1fr 52px;gap:12px;align-items:center;font-size:13px}
@@ -322,11 +321,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div class="htxt"><div class="ht" id="heroT"></div><div class="hs" id="heroS"></div><div class="hq" id="heroQ"></div></div>
   </div>
 
-  <div class="stats" id="stats" hidden>
-    <div class="stat"><b id="sSynced">0</b><span>clips synced</span></div>
-    <div class="stat"><b id="sCams">0</b><span id="sCamsL">cameras</span></div>
-    <div class="stat"><b id="sAside">0</b><span>set aside</span></div>
-  </div>
+  <p class="stats" id="stats" hidden><b id="sSynced">0</b> synced so far, <b id="sAside">0</b> set aside<span hidden><b id="sCams"></b><span id="sCamsL"></span></span></p>
 
   <div id="camsWrap" hidden>
     <div class="cams" id="cams"></div>
@@ -414,7 +409,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     optSummary();
   }
   function optSummary() {           // the closed Options line says what they are set to
-    $("optSum").textContent = "XML goes to " + (xmlDir ? base(xmlDir) : "the top of the footage drive") +
+    // the chosen folder with the one above it ("Project Files > XML"): a folder named XML alone read as "XML goes to XML"
+    var shown = xmlDir ? [base(parent(xmlDir)), base(xmlDir)].filter(Boolean).join(" > ") : "";
+    $("optSum").textContent = (xmlDir ? "XML saves to " + shown : "XML saves to the top of the footage drive") +
       ($("rebuild").checked ? ", starting over" : "");
   }
   var batch = null;                // the runs Start began: { runs: [{paths, mode, name}], i, ids }
@@ -796,7 +793,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   // what the XML can't do, so Jake finishes it in Premiere (html: fixed text plus escaped names)
   function todo(extra) {
     var lines = ["Drag the imported bin&rsquo;s contents to the top of the project."].concat(extra.filter(Boolean),
-      ["Add a <b>Temp Color</b> adjustment layer to the Adjustment Layers bin."]);
+      ["Add a <b>Temp Color</b> adjustment layer to the Adjustment Layers bin.",
+       "Select the Footage bin, right-click, <b>Proxy &gt; Create Proxies</b>."]);
     $("todoList").innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
     show("todo", true);
   }
@@ -830,11 +828,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("stage").textContent = "Done. In Premiere the project imports into a bin; drag its contents to the top.";
     $("count").textContent = "";
     $("sSynced").textContent = e.clips;
-    $("sSynced").nextElementSibling.textContent = "clips";
     $("sCams").textContent = e.cameras.length;
     $("sCamsL").textContent = e.cameras.length === 1 ? "camera" : "cameras";
     $("sAside").textContent = e.audio;
-    $("sAside").nextElementSibling.textContent = "audio files";
     show("stats", true);
     var cams = $("cams");
     cams.innerHTML = "";
@@ -941,8 +937,6 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function finishMusic(e) {
-    $("sSynced").nextElementSibling.textContent = "clips synced";
-    $("sAside").nextElementSibling.textContent = "set aside";
     $("bReport").textContent = "Show report";
     $("prog").className = "prog";
     $("bar").style.width = "100%";
