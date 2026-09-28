@@ -253,6 +253,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     [/^ambiguous/, "fits two places in the song", "check report"],
     [/^confidence/, "unsure match", "check report"],
     [/^short burst/, "only a false start", "check report"],
+    [/^between plays/, "stretches between plays of the song", "Breakup only"],
     [/^unreadable/, "can't be read (RED/BRAW?)", "check report"]
   ];
   var MODE_NOTES = {
@@ -604,6 +605,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     });
     if (e.restarted) rows.push([plural(e.restarted, "take") + " where the song restarted, split into passes", "own tracks"]);
     if (e.check_chorus) rows.push([plural(e.check_chorus, "clip") + " only covering the chorus, placed at the first", "check chorus"]);
+    if (e.worth_a_look) rows.push([plural(e.worth_a_look, "clip") + " placed, but the waveform only partly lines up", "worth a look"]);
     rows.forEach(function (r) {
       var d = document.createElement("div");
       var a = document.createElement("span"), b = document.createElement("span");

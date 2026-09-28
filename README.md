@@ -144,7 +144,7 @@ Nothing is guessed. Every clip that isn't placed gets a reason in the report:
 | `audio track is silent` | Audio stream present but empty |
 | `no match to song` | Best alignment is no better than chance: B-roll, narrative, wrong song |
 | `ambiguous match (repeated section of song)` | Fits equally well at two places, and the audio at the two isn't clearly identical (or you passed `--set-aside-repeats`). The report lists both song times. Clips covering only a copy-pasted chorus are placed instead: see "Repeated chorus" below |
-| `confidence below threshold` | A likely position exists but not decisively enough (`--threshold`, default 60) |
+| `confidence below threshold` | A likely position exists but not decisively enough (`--threshold`, default 60). Before a clip lands here, the waveform gets a say: a position that lines up through half the clip (3 windows or more) and twice as well as any other is placed, noted `placed by waveform` |
 | `unreadable file` | ffmpeg can't open it. RED `.R3D` and `.braw` are in this group; sync their proxies instead |
 
 ## Takes where the song stopped, restarted or jumped
@@ -168,6 +168,8 @@ camera kept rolling, each pass is found on its own:
   `short burst of song (false start?)` unless it's long and clear enough to place. Twenty seconds
   or more of song whose waveform lines up is a performance, and is placed even when the landmarks
   miss it (a worn tape, the band louder than the playback).
+- Every stretch between the plays found is searched again with only its own landmarks, so a quieter
+  play the louder ones outvoted is still found.
 - A part runs on only 8 s past its song. A longer stretch after it becomes a part of its own, set
   aside as `between plays of the song`, so a play too buried to match never rides along at the
   previous play's position.

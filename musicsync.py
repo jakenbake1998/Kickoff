@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 
 # ---------------------------------------------------------------- constants
 
@@ -513,7 +513,13 @@ def is_timecode(x):
     if rms <= 0:
         return False
     zc = np.count_nonzero(np.diff(np.signbit(seg))) / (len(seg) / SR)
-    return 1500 < zc < 5000 and float(np.median(np.abs(seg))) / rms > 0.85
+    if not (1500 < zc < 5000 and float(np.median(np.abs(seg))) / rms > 0.85):
+        return False
+    # hiss squashed by a limiter also crosses zero that often at a near-constant level; LTC's energy
+    # sits in its two tones (half the bit rate and the bit rate, 960-2400 Hz), noise is spread out
+    spec = np.abs(np.fft.rfft(seg)) ** 2
+    f = np.fft.rfftfreq(len(seg), 1 / SR)
+    return float(spec[(f > 600) & (f < 2700)].sum() / (spec.sum() + 1e-12)) > 0.55
 
 
 def spectrogram(x):
@@ -784,11 +790,19 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
     clip.confidence = round(conf, 1)
     xs_len = len(xs) / SR if xs is not None else len(x) / SR * speed
 
-    if A < st.min_hashes or ev["strength"] < 0.25:
+    rescued = None
+    if (A < st.min_hashes or ev["strength"] < 0.25 or conf < st.threshold) and xs is not None and speed == 1.0:
+        # too few landmarks to be sure (a short take, a sparse outro): let the waveform decide
+        rescued = waveform_rescue(xs, master, [coarse] + ([ev["runner_up_offset"]] if R else []))
+    if rescued is not None:
+        coarse, n_ok, n = rescued
+        clip.notes.append("placed by waveform: %d of %d windows line up (landmarks %d vs %d by chance)"
+                          % (n_ok, n, A, N))
+    elif A < st.min_hashes or ev["strength"] < 0.25:
         clip.reasons.append(REASON_NO_MATCH)
         clip.notes.append("best alignment %d landmarks vs %d by chance" % (A, N))
         return
-    if conf < st.threshold:
+    if conf < st.threshold and rescued is None:
         # Landmarks alone aren't decisive (usually because part of the clip is a repeated chorus).
         # A waveform comparison at both candidate positions settles it when some stretch of the
         # clip matches only at the best one.
@@ -905,6 +919,13 @@ def check_string(q):
     return "%d/%d" % (sum(v >= WAVE_MATCH for v in vals), len(vals)) if vals else ""
 
 
+def doubtful(clips):
+    """Placed parts whose waveform lines up in under 70% of its windows: worth a look."""
+    return [(c, i, p) for c in clips for i, p in enumerate(c.parts, 1)
+            if p.status == "placed" and p.check and p.repeat_alt is None and
+            int(p.check.split("/")[0]) < 0.7 * int(p.check.split("/")[1])]
+
+
 def decisive(xs, master, off, rival, lo, hi):
     """True when some stretch of the clip matches the song only at `off`, and none only at `rival`."""
     qa = dict(wave_q(xs, master, off, lo, hi, hop=1.0))
@@ -944,19 +965,20 @@ def pass_candidates(tc, off):
     return out[:64]        # a long take can hold a dozen passes, each with its chorus copies
 
 
-def find_passes(master, h, t):
+def find_passes(master, h, t, single=False):
     """Follow which song offset the clip agrees with, second by second, across the whole clip.
 
     A Viterbi path over (candidate offsets + 'no song') scores each second by how many landmarks
     agree with that offset, and charges for every change of offset, so a repeated chorus (which
     agrees with two offsets at once) doesn't flip a pass, while a real restart or jump does.
-    Returns ([dict(c=offset frames, first, last, r0, r1 frames)] in clip order, hit times, hit offsets)."""
+    Returns ([dict(c=offset frames, first, last, r0, r1 frames)] in clip order, hit times, hit offsets).
+    With `single`, one candidate offset is enough (a stretch searched on its own)."""
     res = master.hits(h, t)
     if res is None:
         return [], None, None
     tc, off = res
     cands = pass_candidates(tc, off)
-    if len(cands) < 2:
+    if len(cands) < (1 if single else 2):
         return [], tc, off
     nb = int(tc.max()) // PASS_BIN + 1
     S = np.zeros((len(cands) + 1, nb))            # row 0: no song
@@ -1096,7 +1118,7 @@ REASON_BETWEEN = "between plays of the song"
 STRAY_LONG_S = 20.0   # song this long outside the found passes is a performance, not a false start
 TAIL_KEEP_S = 8.0     # a part carries on this long after its song stops...
 GAP_PART_S = 20.0     # ...and a longer stretch than this after that is a part of its own
-HEAD_KEEP_S = 30.0    # the first part keeps up to this much roll before its song
+HEAD_KEEP_S = 12.0    # the first part keeps up to this much roll before its song
 
 
 def song_search(xs, master, lo, hi):
@@ -1153,6 +1175,66 @@ def stray_song(xs, master, st, h, t, lo, hi, known):
     return dict(off=o, first=first, last=last, ev=e, good=good, stray=last - first < STRAY_LONG_S)
 
 
+def gap_passes(xs, master, st, h, t, lo, hi, known):
+    """Passes inside clip stretch [lo, hi] (xs seconds, outside every pass found so far), searched
+    with only that stretch's landmarks, so a play the louder ones outvoted in the whole-clip search
+    (an action camera rolling through a dozen plays) gets a say. Each is kept only when its landmarks
+    or its waveform confirm it."""
+    if hi - lo < MIN_PASS_S + 1:
+        return []
+    sel = (t >= lo / FRAME_S) & (t < hi / FRAME_S)
+    if sel.sum() < 20:
+        return []
+    raw, _, _ = find_passes(master, h[sel], t[sel], single=True)
+    out = []
+    for p in raw:
+        o = p["c"] * FRAME_S
+        if any(abs(o - k) < 0.08 for k in known):
+            continue
+        first, last = pass_edges(xs, master, o, p["first"] * FRAME_S, p["last"] * FRAME_S, known)
+        first, last = max(first, lo), min(last, hi)
+        if last - first < MIN_PASS_S:
+            continue
+        s2 = (t >= first / FRAME_S) & (t < last / FRAME_S)
+        e = evaluate(master, h[s2], t[s2]) if s2.any() else None
+        if e is None:
+            e = dict(A=0, R=0, N=0.0, offset=o, runner_up_offset=o, conf=0.0, strength=0.0)
+        if abs(e["offset"] - o) > 0.1:
+            e = dict(e, runner_up_offset=e["offset"], offset=o, conf=0.0)
+        q = wave_q(xs, master, o, *in_song(xs, master, o, first, last))
+        n_ok = sum(v >= WAVE_MATCH for _, v in q)
+        good = accepted(e, st) or (len(q) >= 3 and n_ok >= max(3, len(q) / 3))
+        if good or n_ok >= 2:
+            out.append(dict(off=o, first=first, last=last, ev=e, good=good, r0=p["r0"], r1=p["r1"]))
+    return out
+
+
+def waveform_rescue(xs, master, guesses):
+    """Where the landmarks are too few to decide (a 20 s take, an outro that fingerprints badly),
+    compare the waveform: at each landmark guess, and at the best position of a phase correlation of
+    the whole clip against the whole song. Returns (offset, windows that line up, windows) when one
+    position lines up through at least half of the clip (3 windows or more) and twice as well as any
+    other, else None."""
+    n = len(xs) / SR
+    if n < WAVE_WIN + 1:
+        return None
+    cands = []
+    for o in list(guesses) + [song_search(xs, master, 0.0, n)]:
+        if all(abs(o - c) > 0.08 for c in cands):
+            cands.append(o)
+    hop = 1.0 if n < 40 else WAVE_HOP
+    scored = []
+    for o in cands:
+        q = [v for _, v in wave_q(xs, master, o, *in_song(xs, master, o, 0.0, n), hop=hop)]
+        scored.append((sum(v >= WAVE_MATCH for v in q), len(q), o))
+    scored.sort(reverse=True)
+    k, m, o = scored[0]
+    rival = max((s[0] for s in scored[1:]), default=0)
+    if k >= 3 and k >= 0.5 * m and k >= 2 * rival:
+        return o, k, m
+    return None
+
+
 def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
     """Cut the clip into one Part per pass. Before cutting, each pass's edges are tightened against
     its neighbours and the stretches outside every pass are searched for song audio of their own
@@ -1168,13 +1250,23 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
         known = [p["off"] for p in passes]
         bounds = [0.0] + [v for p in passes for v in (p["first"], p["last"])] + [xs_len]
         gaps = list(zip(bounds[::2], bounds[1::2]))
-        while gaps:                      # a long gap can hold several: search what's left around each
+        rounds = 0
+        while gaps and rounds < 200:     # a long gap can hold several: search what's left around each
+            rounds += 1
             lo, hi = gaps.pop()
-            sp = stray_song(xs, master, st, h, t, lo, hi, known)
-            if sp:
+            found = gap_passes(xs, master, st, h, t, lo, hi, known)
+            if not found:
+                sp = stray_song(xs, master, st, h, t, lo, hi, known)
+                found = [sp] if sp else []
+            found.sort(key=lambda p: p["first"])
+            edge = lo
+            for sp in found:
                 passes.append(sp)
                 known.append(sp["off"])
-                gaps += [(lo, sp["first"]), (sp["last"], hi)]
+                gaps.append((edge, sp["first"]))
+                edge = sp["last"]
+            if found:
+                gaps.append((edge, hi))
         passes.sort(key=lambda p: p["first"])
     if len(passes) < 2:
         return False
@@ -1192,7 +1284,7 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
     segs = []
     for i, p in enumerate(passes):
         lo, hi = cuts[i], cuts[i + 1]
-        if i == 0 and xs is not None and p["first"] - lo > HEAD_KEEP_S + GAP_PART_S:
+        if i == 0 and xs is not None and p["first"] - lo > HEAD_KEEP_S + 8.0:
             segs.append((lo, p["first"] - HEAD_KEEP_S, None))
             lo = p["first"] - HEAD_KEEP_S
         if xs is not None and hi - p["last"] > TAIL_KEEP_S + GAP_PART_S:
@@ -1221,6 +1313,22 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
             if xs is not None:
                 part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms,
                                                  span=ov[1] - ov[0]))
+                k, m = (int(v) for v in part.check.split("/")) if part.check else (0, 0)
+                if m >= 4 and k < 0.2 * m:
+                    # the waveform doesn't back this position up: search the stretch on its own
+                    o2 = song_search(xs, master, hlo, hhi)
+                    q2 = [v for _, v in wave_q(xs, master, o2, *in_song(xs, master, o2, hlo, hhi))]
+                    k2 = sum(v >= WAVE_MATCH for v in q2)
+                    if abs(o2 - o) > 0.08 and k2 >= max(3, 0.5 * len(q2)) and k2 >= 2 * k + 2:
+                        o, part.drift_ms, part.refine, ov = refine_offset(xs, master, o2, hlo, hhi)
+                        part.offset = o - aoff
+                        part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms,
+                                                         span=ov[1] - ov[0]))
+                        part.notes.append("moved by waveform check (landmarks pointed %.1f s away)" % (p["off"] - o))
+                    elif k == 0:
+                        part.status, part.offset = "not placed", None
+                        part.reason = REASON_LOW_CONF
+                        part.notes.append("no window of the waveform lines up at song %.1fs" % (o + p["first"]))
             if part.refine.startswith("landmark only"):
                 part.notes.append(part.refine)
         else:
@@ -2005,9 +2113,7 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
                     p.status if p.status == "placed" else md_escape("not placed: %s; %s" % (p.reason, "; ".join(p.notes))),
                     p.check or ""))
         L.append("")
-    doubt = [(c, i, p) for c in clips for i, p in enumerate(c.parts, 1)
-             if p.status == "placed" and p.check and p.repeat_alt is None and
-             int(p.check.split("/")[0]) < 0.7 * int(p.check.split("/")[1])]
+    doubt = doubtful(clips)
     repeats = [(c, i, p) for c in clips for i, p in enumerate(c.parts, 1)
                if p.status == "placed" and p.repeat_alt is not None]
     if repeats:
@@ -2328,7 +2434,8 @@ def main(argv=None):
           audio=sum(len(v) for v in audio_bins.values()),
           unreadable=sum(1 for c in clips if not c.readable),
           restarted=sum(1 for c in clips if c.split),
-          check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None))
+          check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None),
+          worth_a_look=len(doubtful(clips)))
 
 
 def match_all(clips, master, args):
@@ -2619,6 +2726,7 @@ def add_cards(args, state, restrict):
           audio=len(audio_new), unreadable=sum(1 for c in clips if not c.readable),
           restarted=sum(1 for c in clips if c.split),
           check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None),
+          worth_a_look=len(doubtful(clips)),
           moves=moves)
 
 
