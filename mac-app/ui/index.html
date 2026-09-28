@@ -116,6 +116,11 @@ button svg{vertical-align:-2px;margin-right:6px}
 button.newrun{margin-left:auto;display:flex;align-items:center;padding:10px 20px;font-size:14.5px;border-radius:11px;
   color:var(--accent);border:1.5px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
 button.newrun svg{margin-right:7px}
+/* Stop while a run is going: red, boxed like New run, so it can't be missed */
+button.stop{margin-left:auto;display:flex;align-items:center;padding:10px 22px;font-size:14.5px;border-radius:11px;
+  color:var(--bad);border:1.5px solid var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+button.stop svg{margin-right:8px}
+button.stop:hover{background:color-mix(in srgb,var(--bad) 22%,transparent);border-color:var(--bad)}
 button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
 .builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:grid;gap:12px}
 .builds .h{font-size:13px;color:var(--muted);font-weight:600}
@@ -344,7 +349,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <button class="newrun" id="bNew"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New run</button>
   </div>
   <div class="btns" id="btnsRun" hidden>
-    <button class="quiet" id="bCancel">Stop</button>
+    <button class="stop" id="bCancel"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor"/></svg>Stop</button>
   </div>
   <div class="btns" id="btnsErr" hidden>
     <button class="pri" id="bRetry">Try again</button>
