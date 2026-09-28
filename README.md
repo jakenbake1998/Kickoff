@@ -35,7 +35,10 @@ python3 musicsync.py "Day 2/A Cam (Mini LF)/A004" "Day 2/B Cam (FX3)/B003"
 They make one project in the folder that holds them all, or are added to the project that folder
 belongs to when it was set up before. A song file given alongside them is the song.
 
-Everything is written to `Premiere Sync` inside the shoot folder (`-o` to change):
+Everything is written to `Premiere Sync` inside the shoot folder (`-o` to change). `--xml-dir FOLDER`
+puts the project XMLs somewhere else (reports and the project memory stay in `Premiere Sync`);
+`--xml-dir drive` puts them at the top of the drive the footage is on (`/Volumes/26JL02`), which is
+what the Kickoff window does unless you choose a folder:
 
 | File | What it is |
 |---|---|

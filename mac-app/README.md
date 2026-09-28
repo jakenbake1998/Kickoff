@@ -30,6 +30,11 @@ Kickoff has two screens, picked at the top:
 - **Other projects** (commercials and anything else): drop the shoot folder or cards into the list,
   remove any with ×, then **Start**. It sets up bins, Breakups and an empty Edit sequence, no syncing.
 
+**Export XML to** (on both screens) is where the Premiere XML goes. Unless you choose a folder, it goes
+at the top of the drive the footage is on (for footage on `/Volumes/26JL02/...`, in `/Volumes/26JL02`);
+footage on the Mac's own disk keeps it in the `Premiere Sync` folder. Reports stay in `Premiere Sync`
+either way. Kickoff remembers the folder you choose; **Use the drive** goes back to the default.
+
 The window shows each clip as it syncs, then the result: clips synced per camera, laid out along the
 song, and what was set aside and why. **Open in Premiere** opens the project XML in Premiere (and
 selects it in Finder); if Premiere doesn't pick it up, use File > Import on it, then drag the

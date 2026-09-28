@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 
 # ---------------------------------------------------------------- constants
 
@@ -2192,6 +2192,8 @@ def main(argv=None):
     ap.add_argument("--master", help="master song, if it can't be found in the folder automatically")
     ap.add_argument("-o", "--out", help="output folder (default: 'Premiere Sync' inside the folder)")
     ap.add_argument("--name", help="project name (default: the folder name)")
+    ap.add_argument("--xml-dir", help="where the project XMLs go (default: the output folder); 'drive' puts them "
+                                      "at the top of the drive the footage is on. Reports stay in the output folder")
     ap.add_argument("--no-placeholders", dest="placeholders", action="store_false",
                     help="don't put a blank '(empty bin)' still in bins that would otherwise be empty "
                          "(Premiere drops empty bins on XML import)")
@@ -2268,6 +2270,7 @@ def main(argv=None):
     out_given = bool(args.out)
     args.out = os.path.abspath(args.out or os.path.join(args.clips, "Premiere Sync"))
     state, restrict = (None, None) if args.rebuild else load_state(args, out_given)
+    args.xml_out = xml_folder(args)
     project_name = (state or {}).get("project") or args.name or os.path.basename(args.clips.rstrip("/\\")) or "Sync"
 
     for tool in ("ffmpeg", "ffprobe"):
@@ -2394,8 +2397,8 @@ def main(argv=None):
     event("stage", text="Writing the Premiere project")
     proj_file = re.sub(r"[^\w .-]+", "_", project_name) + ".xml"
     write_xml(build_project(project_name, clips, cams, seq_fps, preroll, master_media, audio_bins, args),
-              os.path.join(args.out, proj_file))
-    log("Wrote %s" % proj_file)
+              os.path.join(args.xml_out, proj_file))
+    log("Wrote %s" % os.path.join(args.xml_out, proj_file))
     cam_files = {}
     for letter, cl in cams:
         key = cl[0].camera_key
@@ -2405,7 +2408,7 @@ def main(argv=None):
             model = key.split(" / ")[0]
             fname = re.sub(r"[^\w .-]+", "_", "%s Cam_Sync - %s.xml" % (letter, model))
             write_xml(build_camera_xml(letter, pl, seq_fps, preroll, master_media, args),
-                      os.path.join(args.out, fname))
+                      os.path.join(args.xml_out, fname))
             cam_files[key] = fname
             log("Wrote %s (%d tracks)" % (fname, len(placements_of(pl))))
 
@@ -2427,7 +2430,7 @@ def main(argv=None):
                                clips=len(cl), synced=sum(c.status == "placed" for c in cl), spans=spans))
     aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH
                                 for c in clips if c.status != "placed") if master is not None else {}
-    event("done", project=project_name, out=args.out, xml=os.path.join(args.out, proj_file),
+    event("done", project=project_name, out=args.out, xml=os.path.join(args.xml_out, proj_file),
           report=report, song_duration=round(master.duration, 2) if master is not None else 0,
           mode=args.mode, clips=len(clips), synced=len(placed), cameras=cam_events,
           set_aside=[dict(reason=r, count=n) for r, n in collections.Counter(aside).most_common()],
@@ -2511,6 +2514,32 @@ PREROLL_MIN = 10
 
 def rel_key(path, root):
     return os.path.relpath(path, root).replace("\\", "/")
+
+
+def xml_folder(args):
+    """Where the project XMLs are written: --xml-dir, or with 'drive' the top of the drive the
+    footage is on (/Volumes/<drive>); the output folder when not given, or when the footage is on
+    the Mac's own disk."""
+    d = args.xml_dir
+    if not d:
+        return args.out
+    if d == "drive":
+        parts = os.path.abspath(args.clips).split(os.sep)
+        if len(parts) > 2 and parts[1] == "Volumes":
+            d = os.sep.join(parts[:3])
+        else:
+            log("The footage is on this Mac's own disk: the XML goes in %s" % args.out)
+            return args.out
+    d = os.path.abspath(os.path.expanduser(d))
+    try:
+        os.makedirs(d, exist_ok=True)
+        test = os.path.join(d, ".kickoff-write-test")
+        open(test, "w").close()
+        os.remove(test)
+    except OSError as e:
+        log("Can't write the XML to %s (%s): it goes in %s" % (d, e.strerror or e, args.out))
+        return args.out
+    return d
 
 
 def inside(p, folders):
@@ -2698,7 +2727,7 @@ def add_cards(args, state, restrict):
     fname = re.sub(r"[^\w .,()-]+", "_", "%s - Add %d (%s).xml" % (name, n, what or "audio"))[:150]
     if not fname.endswith(".xml"):
         fname = fname[:146] + ".xml"
-    xml_path = os.path.join(args.out, fname)
+    xml_path = os.path.join(args.xml_out, fname)
     write_xml(root, xml_path)
     log("Wrote %s" % fname)
     if master is not None:

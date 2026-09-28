@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var updateNote = ""
     var mode = "auto"                     // auto / music / setup, from the switch in the window
     var rebuild = false                   // "start over" box: ignore earlier runs on the folder
+    var xmlDir = "drive"                  // "Export XML to": a folder, or "drive" (top of the footage's drive)
 
     func applicationDidFinishLaunching(_ note: Notification) {
         buildMenu()
@@ -172,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "run":
             let paths = body["paths"] as? [String] ?? (body["folder"] as? String).map { [$0] } ?? []
             if let m = body["mode"] as? String { mode = m }
+            xmlDir = body["xmlDir"] as? String ?? "drive"
             if !paths.isEmpty { run(paths) }
         case "history-add":
             if let entry = body["entry"] as? [String: Any] {
@@ -241,12 +243,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard proc?.isRunning != true else { NSSound.beep(); return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = target != "song"
-        panel.canChooseFiles = target != "footage"
-        if target != "footage" { panel.allowedContentTypes = [.audio, .folder] }
-        panel.allowsMultipleSelection = target != "song"
-        panel.prompt = "Add"
+        panel.canChooseFiles = target == "song" || target == "any"
+        if panel.canChooseFiles { panel.allowedContentTypes = [.audio, .folder] }
+        panel.allowsMultipleSelection = target == "footage" || target == "any"
+        panel.canCreateDirectories = target == "export"
+        panel.prompt = target == "export" ? "Export Here" : "Add"
         panel.message = target == "song" ? "Choose the song"
             : target == "footage" ? "Choose the footage: the shoot folder, a day, or cards"
+            : target == "export" ? "Choose the folder the Premiere XML goes in"
             : "Choose the shoot folder or cards (and the song if it isn't in the folder)"
         panel.beginSheetModal(for: window) { [weak self] result in
             guard let self = self, result == .OK else { return }
@@ -271,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         env["PYTHONUNBUFFERED"] = "1"
+        env["KICKOFF_XML_DIR"] = xmlDir
         p.environment = env
         let out = Pipe(), err = Pipe()
         p.standardOutput = out

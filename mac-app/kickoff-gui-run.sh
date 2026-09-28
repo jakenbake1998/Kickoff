@@ -24,4 +24,8 @@ else
 fi
 EXTRA=()
 [ "$HOW" = "rebuild" ] && EXTRA=(--rebuild)
+# where the XML goes, from the window: a folder, or "drive" for the top of the footage's drive
+if [ -n "$KICKOFF_XML_DIR" ] && grep -q -- '--xml-dir' "$SUPPORT/musicsync.py"; then
+  EXTRA+=(--xml-dir "$KICKOFF_XML_DIR")
+fi
 exec "$PY" "$SUPPORT/musicsync.py" --events --mode "${MODE:-auto}" "${EXTRA[@]}" -- "$@"

@@ -137,6 +137,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .jobn{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-bottom:-4px}
 @media (max-width:560px){.job{grid-template-columns:minmax(0,1fr) 30px}.job .syncto{grid-column:1;flex-direction:row;gap:6px}.job .box.foot{grid-column:1}.job .rowx{grid-row:1;grid-column:2}}
 .batch{display:grid;gap:8px}
+.export{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 8px 8px 14px}
+.export .k{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;flex:none}
+.export .v{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.export button{padding:5px 11px;font-size:12.5px}
+.export button.quiet{margin-left:0}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .tabs button{padding:5px 12px;font-size:12.5px}
 
@@ -204,6 +209,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <div class="modes" id="modes">
     <p id="modeNote"></p>
+    <div class="export">
+      <span class="k">Export XML to</span><span class="v" id="exportPath"></span>
+      <button id="bExport">Choose…</button><button class="quiet" id="bExportReset" hidden>Use the drive</button>
+    </div>
     <label class="check"><input type="checkbox" id="rebuild"> Start over: rebuild the whole project, even if this folder was run before</label>
   </div>
 
@@ -306,6 +315,15 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   var state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
   var queue = [];                  // Other projects: folders waiting for Start
   var jobs = [{ song: null, footage: [] }];   // Music video: each song and the footage it syncs to
+  var xmlDir = "";                 // "" = the top of the drive the footage is on
+  try { xmlDir = localStorage.getItem("kickoff-xml-dir") || ""; } catch (e) {}
+  function setXmlDir(d) {
+    xmlDir = d || "";
+    try { localStorage.setItem("kickoff-xml-dir", xmlDir); } catch (e) {}
+    $("exportPath").textContent = xmlDir || "The top of the drive the footage is on";
+    $("exportPath").title = xmlDir || "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the Premiere Sync folder inside it";
+    $("bExportReset").hidden = !xmlDir;
+  }
   var batch = null;                // the runs Start began: { runs: [{paths, mode, name}], i, ids }
   var history = [];
 
@@ -560,7 +578,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
   function runNext() {
     var r = batch.runs[batch.i];
-    post({ cmd: "run", paths: r.paths, mode: r.mode, folder: r.paths.filter(function (p) { return !isSong(p); })[0] });
+    post({ cmd: "run", paths: r.paths, mode: r.mode, xmlDir: xmlDir || "drive",
+           folder: r.paths.filter(function (p) { return !isSong(p); })[0] });
   }
 
   function runOf() {
@@ -1047,6 +1066,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     runNext();
   });
   $("bStart").addEventListener("click", start);
+  $("bExport").addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
+  $("bExportReset").addEventListener("click", function () { setXmlDir(""); });
   $("bAddJob").addEventListener("click", function () { if (!running()) { jobs.push({ song: null, footage: [] }); renderStage(); } });
   $("bClear").addEventListener("click", function () { queue = []; renderStage(); });
   $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
@@ -1058,7 +1079,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     exit: onExit,
     add: function (paths) { add(paths); },
     drop: drop,
-    picked: function (paths, target, row) { add(paths, target, row); },
+    picked: function (paths, target, row) { if (target === "export") setXmlDir(paths[0]); else add(paths, target, row); },
     history: function (list) { history = Array.isArray(list) ? list : []; renderHistory(); },
     dragging: function (on, x, y) {
       if (running()) return;
@@ -1075,6 +1096,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     reset: reset
   };
   setMode(mode);
+  setXmlDir(xmlDir);
   showView(mode);
   renderHistory();
   post({ cmd: "ready" });
