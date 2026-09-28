@@ -993,7 +993,7 @@ def stray_song(xs, master, st, h, t, lo, hi, known):
         return gcc_phat_offset(xs, master.audio, o, w, w + 1.0, search=0.06, min_len=0.9)[1]
     best = None
     for o in cands:
-        if any(abs(o - k) < 0.3 for k in known):
+        if any(abs(o - k) < 0.08 for k in known):     # beyond that, windows at k miss it (search 0.06)
             continue
         wins = [w for w in np.arange(lo, hi - 1.0 + 1e-6, 0.5)
                 if q1(o, w) >= WAVE_MATCH and all(q1(o, w) >= 1.5 * q1(k, w) for k in known)]

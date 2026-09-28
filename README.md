@@ -126,8 +126,9 @@ the placement off.
 
 Tested with `tests/stress_passes.py 300`: 300 random single, restarted, paused, jumped and
 three-pass takes (600 passes, 3 to 15 dB signal-to-noise, with and without a live drummer). No pass
-was placed at a wrong position. 544 were placed exactly and 55 chorus-only passes at a flagged
-chorus copy. One pass was left unplaced. `tests/long_take.py` builds 20 to 27 minute takes with 12
+was placed at a wrong position and none was missed: 545 were placed exactly and 55 chorus-only
+passes at a flagged chorus copy, including a restart that landed only 0.1 s from where the song
+had been. `tests/long_take.py` builds 20 to 27 minute takes with 12
 plays of the song and 30 to 150 seconds of the drummer and room noise between them: on
 ten of them, all 120 plays were placed exactly. The research thread's independent generator
 (`sync-research/crosscheck_builder.py 60 11`, different layouts, rooms and scoring) also finds no
