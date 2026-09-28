@@ -1357,7 +1357,7 @@ class Xmeml:
                 sub(ln, "trackindex", track_of[id(other)])
                 sub(ln, "clipindex", index_of[id(other)])
 
-    def sequence(self, parent, name, fps, width, height, start_tc_frame, entries, label=None):
+    def sequence(self, parent, name, fps, width, height, start_tc_frame, entries, label=None, fit="fill"):
         """entries: dicts with media, start, vtrack (or None), atrack (or None), aenabled."""
         seq = sub(parent, "sequence", id=self.uid("sequence"))
         sub(seq, "uuid", "musicsync-%s-%s" % (datetime.datetime.now().strftime("%Y%m%d%H%M%S"), self.n))
@@ -1410,7 +1410,7 @@ class Xmeml:
             if e["vtrack"]:
                 ci = self.clipitem(vtracks[e["vtrack"] - 1], self.uid("clipitem"), m, "video",
                                    e["start"], frames, fps, label=e.get("label"),
-                                   scale=fill_scale(m, width, height), speed=sp, src_in=src_in,
+                                   scale=fill_scale(m, width, height, fit), speed=sp, src_in=src_in,
                                    name=e.get("name"))
                 count["v", e["vtrack"]] += 1
                 track_of[id(ci)], index_of[id(ci)] = e["vtrack"], count["v", e["vtrack"]]
@@ -1475,11 +1475,12 @@ def add_speed(clipitem, percent, mediatype):
         sub(p, "value", val)
 
 
-def fill_scale(m, width, height):
-    """Scale (%) that makes a clip fill the sequence frame, cropping the overflow."""
+def fill_scale(m, width, height, fit="fill"):
+    """Scale (%) that makes a clip fill the sequence frame, cropping the overflow ("fill"), or fit
+    inside it whole ("fit", Premiere's Scale to Frame Size: a 4480x3096 open gate in UHD is 69.77)."""
     if not m.has_video or not m.width or not m.height:
         return None
-    return 100.0 * max(width / m.width, height / m.height)
+    return 100.0 * (max if fit == "fill" else min)(width / m.width, height / m.height)
 
 
 def first_format(clips, fallback_fps):
@@ -1606,9 +1607,9 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             xw.sequence(breakup, "%s Cam_Breakup" % letter, fps, w, h, tc, entries, label)
         placed = placements_of(cl)
         if placed:
-            (w, h), _ = first_format([c for c, _ in placed], seq_fps)
+            (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label)
-            seq = xw.sequence(syncb, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label)
+            seq = xw.sequence(syncb, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label, fit="fit")
             nests.append((letter, seq, (w, h), tc))
     maybe_empty(breakup, ["Sequence", "Breakup"], bool(len(breakup)))
     maybe_empty(syncb, ["Sequence", "Sync"], bool(nests))
@@ -1659,10 +1660,10 @@ def build_camera_xml(letter, clips, seq_fps, preroll, master_media, args):
     xw = Xmeml(args.path_maps)
     root = ET.Element("xmeml", version="4")
     pl = placements_of(clips)
-    (w, h), _ = first_format([c for c, _ in pl], seq_fps)
+    (w, h) = args.sync_size or first_format([c for c, _ in pl], seq_fps)[0]
     label = camera_label(letter)
     entries, tc = sync_entries(pl, seq_fps, preroll, master_media, args, label)
-    xw.sequence(root, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label)
+    xw.sequence(root, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label, fit="fit")
     return root
 
 
@@ -1897,6 +1898,9 @@ def main(argv=None):
     ap.add_argument("--scratch-audio", choices=["off", "disabled", "on"], default="disabled",
                     help="put each clip's scratch audio on its own audio track (default: present but disabled)")
     ap.add_argument("--no-master-audio", action="store_true", help="don't put the master song on A1")
+    ap.add_argument("--sync-size", default="3840x2160", metavar="WxH",
+                    help="frame size of the Sync and Edit sequences, every clip scaled to fit it "
+                         "(default 3840x2160; 'first' uses the camera's first clip, like Breakup)")
     ap.add_argument("--set-aside-repeats", dest="place_repeats", action="store_false",
                     help="set aside clips that fit two identical copies of a section (a pasted chorus) "
                          "instead of placing them at the first copy, marked (check chorus)")
@@ -1906,6 +1910,13 @@ def main(argv=None):
     ap.add_argument("-j", "--jobs", type=int, default=max(1, min(8, os.cpu_count() or 2)))
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
+    if args.sync_size == "first":
+        args.sync_size = None
+    else:
+        m = re.match(r"^(\d+)x(\d+)$", args.sync_size)
+        if not m:
+            ap.error("--sync-size needs WxH, e.g. 3840x2160, or 'first'")
+        args.sync_size = (int(m.group(1)), int(m.group(2)))
     if len(args.paths) > 2:
         ap.error("give a folder, or a master song and a folder")
     if len(args.paths) == 2:

@@ -53,8 +53,11 @@ Premiere's XML import drops empty bins, so a bin that would be empty gets a blan
 Label colors: A Cam Iris, B Cam Mango, C Cam Rose, then Caribbean, Forest, Lavender, Cerulean,
 Yellow... applied to that camera's bin, its clips and both of its sequences.
 
-Breakup and Sync sequences take the frame size of the camera's first clip (filename order); clips
-with a different size are scaled to fill the frame.
+Sync sequences (and the Edit sequence) are 3840x2160, with every clip scaled to fit the frame the
+way Premiere's Scale to Frame Size does: 1080p at 200%, 3200x1800 at 120%, a 4480x3096 open gate
+at 69.77% (`--sync-size WxH` to change, `--sync-size first` to use the camera's first clip).
+Breakup sequences take the frame size of the camera's first clip (filename order); clips with a
+different size are scaled to fill that frame.
 
 Sync sequences: the song's first sample sits at **01:00:00:00** in every one, so they line up
 when nested. V1..Vn are the synced clips in filename order (`--track-order offset` sorts by song
@@ -194,6 +197,7 @@ A, B, C... in order. `--group-by model` or `--group-by folder` forces one rule.
 --per-camera          also write each sync sequence as its own XML
 --no-master-audio     leave the song off A1
 --set-aside-repeats   don't place chorus-only clips at the first chorus
+--sync-size 3840x2160 frame size of the Sync and Edit sequences (clips scaled to fit)
 --path-map OLD=NEW    rewrite media paths in the XML (repeatable)
 -j 8                  parallel files; use -j 2 when reading from a single spinning drive
 ```
