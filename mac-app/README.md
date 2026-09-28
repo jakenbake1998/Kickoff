@@ -42,6 +42,11 @@ at the top of the drive the footage is on (for footage on `/Volumes/26JL02/...`,
 footage on the Mac's own disk keeps it in the `Kickoff Exports` folder. Reports stay in `Kickoff Exports`
 either way (shoots set up before this change keep their old `Premiere Sync` folder). Kickoff remembers the folder you choose; **Use the drive** goes back to the default.
 
+When a run ends, a green **Success** panel says how many clips synced, how well (lined up cleanly,
+worth a look, set aside), where the XML was saved and how long it took. **Open XML folder** opens
+that folder with the XML selected; **New run** clears the window for the next one. If nothing is new
+since the last run, **Start over** rebuilds the project from scratch.
+
 The window shows each clip as it syncs, then the result: clips synced per camera, laid out along the
 song, and what was set aside and why. **Open in Premiere** opens the project XML in Premiere (and
 selects it in Finder); if Premiere doesn't pick it up, use File > Import on it, then drag the
@@ -53,7 +58,7 @@ On a shoot, run the same footage again (or just the new card's folder inside it)
 the new cards: a small XML to import into your open project, and a list in the window of where each
 new bin and sequence goes. Tick **Start over** to rebuild the whole project instead.
 
-**History** (the third tab) lists every run by day: when, what went in, how it turned out (clips synced,
+**History** (the button at the top right, apart from the two screens) lists every run by day: when, what went in, how it turned out (clips synced,
 cameras, how long it took, or the error), with buttons to open that project in Premiere, open its
 report, show it in Finder or run it again. It's kept in `~/Library/Application Support/Kickoff/history.json`.
 
