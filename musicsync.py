@@ -1227,7 +1227,8 @@ def place_on(clip, master, st, cand, multi):
     rescued = None
     if (A < st.min_hashes or ev["strength"] < 0.25 or conf < st.threshold) and xs is not None and speed == 1.0:
         # too few landmarks to be sure (a short take, a sparse outro): let the waveform decide
-        rescued = waveform_rescue(xs, master, [coarse] + ([ev["runner_up_offset"]] if R else []))
+        rescued = waveform_rescue(xs, master, [coarse] + ([ev["runner_up_offset"]] if R else []),
+                                  lead=A >= st.min_hashes and ev["strength"] >= 0.25)
     if rescued is not None:
         coarse, n_ok, n, ratio = rescued
         clip.notes.append(("placed by waveform: phase peak %.1fx the next best (landmarks %d vs %d by chance)"
@@ -2058,7 +2059,7 @@ def phase_gap(xs, master, st, h, t, lo, hi, known, chunk, alone_only=False, min_
 RESCUE_WIN_S, RESCUE_HOP_S = 20.0, 5.0
 
 
-def waveform_rescue(xs, master, guesses):
+def waveform_rescue(xs, master, guesses, lead=False):
     """Where the landmarks are too few to decide (a 20 s take, an outro that fingerprints badly),
     compare the waveform: at each landmark guess, and at the best position of a phase correlation of
     the whole clip against the whole song. Returns (offset, windows that line up, windows) when one
@@ -2088,6 +2089,24 @@ def waveform_rescue(xs, master, guesses):
             o, ratio = best
             q = [v for _, v in wave_q(xs, master, o, *in_song(xs, master, o, 0.0, n))]
             return o, sum(v >= WAVE_MATCH for v in q), len(q), ratio
+    # (only with `lead`: the landmarks found enough to point somewhere, just not surely)
+    # a take whose song is too faint to peak over 20 s at once (A Cam's mic under a loud room) can
+    # still peak on the landmarks' best guess in 10 s windows: three in a row there, each
+    # PHASE_AGREE clear, is more than chance lines up (chance stays near 1.0-1.25 per window)
+    if lead and guesses and n >= PHASE_WIN_S + (RUN_WINS - 1) * PHASE_HOP_S:
+        run, best = [], None
+        for a in np.arange(0.0, n - PHASE_WIN_S + 1e-6, PHASE_HOP_S):
+            o, ratio = phase_search(xs, master, a, a + PHASE_WIN_S)
+            if o is not None and abs(o - guesses[0]) < PHASE_FRAME_S and ratio >= PHASE_AGREE:
+                run.append((o, ratio))
+                if len(run) >= RUN_WINS and (best is None or len(run) > len(best)):
+                    best = list(run)
+            else:
+                run = []
+        if best is not None:
+            o = float(np.median([v[0] for v in best]))
+            q = [v for _, v in wave_q(xs, master, o, *in_song(xs, master, o, 0.0, n))]
+            return o, sum(v >= WAVE_MATCH for v in q), len(q), min(v[1] for v in best)
     cands = []
     whole = song_search(xs, master, 0.0, n)
     for o in list(guesses) + [whole]:
