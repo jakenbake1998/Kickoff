@@ -39,7 +39,7 @@ Swift changes: they can only compile on a Mac. Keep them small, and when possibl
 The full list is in the `jake-editing-rules` skill. The ones code changes most often break:
 - Camera folder names are authoritative. "C Cam (Action 4.1)" means letter C and exactly that bin name, whatever the metadata says.
 - Clips always scale to FILL the frame with no black edges, never "Scale to Frame Size".
-- Sync sequences are 3840x2160, one take per video track, and the song starts at 01:00:00:00. The Edit sequence uses plain nests (not multicam source sequences) with multicam enabled.
+- Sync sequences are 3840x2160 and the song starts at 01:00:00:00. "A Cam_Synced" (Sequence > Sync > Synced) has one take per video track; "A Cam_Synced_Condensed" (Sync > Synced Condensed) packs the same clips onto as few tracks as possible without cutting any. CamsNested and the Edit sequence nest the condensed ones as plain nests (not multicam source sequences) with multicam enabled.
 - Label colors: A Iris, B Mango, C Rose, then any other distinct colors.
 - Camera audio stays audible: keep every channel, with the synced scratch channel on top.
 - The project XML goes where Jake picks in the window ("Export XML to"). If he picks nothing, it goes at the top of the drive the footage is on (`/Volumes/<drive>`, the window passes `--xml-dir drive`). Footage on the Mac's own disk falls back to `Kickoff Exports`.

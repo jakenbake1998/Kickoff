@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.7"
+VERSION = "0.5.8"
 
 # ---------------------------------------------------------------- constants
 
@@ -2019,6 +2019,27 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song
     return entries, start_tc
 
 
+def condense(entries, fps):
+    """The same clips packed onto as few video tracks as possible (fewer feeds in multicam): each,
+    in timeline order, drops to the lowest track that's free for its whole length. Nothing is cut
+    or moved in time; its scratch audio follows it to the matching audio track."""
+    out, ends = [], []
+    for e in sorted(entries, key=lambda e: (e["vtrack"] is None, e["start"], e.get("vtrack") or 0)):
+        if not e.get("vtrack"):
+            out.append(e)
+            continue
+        end = e["start"] + entry_span(e, fps)[1]
+        k = next((i for i, t in enumerate(ends) if t <= e["start"]), None)
+        if k is None:
+            k = len(ends)
+            ends.append(end)
+        else:
+            ends[k] = end
+        d = e["atrack"] - e["vtrack"] if e.get("atrack") else None
+        out.append(dict(e, vtrack=k + 1, atrack=(k + 1 + d) if d is not None else None))
+    return out
+
+
 def stringout_entries(clips, fps, label):
     """Breakup layout: every clip of the camera back to back on V1/A1, in filename order."""
     entries, pos = [], 0
@@ -2079,6 +2100,10 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
     breakup = bin_(seqs, "Breakup")
     setup_only = getattr(args, "mode", "music") == "setup"          # no song: no Sync sequences
     syncb = bin_(seqs, "Sync") if not setup_only else None
+    # every take on its own track in Sync > Synced; the same packed onto as few tracks as can hold
+    # them in Sync > Synced Condensed, which is what CamsNested and Edit nest (fewer multicam feeds)
+    syncedb = bin_(syncb, "Synced") if syncb is not None else None
+    condb = bin_(syncb, "Synced Condensed") if syncb is not None else None
     nests = []
     for letter, cl in cams:
         label = camera_label(letter)
@@ -2091,17 +2116,20 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         if placed:
             (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label)
-            seq = xw.sequence(syncb, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label)
+            xw.sequence(syncedb, "%s Cam_Synced" % letter, seq_fps, w, h, tc, entries, label)
+            seq = xw.sequence(condb, "%s Cam_Synced_Condensed" % letter, seq_fps, w, h, tc,
+                              condense(entries, seq_fps), label)
             nests.append((letter, seq, (w, h), tc))
     maybe_empty(breakup, ["Sequence", "Breakup"], bool(len(breakup)))
     if syncb is not None:
-        maybe_empty(syncb, ["Sequence", "Sync"], bool(nests))
+        maybe_empty(syncedb, ["Sequence", "Sync", "Synced"], bool(nests))
+        maybe_empty(condb, ["Sequence", "Sync", "Synced Condensed"], bool(nests))
 
     edit = bin_(seqs, "Edit")
     for sub_name in ("Working", "Past"):
         maybe_empty(bin_(edit, sub_name), ["Sequence", "Edit", sub_name], False)
     if nests:
-        # every camera's sync sequence nested on its own track (A on V1, B on V2...), song on A1:
+        # every camera's condensed sync sequence nested on its own track (A on V1, B on V2...), song on A1:
         # "<name>_CamsNested" in the Sync bin, and the same again as the Edit sequence Jake
         # cuts in. (Multi-Camera on the nests is a switch XML can't carry: select them > Enable.)
         (w, h), tc = nests[0][2], nests[0][3]
@@ -2158,7 +2186,7 @@ def build_camera_xml(letter, clips, seq_fps, preroll, master_media, args):
     (w, h) = args.sync_size or first_format([c for c, _ in pl], seq_fps)[0]
     label = camera_label(letter)
     entries, tc = sync_entries(pl, seq_fps, preroll, master_media, args, label)
-    xw.sequence(root, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label)
+    xw.sequence(root, "%s Cam_Synced" % letter, seq_fps, w, h, tc, entries, label)
     return root
 
 
@@ -2608,7 +2636,7 @@ def main(argv=None):
         pl = [c for c in cl if c.status == "placed"]
         if args.per_camera and pl:
             model = cam_bin_name(letter, cl)[len(letter) + 5:].strip("()") or key.split(" / ")[0]
-            fname = re.sub(r"[^\w .-]+", "_", "%s Cam_Sync - %s.xml" % (letter, model))
+            fname = re.sub(r"[^\w .-]+", "_", "%s Cam_Synced - %s.xml" % (letter, model))
             write_xml(build_camera_xml(letter, pl, seq_fps, preroll, master_media, args),
                       os.path.join(args.xml_out, fname))
             cam_files[key] = fname
@@ -2998,10 +3026,16 @@ def build_add_xml(name, cams, seq_fps, preroll, master_media, audio_bins, args):
         if placed:
             (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label, song=new_cam)
-            xw.sequence(top, "%s Cam_Sync%s" % (letter, suffix), seq_fps, w, h, tc, entries, label)
-            moves.append(["%s Cam_Sync%s" % (letter, suffix),
-                          "Sequence > Sync, then nest it in the Edit sequence on a new track" if new_cam else
-                          "Sequence > Sync, then onto a new top track of %s Cam_Sync, at its start" % letter])
+            xw.sequence(top, "%s Cam_Synced%s" % (letter, suffix), seq_fps, w, h, tc, entries, label)
+            moves.append(["%s Cam_Synced%s" % (letter, suffix),
+                          "Sequence > Sync > Synced, then onto a new top track of %s Cam_Synced, at its start"
+                          % letter if not new_cam else "Sequence > Sync > Synced"])
+            xw.sequence(top, "%s Cam_Synced_Condensed%s" % (letter, suffix), seq_fps, w, h, tc,
+                        condense(entries, seq_fps), label)
+            moves.append(["%s Cam_Synced_Condensed%s" % (letter, suffix),
+                          "Sequence > Sync > Synced Condensed, then nest it in the Edit sequence on a new track"
+                          if new_cam else "Sequence > Sync > Synced Condensed, then onto a new top track of "
+                          "%s Cam_Synced_Condensed, at its start" % letter])
     for bname in ("Music", "SFX", "Captured"):
         if audio_bins.get(bname):
             b = bin_(top, "%s (new)" % bname)

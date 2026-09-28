@@ -116,6 +116,11 @@ button svg{vertical-align:-2px;margin-right:6px}
 button.newrun{margin-left:auto;display:flex;align-items:center;padding:10px 20px;font-size:14.5px;border-radius:11px;
   color:var(--accent);border:1.5px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
 button.newrun svg{margin-right:7px}
+/* Stop while a run is going: red, boxed like New run, so it can't be missed */
+button.stop{margin-left:auto;display:flex;align-items:center;padding:10px 22px;font-size:14.5px;border-radius:11px;
+  color:var(--bad);border:1.5px solid var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+button.stop svg{margin-right:8px}
+button.stop:hover{background:color-mix(in srgb,var(--bad) 22%,transparent);border-color:var(--bad)}
 button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
 .builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:grid;gap:12px}
 .builds .h{font-size:13px;color:var(--muted);font-weight:600}
@@ -289,13 +294,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         <div class="tb"><i class="fold"></i>Sequence</div>
         <div class="tb l2"><i class="fold"></i>Breakup</div>
         <div class="tb l2" data-for="music"><i class="fold"></i>Sync</div>
+        <div class="tc l2 dim" data-for="music" style="padding-left:36px">Synced &middot; Synced Condensed</div>
         <div class="tb l2"><i class="fold"></i>Edit</div>
         <div class="tb"><i class="fold"></i>Audio</div>
         <div class="tc l2 dim">Music &middot; SFX &middot; Captured</div>
       </div>
       <ul class="steps">
         <li><b>A bin for every camera.</b> Named after your camera folders, so &ldquo;B Cam (FX3)&rdquo; stays B Cam (FX3), with its own label color.</li>
-        <li data-for="music"><b>Every clip lined up to the song.</b> One Sync sequence per camera, each take on its own track at the right spot. Takes where the song restarted are split into passes.</li>
+        <li data-for="music"><b>Every clip lined up to the song.</b> Per camera, a Synced sequence with each take on its own track at the right spot, and a Condensed copy packed onto as few tracks as possible for multicam. Takes where the song restarted are split into passes.</li>
         <li><b>A Breakup per camera.</b> All of that camera&rsquo;s clips back to back, with every audio channel, to scrub through.</li>
         <li data-for="setup"><b>No syncing.</b> Bins, Breakups and an empty Edit sequence, with audio sorted into Music, SFX and Captured.</li>
         <li><b>Ready to cut.</b> A 4K Edit sequence, and every clip scaled to fill the frame, so no black edges.</li>
@@ -344,7 +350,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <button class="newrun" id="bNew"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New run</button>
   </div>
   <div class="btns" id="btnsRun" hidden>
-    <button class="quiet" id="bCancel">Stop</button>
+    <button class="stop" id="bCancel"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor"/></svg>Stop</button>
   </div>
   <div class="btns" id="btnsErr" hidden>
     <button class="pri" id="bRetry">Try again</button>

@@ -70,11 +70,14 @@ open. Premiere puts it in a bin of its own, and the window (and the log) lists w
 
 - `A Cam Card 2`: drag it into Footage > A Cam as a bin of its own. The clips keep A Cam's label color.
 - `A Cam_Breakup Card 2`: Sequence > Breakup.
-- `A Cam_Sync Card 2`: the new card's synced clips, starting at the same timecode as `A Cam_Sync`.
-  Drag it onto a new top track of `A Cam_Sync` at its start. Because `A Cam_Sync` is already nested
-  in the Edit sequence, the new clips show up there too.
-- A camera that wasn't in the project before comes in whole (`C Cam (GoPro HERO9)`, `C Cam_Sync`
-  with the song, `C Cam_Breakup`); nest its Sync sequence in the Edit sequence.
+- `A Cam_Synced Card 2`: the new card's synced clips, starting at the same timecode as `A Cam_Synced`.
+  Drag it onto a new top track of `A Cam_Synced` at its start.
+- `A Cam_Synced_Condensed Card 2`: the same, packed onto as few tracks as possible. Drag it onto a new
+  top track of `A Cam_Synced_Condensed` at its start. Because that one is nested in the Edit sequence,
+  the new clips show up there too.
+- A camera that wasn't in the project before comes in whole (`C Cam (GoPro HERO9)`, `C Cam_Synced`
+  and `C Cam_Synced_Condensed` with the song, `C Cam_Breakup`); nest its condensed sequence in the
+  Edit sequence.
 - New sound files come in as `Captured (new)` etc.
 
 Cameras keep their letters and colors across runs. Every Sync sequence starts at least 10 s before
@@ -93,8 +96,10 @@ to the top of the project. The tree is:
 Adjustment Layers                    (placeholder; Temp Color can't come through XML)
 Footage / A Cam (Mini LF), B Cam (FX3), ...   every clip of that camera, bin and clips label colored
 Sequence / Breakup   "A Cam_Breakup" ...: every clip of the camera back to back in file order
-         / Sync      "<Project>_CamsNested": each Cam_Sync nested on V1 (A), V2 (B)..., song on A1
-                     "A Cam_Sync" ...: every synced clip on its own video track
+         / Sync      "<Project>_CamsNested": each condensed sequence nested on V1 (A), V2 (B)..., song on A1
+                / Synced              "A Cam_Synced" ...: every synced clip on its own video track
+                / Synced Condensed    "A Cam_Synced_Condensed" ...: the same clips packed onto as few
+                                      tracks as possible (none cut or moved), so multicam has fewer feeds
          / Edit      "<Project>_Edit": a copy of <Project>_CamsNested, to cut in
                 / Working, Past      (placeholders)
 Audio / Music        the song (+ anything else in a Music folder)
@@ -120,7 +125,7 @@ when nested. V1..Vn are the synced clips in filename order (`--track-order offse
 position). A1 is the song. A2.. are each clip's scratch audio, imported **disabled** so you can
 check sync by enabling one (`--scratch-audio off` leaves them out, `on` enables them).
 
-Edit sequence: the Cam_Sync sequences are plain nests. XML can't switch multicam on, so after
+Edit sequence: the Cam_Synced_Condensed sequences are plain nests. XML can't switch multicam on, so after
 import select the nests in the timeline and right-click > Multi-Camera > Enable.
 
 **Not possible from XML:** the `Temp Color` adjustment layer and the multicam switch.
