@@ -374,7 +374,8 @@ def pick_master(folder, audio_files):
         dirs = [d.lower() for d in rel.replace("\\", "/").split("/")[:-1]]
         name = os.path.basename(p)
         sc = 0
-        if any(d in ("music", "song", "songs", "master", "playback", "track") for d in dirs):
+        in_music = any(d in ("music", "song", "songs", "master", "playback", "track") for d in dirs)
+        if in_music:
             sc += 4
         elif SONG_HINT.search(rel):
             sc += 2
@@ -382,7 +383,8 @@ def pick_master(folder, audio_files):
             sc += 1
         if NOT_SONG.search(rel):
             sc -= 5
-        if any(d in ("sfx", "sound effects", "sound", "audio", "captured") for d in dirs):
+        # Audio/Music/song.wav is still the song: only a generic audio folder without a music one counts against
+        if not in_music and any(d in ("sfx", "sound effects", "sound", "audio", "captured") for d in dirs):
             sc -= 3
         return sc
     scored = sorted(((score(p), p) for p in audio_files), key=lambda sp: -sp[0])
