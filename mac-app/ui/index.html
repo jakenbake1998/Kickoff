@@ -209,9 +209,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .chips{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;max-width:100%}
 .chipf{display:inline-flex;align-items:center;gap:2px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 2px 2px 8px;font-size:12.5px;font-weight:600}
 .chipf span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chipf button,.box .clr{border:0;background:none;color:var(--muted);padding:0 6px;font-size:14px;line-height:1.3;border-radius:4px}
-.chipf button:hover,.box .clr:hover{color:var(--ink);background:var(--line)}
-.box .clr{font-size:12px;font-weight:600;margin-top:2px}
+.chipf button{border:0;background:none;color:var(--muted);padding:0 6px;font-size:14px;line-height:1.3;border-radius:4px}
+.chipf button:hover{color:var(--ink);background:var(--line)}
+/* the X in a filled box's corner: empties that box */
+.box{position:relative}
+.box .bx{position:absolute;top:8px;right:8px;width:28px;height:28px;padding:0;display:grid;place-items:center;border:0;background:none;color:var(--muted);border-radius:7px}
+.box .bx:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.box .bx svg{margin:0}
 .syncto{display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--accent);font-size:13.5px;font-weight:700;gap:4px;padding:0 2px}
 .job .rowx{border:0;background:none;color:var(--muted);font-size:17px;padding:0;border-radius:6px;align-self:center;height:30px}
 .job .rowx:hover{color:var(--ink);background:var(--line)}
@@ -696,6 +700,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     else add(paths);
   }
 
+  var ICON_X = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  function boxX(what, clear) {            // the corner X of a filled box
+    var x = document.createElement("button");
+    x.className = "bx"; x.title = "Remove"; x.setAttribute("aria-label", "Remove the " + what);
+    x.innerHTML = ICON_X;
+    x.addEventListener("click", function (ev) { ev.stopPropagation(); if (running()) return; clear(); renderStage(); });
+    return x;
+  }
   function boxKey(ev, target, i) {        // Enter or Space on a box: the same as clicking it
     if (ev.target !== ev.currentTarget || (ev.key !== "Enter" && ev.key !== " ")) return;
     ev.preventDefault();
@@ -727,12 +739,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       sub.textContent = j.song ? parent(j.song) : j.footage.length ? "or leave it: Kickoff looks in the footage's Music folder"
         : "WAV, AIFF, MP3 or any other audio file";
       sb.append(v, sub);
-      if (j.song) {
-        var c = document.createElement("button");
-        c.className = "clr"; c.textContent = "Remove";
-        c.addEventListener("click", function (ev) { ev.stopPropagation(); j.song = null; renderStage(); });
-        sb.appendChild(c);
-      }
+      if (j.song) sb.appendChild(boxX("song", function () { j.song = null; }));
       sb.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "song", row: i }); });
       sb.addEventListener("keydown", function (ev) { boxKey(ev, "song", i); });
       // sync to
@@ -763,7 +770,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         more.className = "sub";
         more.textContent = j.footage.length > 1 ? "One project, in " + projectName(j.footage) + " · drop or click to add more"
           : "Drop or click to add more cards";
-        fb.append(chips, more);
+        fb.append(chips, more, boxX("footage", function () { j.footage = []; }));
       } else {
         var v2 = document.createElement("div");
         v2.className = "v ph";
