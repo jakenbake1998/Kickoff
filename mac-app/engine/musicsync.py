@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # ---------------------------------------------------------------- constants
 
@@ -374,7 +374,7 @@ def probe_audio(path):
 
 
 def find_clips(clips_dir, master_path, skip_dirs=()):
-    master_abs = os.path.abspath(master_path)
+    master_abs = os.path.abspath(master_path) if master_path else None
     skip = {os.path.abspath(d) for d in skip_dirs}
     out = []
     for root, dirs, files in os.walk(clips_dir):
@@ -1621,7 +1621,8 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
 
     seqs = bin_(top, "Sequence")
     breakup = bin_(seqs, "Breakup")
-    syncb = bin_(seqs, "Sync")
+    setup_only = getattr(args, "mode", "music") == "setup"          # no song: no Sync sequences
+    syncb = bin_(seqs, "Sync") if not setup_only else None
     nests = []
     for letter, cl in cams:
         label = camera_label(letter)
@@ -1637,7 +1638,8 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             seq = xw.sequence(syncb, "%s Cam_Sync" % letter, seq_fps, w, h, tc, entries, label, fit="fit")
             nests.append((letter, seq, (w, h), tc))
     maybe_empty(breakup, ["Sequence", "Breakup"], bool(len(breakup)))
-    maybe_empty(syncb, ["Sequence", "Sync"], bool(nests))
+    if syncb is not None:
+        maybe_empty(syncb, ["Sequence", "Sync"], bool(nests))
 
     edit = bin_(seqs, "Edit")
     for sub_name in ("Working", "Past"):
@@ -1652,6 +1654,11 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         if master_media and not args.no_master_audio:
             entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1))
         xw.sequence(edit, "%s_Edit" % name, seq_fps, w, h, tc, entries)
+    elif setup_only:
+        # an empty sequence to cut in, at the delivery size, starting at 01:00:00:00
+        usable = [c for c in clips if c.readable and c.fps and c.width]
+        (w, h) = args.sync_size or (first_format(usable, seq_fps)[0] if usable else (3840, 2160))
+        xw.sequence(edit, "%s_Edit" % name, seq_fps, w, h, 3600 * rate_xml(seq_fps)[0], [])
 
     audio = bin_(top, "Audio")
     for bname in ("Music", "SFX", "Captured"):
@@ -1933,6 +1940,10 @@ def main(argv=None):
                     help="rewrite media paths in the XML, e.g. /mnt/footage=/Volumes/SSD/Shoot "
                          "or /mnt/footage=D:/Shoot (repeatable)")
     ap.add_argument("-j", "--jobs", type=int, default=max(1, min(8, os.cpu_count() or 2)))
+    ap.add_argument("--mode", choices=["auto", "music", "setup"], default="auto",
+                    help="music: sync to the song (music video); setup: bins, Breakups and an empty Edit "
+                         "sequence only (commercials); auto (default): music when a song is found and "
+                         "clips line up with it")
     ap.add_argument("--events", action="store_true", help=argparse.SUPPRESS)   # for the Kickoff window
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
@@ -1968,15 +1979,18 @@ def main(argv=None):
         args.path_maps.append((os.path.abspath(old), new.rstrip("/\\")))
 
     audio_files = find_audio(args.clips, [args.out])
-    if not args.master:
+    if args.mode != "setup" and not args.master:
         args.master = pick_master(args.clips, audio_files)
-        if not args.master:
+        if not args.master and args.mode == "music":
             names = "\n  ".join(os.path.relpath(p, args.clips) for p in audio_files) or "(no audio files)"
             sys.exit("error: can't tell which file is the song. Put it in a 'Music' folder or pass "
                      "--master.\nAudio files found:\n  " + names)
-        log("Master song: %s" % os.path.relpath(args.master, args.clips))
-    master_abs = os.path.abspath(args.master)
-    captured = [p for p in audio_files if os.path.abspath(p) != master_abs]
+        if args.master:
+            log("Master song: %s" % os.path.relpath(args.master, args.clips))
+    if args.mode == "setup":
+        args.master = None
+    if not args.master:
+        log("No song to sync to: setting up the project only (bins, Breakups, Edit sequence)")
 
     def audio_bin(p):      # files under a folder called SFX / Music go to those bins, the rest is Captured
         parts = [x.lower() for x in os.path.relpath(p, args.clips).replace("\\", "/").split("/")[:-1]]
@@ -1987,13 +2001,15 @@ def main(argv=None):
         return "Captured"
     os.makedirs(args.out, exist_ok=True)
 
-    log("Indexing master %s" % args.master)
-    event("stage", text="Listening to the song")
-    try:
-        master = MasterIndex(load_audio(args.master))
-    except RuntimeError as e:
-        sys.exit("error: can't read master: %s" % e)
-    log("  %.1f s, %d landmarks" % (master.duration, len(master.h)))
+    master = None
+    if args.master:
+        event("stage", text="Listening to the song")
+        log("Indexing master %s" % args.master)
+        try:
+            master = MasterIndex(load_audio(args.master))
+        except RuntimeError as e:
+            sys.exit("error: can't read master: %s" % e)
+        log("  %.1f s, %d landmarks" % (master.duration, len(master.h)))
 
     clips = find_clips(args.clips, args.master, [args.out])
     if not clips:
@@ -2003,38 +2019,27 @@ def main(argv=None):
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         list(ex.map(probe, clips))
 
-    event("start", project=project_name, folder=args.clips, song=os.path.basename(args.master),
-          song_duration=round(master.duration, 2), clips=len(clips), version=VERSION)
-    st = Settings(threshold=args.threshold, min_hashes=args.min_landmarks, max_fps=args.max_fps,
-                  place_repeats=args.place_repeats)
-    log("Matching")
-    done = 0
-
-    def work(c):
-        try:
-            sync_clip(c, master, st)
-        except Exception as e:           # one bad file never kills the batch
-            c.reasons.append(REASON_UNREADABLE)
-            c.notes.append("error: %s" % e)
-        return c
-
-    with cf.ThreadPoolExecutor(args.jobs) as ex:
-        for c in ex.map(work, clips):
-            done += 1
-            if c.status != "placed":
-                c.status = "not placed"
-                if not c.reasons:
-                    c.reasons.append(REASON_NO_MATCH)
-            if c.split:
-                res = "%d passes: " % len(c.parts) + ", ".join(
-                    ("%.3fs" % p.offset) if p.status == "placed" else "(%s)" % p.reason for p in c.parts)
-            elif c.status == "placed":
-                res = "%.3fs  conf %.0f" % (c.offset, c.confidence)
-            else:
-                res = "-- " + "; ".join(c.reasons)
-            log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, res))
-            event("clip", done=done, total=len(clips), file=c.rel, status=c.status,
-                  passes=len(c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "")
+    if master is not None:
+        event("start", project=project_name, folder=args.clips, song=os.path.basename(args.master),
+              song_duration=round(master.duration, 2), clips=len(clips), version=VERSION, mode="music")
+        match_all(clips, master, args)
+        if args.mode == "auto" and not any(c.status == "placed" for c in clips):
+            # the "song" lines up with nothing: it's another recording (a boom track on a commercial)
+            log("Nothing lines up with %s, so this isn't a music video shoot: setting up the project "
+                "only, with that file under Audio > Captured" % os.path.basename(args.master))
+            for c in clips:
+                c.status, c.reasons, c.notes = "", [], []
+            args.master, master = None, None
+    if master is None:
+        args.mode = "setup"
+        event("start", project=project_name, folder=args.clips, song="", song_duration=0, clips=len(clips),
+              version=VERSION, mode="setup")
+        for c in clips:
+            c.status = "not placed"
+    else:
+        args.mode = "music"
+    master_abs = os.path.abspath(args.master) if args.master else None
+    captured = [p for p in audio_files if os.path.abspath(p) != master_abs]
 
     for c in clips:                     # a take with one pass of the song is one Part covering it all
         if c.status == "placed" and not c.split:
@@ -2062,8 +2067,10 @@ def main(argv=None):
                 c.track = i
         cams.append((letter, cl))
 
-    _, mch, mrate = probe_audio(args.master)
-    master_media = Media(args.master, seq_fps, master.duration, has_video=False, channels=mch, rate=mrate)
+    master_media = None
+    if master is not None:
+        _, mch, mrate = probe_audio(args.master)
+        master_media = Media(args.master, seq_fps, master.duration, has_video=False, channels=mch, rate=mrate)
     audio_bins = collections.defaultdict(list)
     for p in captured:
         dur, ch, rate = probe_audio(p)
@@ -2088,9 +2095,14 @@ def main(argv=None):
             cam_files[key] = fname
             log("Wrote %s (%d tracks)" % (fname, len(placements_of(pl))))
 
-    write_reports(clips, args.out, seq_fps, preroll, args, cam_files, labels, captured)
-    log("Wrote sync_report.csv and sync_report.md")
-    log("Placed %d of %d clips." % (len(placed), len(clips)))
+    if master is not None:
+        write_reports(clips, args.out, seq_fps, preroll, args, cam_files, labels, captured)
+        report = os.path.join(args.out, "sync_report.md")
+        log("Wrote sync_report.csv and sync_report.md")
+        log("Placed %d of %d clips." % (len(placed), len(clips)))
+    else:
+        report = write_clip_list(clips, cams, args.out, audio_bins)
+        log("Wrote clip_list.csv. Set up %d clips from %d cameras." % (len(clips), len(cams)))
     cam_events = []
     for letter, cl in cams:
         pl = [(c, p) for c in cl if c.status == "placed" for p in c.parts if p.status == "placed"]
@@ -2099,14 +2111,79 @@ def main(argv=None):
         cam_events.append(dict(letter=letter, name=cam_bin_name(letter, cl[0].model), label=camera_label(letter),
                                clips=len(cl), synced=sum(c.status == "placed" for c in cl), spans=spans))
     aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH
-                                for c in clips if c.status != "placed")
+                                for c in clips if c.status != "placed") if master is not None else {}
     event("done", project=project_name, out=args.out, xml=os.path.join(args.out, proj_file),
-          report=os.path.join(args.out, "sync_report.md"), song_duration=round(master.duration, 2),
-          clips=len(clips), synced=len(placed), cameras=cam_events,
-          set_aside=[dict(reason=r, count=n) for r, n in aside.most_common()],
+          report=report, song_duration=round(master.duration, 2) if master is not None else 0,
+          mode=args.mode, clips=len(clips), synced=len(placed), cameras=cam_events,
+          set_aside=[dict(reason=r, count=n) for r, n in collections.Counter(aside).most_common()],
+          audio=sum(len(v) for v in audio_bins.values()),
+          unreadable=sum(1 for c in clips if not c.readable),
           restarted=sum(1 for c in clips if c.split),
           check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None))
 
+
+def match_all(clips, master, args):
+    """Sync every clip to the song (in parallel), logging and reporting each as it finishes."""
+    st = Settings(threshold=args.threshold, min_hashes=args.min_landmarks, max_fps=args.max_fps,
+                  place_repeats=args.place_repeats)
+    log("Matching")
+    done, placed, tried, give_up = 0, 0, 0, []
+
+    def work(c):
+        if give_up:                      # auto mode, and nothing lines up with the "song": stop early
+            return c
+        try:
+            sync_clip(c, master, st)
+        except Exception as e:           # one bad file never kills the batch
+            c.reasons.append(REASON_UNREADABLE)
+            c.notes.append("error: %s" % e)
+        return c
+
+    with cf.ThreadPoolExecutor(args.jobs) as ex:
+        for c in ex.map(work, clips):
+            done += 1
+            if c.status != "placed":
+                c.status = "not placed"
+                if not c.reasons:
+                    c.reasons.append(REASON_NO_MATCH)
+            if c.split:
+                res = "%d passes: " % len(c.parts) + ", ".join(
+                    ("%.3fs" % p.offset) if p.status == "placed" else "(%s)" % p.reason for p in c.parts)
+            elif c.status == "placed":
+                res = "%.3fs  conf %.0f" % (c.offset, c.confidence)
+            else:
+                res = "-- " + "; ".join(c.reasons)
+            log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, res))
+            event("clip", done=done, total=len(clips), file=c.rel, status=c.status,
+                  passes=len(c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "")
+            placed += c.status == "placed"
+            tried += c.status == "placed" or (c.reasons[:1] in ([REASON_NO_MATCH], [REASON_LOW_CONF]))
+            if args.mode == "auto" and not placed and tried >= 12 and not give_up:
+                log("12 clips with sound and none lines up with the song: not a music video shoot")
+                give_up.append(True)
+
+
+CLIP_LIST_COLUMNS = ["file", "camera", "model", "resolution", "fps", "duration", "audio", "note"]
+
+
+def write_clip_list(clips, cams, out_dir, audio_bins):
+    """Project-setup runs (no song): a plain list of what went where."""
+    path = os.path.join(out_dir, "clip_list.csv")
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=CLIP_LIST_COLUMNS)
+        w.writeheader()
+        for letter, cl in cams:
+            for c in cl:
+                w.writerow(dict(file=c.rel, camera="%s Cam" % letter, model=c.model,
+                                resolution="%dx%d" % (c.width, c.height) if c.width else "",
+                                fps=("%g" % c.fps) if c.fps else "", duration="%.2f" % c.duration,
+                                audio="yes" if c.has_audio else "no",
+                                note="" if c.readable else REASON_UNREADABLE))
+        for bname, ms in sorted(audio_bins.items()):
+            for m in ms:
+                w.writerow(dict(file=os.path.relpath(m.path, os.path.dirname(out_dir)), camera="Audio > " + bname,
+                                duration="%.2f" % (m.duration or 0), audio="yes"))
+    return path
 
 if __name__ == "__main__":
     main()

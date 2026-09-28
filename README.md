@@ -30,6 +30,18 @@ Everything is written to `Premiere Sync` inside the shoot folder (`-o` to change
 | `sync_report.csv` / `sync_report.md` | Every clip (every pass of a restarted take): placed or not, reason, offset, confidence, waveform check, camera, track, drift |
 | `A Cam Sync - ILME-FX3.xml` ... | Only with `--per-camera`: each sync sequence on its own |
 
+## Music video or regular project
+
+Kickoff works out which kind of job a folder is (`--mode auto`, the default): when it finds a song
+and the clips line up with it, it's a music video and everything above applies. When there's no
+song, or the audio file it found lines up with none of the clips (say, a boom track on a
+commercial; it gives up after 12 clips with sound and no match), it sets up a regular project
+instead: the same bins and label colors, a footage bin and a Breakup sequence per camera, an empty
+`<Project>_Edit` sequence at 3840x2160 starting at 01:00:00:00, every audio file sorted into
+Music, SFX or Captured, and `clip_list.csv` in place of the sync report. There are no Sync
+sequences and no Sync bin. `--mode music` or `--mode setup` (the switch in the Kickoff window)
+forces one or the other.
+
 ## In Premiere
 
 File > Import the project XML. Premiere puts it in a bin named after the file; drag its contents
@@ -202,6 +214,7 @@ A, B, C... in order. `--group-by model` or `--group-by folder` forces one rule.
 --name NAME           project name (default: folder name)
 --per-camera          also write each sync sequence as its own XML
 --no-master-audio     leave the song off A1
+--mode auto|music|setup   music video (sync) or project setup only (default: auto)
 --set-aside-repeats   don't place chorus-only clips at the first chorus
 --sync-size 3840x2160 frame size of the Sync and Edit sequences (clips scaled to fit)
 --path-map OLD=NEW    rewrite media paths in the XML (repeatable)

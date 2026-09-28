@@ -64,6 +64,11 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .axis{display:grid;grid-template-columns:minmax(90px,150px) 1fr 52px;gap:12px;font-size:11px;color:var(--muted);margin-top:-4px}
 .axis div{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
 
+.modes{display:grid;gap:8px}
+.seg{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:3px;width:max-content;max-width:100%}
+.seg button{border:0;background:none;padding:6px 14px;border-radius:7px;color:var(--muted);font-weight:600}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.modes p{margin:0;color:var(--muted);font-size:12.5px}
 .list{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;display:grid;gap:5px}
 .list div{display:flex;justify-content:space-between;gap:12px}
 .list span:last-child{color:var(--muted);text-align:right}
@@ -102,12 +107,25 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     <div><div class="p" id="dropTitle">Drop a shoot folder here</div><div class="s" id="dropSub">or click to choose one &nbsp;<kbd>⌘O</kbd></div></div>
   </div>
 
+  <div class="modes" id="modes">
+    <div class="seg" role="group" aria-label="Kind of project">
+      <button data-mode="auto" aria-pressed="true">Auto</button>
+      <button data-mode="music" aria-pressed="false">Music video</button>
+      <button data-mode="setup" aria-pressed="false">Project setup only</button>
+    </div>
+    <p id="modeNote"></p>
+  </div>
+
   <div class="list" id="hints">
     <div class="h">What it builds</div>
-    <div><span>Every clip synced to the song by its audio</span><span>A Cam_Sync, B Cam_Sync&hellip;</span></div>
-    <div><span>Takes where the song restarted, split into passes</span><span>own tracks</span></div>
-    <div><span>Your bins, Breakup and Edit sequences, label colors</span><span>one .xml</span></div>
-    <div><span>Sync sequences in 4K, every clip scaled to fit</span><span>3840x2160</span></div>
+    <div data-for="setup"><span>Your bins, a footage bin per camera, label colors</span><span>one .xml</span></div>
+    <div data-for="setup"><span>A Breakup sequence per camera</span><span>A Cam_Breakup&hellip;</span></div>
+    <div data-for="setup"><span>An empty Edit sequence to cut in</span><span>3840x2160</span></div>
+    <div data-for="setup"><span>Audio sorted into Music, SFX and Captured</span><span>no syncing</span></div>
+    <div data-for="music"><span>Every clip synced to the song by its audio</span><span>A Cam_Sync, B Cam_Sync&hellip;</span></div>
+    <div data-for="music"><span>Takes where the song restarted, split into passes</span><span>own tracks</span></div>
+    <div data-for="music"><span>Your bins, Breakup and Edit sequences, label colors</span><span>one .xml</span></div>
+    <div data-for="music"><span>Sync sequences in 4K, every clip scaled to fit</span><span>3840x2160</span></div>
   </div>
 
   <div id="run" hidden>
@@ -170,6 +188,27 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     [/^short burst/, "only a false start", "check report"],
     [/^unreadable/, "can't be read (RED/BRAW?)", "check report"]
   ];
+  var MODE_NOTES = {
+    auto: "Syncs to the song when the folder has one and the clips line up with it. Otherwise it just sets up the project.",
+    music: "Music video: every clip is synced to the song. The folder needs the song (in a Music folder, or named master/song/mix).",
+    setup: "Commercials and other jobs: bins, Breakups and an Edit sequence, no syncing."
+  };
+  var mode = "auto";
+  try { mode = localStorage.getItem("kickoff-mode") || "auto"; } catch (e) {}
+  if (!MODE_NOTES[mode]) mode = "auto";
+  function setMode(m) {
+    mode = m;
+    try { localStorage.setItem("kickoff-mode", m); } catch (e) {}
+    document.querySelectorAll(".seg button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === m)); });
+    $("modeNote").textContent = MODE_NOTES[m];
+    document.querySelectorAll("#hints [data-for]").forEach(function (d) {
+      d.hidden = d.dataset.for !== (m === "setup" ? "setup" : "music");
+    });
+    post({ cmd: "mode", mode: m });
+  }
+  document.querySelectorAll(".seg button").forEach(function (b) {
+    b.addEventListener("click", function () { setMode(b.dataset.mode); });
+  });
   var state = { folder: null, result: null, total: 0, synced: 0, aside: 0, logLines: [] };
 
   var native = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kickoff);
@@ -186,7 +225,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     d.className = "drop idle";
     $("dropTitle").textContent = "Drop a shoot folder here";
     $("dropSub").innerHTML = "or click to choose one &nbsp;<kbd>⌘O</kbd>";
-    show("hints", true);
+    show("hints", true); show("modes", true);
     ["run", "stats", "camsWrap", "aside", "error", "details", "btnsDone", "btnsRun", "btnsErr"].forEach(function (id) { show(id, false); });
     $("log").textContent = "";
     setTitle("Kickoff");
@@ -204,7 +243,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     $("bar").style.width = "";
     $("stage").textContent = "Checking for updates";
     $("count").textContent = "";
-    show("hints", false);
+    show("hints", false); show("modes", false);
     show("run", true); show("btnsRun", true); show("details", true);
   }
 
@@ -216,6 +255,15 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
   function onEvent(e) {
     if (e.event === "stage") {
       $("stage").textContent = e.text;
+    } else if (e.event === "start" && e.mode === "setup") {
+      var fellBack = state.total > 0;              // it tried the song first and nothing lined up
+      state.total = e.clips; state.synced = 0; state.aside = 0; state.setup = true;
+      $("dropSub").textContent = state.folder + " · project setup only";
+      $("stage").textContent = fellBack ? "Nothing lines up with that song, so this is set up as a regular project"
+        : "Setting up " + plural(e.clips, "clip") + " (no song to sync to)";
+      $("prog").className = "prog busy";
+      show("stats", false);
+      $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start") {
       state.total = e.clips;
       $("dropSub").textContent = state.folder + " · song: " + e.song;
@@ -241,7 +289,59 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     }
   }
 
+  function finishSetup(e) {
+    $("prog").className = "prog";
+    $("bar").style.width = "100%";
+    $("stage").textContent = "Done. In Premiere the project imports into a bin; drag its contents to the top.";
+    $("count").textContent = "";
+    $("sSynced").textContent = e.clips;
+    $("sSynced").nextElementSibling.textContent = "clips";
+    $("sCams").textContent = e.cameras.length;
+    $("sCamsL").textContent = e.cameras.length === 1 ? "camera" : "cameras";
+    $("sAside").textContent = e.audio;
+    $("sAside").nextElementSibling.textContent = "audio files";
+    show("stats", true);
+    var cams = $("cams");
+    cams.innerHTML = "";
+    e.cameras.forEach(function (c) {
+      var row = document.createElement("div");
+      row.className = "cam";
+      var name = document.createElement("span");
+      name.className = "n";
+      name.innerHTML = '<span class="chip"></span>';
+      name.firstChild.style.background = "var(" + (CAM_COLORS[c.label] || "--muted") + ")";
+      name.appendChild(document.createTextNode(c.name));
+      var what = document.createElement("span");
+      what.style.color = "var(--muted)";
+      what.textContent = "footage bin + " + c.letter + " Cam_Breakup";
+      var n = document.createElement("em");
+      n.textContent = c.clips;
+      row.append(name, what, n);
+      cams.appendChild(row);
+    });
+    show("camsWrap", e.cameras.length > 0);
+    var list = $("aside");
+    list.innerHTML = "";
+    var rows = [["Empty Edit sequence to cut in", "Sequence > Edit"]];
+    if (e.unreadable) rows.push([plural(e.unreadable, "clip") + " that can't be read (RED/BRAW?)", "clip list"]);
+    rows.forEach(function (r) {
+      var d = document.createElement("div"), a = document.createElement("span"), b = document.createElement("span");
+      a.textContent = r[0]; b.textContent = r[1];
+      d.append(a, b);
+      list.appendChild(d);
+    });
+    show("aside", true);
+    $("bReport").textContent = "Show clip list";
+    show("btnsRun", false);
+    show("btnsDone", true);
+    $("bOpen").focus();
+  }
+
   function finish(e) {
+    if (e.mode === "setup") return finishSetup(e);
+    $("sSynced").nextElementSibling.textContent = "clips synced";
+    $("sAside").nextElementSibling.textContent = "set aside";
+    $("bReport").textContent = "Show report";
     $("prog").className = "prog";
     $("bar").style.width = "100%";
     $("stage").textContent = "Done. In Premiere the project imports into a bin; drag its contents to the top.";
@@ -360,6 +460,7 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
     },
     reset: reset
   };
+  setMode(mode);
   post({ cmd: "ready" });
 })();
 </script>

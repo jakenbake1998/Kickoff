@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var stopped = false
     var pending: URL?
     var updateNote = ""
+    var mode = "auto"                     // auto / music / setup, from the switch in the window
 
     func applicationDidFinishLaunching(_ note: Notification) {
         buildMenu()
@@ -134,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 pending = nil
                 run(url)
             }
+        case "mode": mode = body["mode"] as? String ?? "auto"
         case "pick": pick()
         case "run": if let f = body["folder"] as? String { run(URL(fileURLWithPath: f)) }
         case "stop":
@@ -192,7 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [support.appendingPathComponent("kickoff-gui-run.sh").path, folder.path]
+        p.arguments = [support.appendingPathComponent("kickoff-gui-run.sh").path, folder.path, mode]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         env["PYTHONUNBUFFERED"] = "1"

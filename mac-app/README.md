@@ -25,6 +25,11 @@ XML in Premiere (and selects it in Finder); if Premiere doesn't pick it up, use 
 it, then drag the contents of the bin it creates up to the top level. **Show report** opens the
 sync report. **Details** shows the engine's log.
 
+Before dropping, the switch under the drop area picks the kind of job: **Auto** (a music video when
+the folder has a song the clips line up with, otherwise a regular project), **Music video**, or
+**Project setup only** (commercials and anything else: bins, Breakups and an empty Edit sequence,
+no syncing). Kickoff remembers the choice.
+
 The window is built on your Mac by the installer (it uses Apple's Command Line Tools). If that
 build fails, the installer puts in the simple version instead: a folder picker, then a Terminal
 window with progress.
