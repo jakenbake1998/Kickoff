@@ -1339,6 +1339,29 @@ def blank_seconds(path, duration):
     return out
 
 
+def join_parts(clip):
+    """Neighbouring placed parts that sit at the same song position (within a frame) are one play of
+    the song that the pass search cut in two: join them into one part. A restart to the same song
+    time from later in the take has a different offset, so it stays its own part."""
+    frame = 1.0 / (clip.fps or 24.0)
+    out = []
+    for p in clip.parts:
+        q = out[-1] if out else None
+        if q is not None and p.status == q.status == "placed" and p.repeat_alt is None \
+                and q.repeat_alt is None and abs(p.src_in - q.src_out) < 0.05 \
+                and abs(p.offset - q.offset) < frame:
+            keep, other = (q, p) if (q.confidence or 0) >= (p.confidence or 0) else (p, q)
+            keep.src_in, keep.src_out = q.src_in, p.src_out
+            n = next((int(x.split()[1]) for x in keep.notes if x.startswith("joined ")), 1) + \
+                next((int(x.split()[1]) for x in other.notes if x.startswith("joined ")), 1)
+            keep.notes = [x for x in keep.notes if not x.startswith("joined ")] + \
+                ["joined %d passes at the same song position" % n]
+            out[-1] = keep
+        else:
+            out.append(p)
+    clip.parts = out
+
+
 def drop_blank(clip, blank=None):
     """Set aside placed stretches whose picture is blank (see blank_seconds), and cut blank runs off the
     ends of placed passes. Returns True if anything changed."""
@@ -2201,6 +2224,7 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                 part.reason = REASON_LOW_CONF
                 part.notes.append("this pass likely starts at song %.1fs" % (p["off"] + p["first"]))
         clip.parts.append(part)
+    join_parts(clip)
     placed = [p for p in clip.parts if p.status == "placed"]
     clip.notes.append("song restarts in this take: %d passes" % len(passes))
     if placed:
