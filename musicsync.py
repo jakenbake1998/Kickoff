@@ -419,6 +419,9 @@ def pick_master(folder, audio_files, ties=None):
         top.sort(key=lambda p: -probe_audio(p)[0])
         if ties is not None:
             ties[:] = top
+            log("Several possible songs: %s. Checking which one the clips were shot to"
+                % ", ".join(os.path.basename(p) for p in top))
+            return top[0]
         log("Several possible songs: %s. Using the longest, %s (pass --master to pick another)"
             % (", ".join(os.path.basename(p) for p in top), os.path.basename(top[0])))
     return top[0]
@@ -1293,6 +1296,58 @@ def gap_passes(xs, master, st, h, t, lo, hi, known):
     return out
 
 
+GAP_CHUNK_S = 60.0
+
+
+def gap_rescue(xs, master, st, h, t, lo, hi, known):
+    """A whole performance in clip stretch [lo, hi] that neither the stretch's landmarks nor one phase
+    correlation of the whole stretch found (a DJI rolling through a dozen plays with the band louder
+    than the playback). The stretch is correlated against the song a minute at a time; a position is
+    kept when the waveform lines up in most 4 s windows across 20 s or more, clearly better than at
+    any other position found and at every known pass, and the landmarks there don't point elsewhere."""
+    if hi - lo < STRAY_LONG_S:
+        return None
+    chunk = min(GAP_CHUNK_S, master.duration)
+    cands = []
+    for a in np.arange(lo, max(lo, hi - chunk) + 1e-6, chunk / 2):
+        o = song_search(xs, master, a, min(hi, a + chunk))
+        if all(abs(o - c) > 0.08 for c in cands) and all(abs(o - k) >= 0.08 for k in known):
+            cands.append(o)
+    scored = []
+    for o in cands:
+        a, b = in_song(xs, master, o, lo, hi)
+        if b - a < STRAY_LONG_S:
+            continue
+        q = wave_q(xs, master, o, a, b)
+        ok = [w for w, v in q if v >= WAVE_MATCH]
+        if len(ok) < 6:
+            continue
+        first, last = ok[0], ok[-1] + WAVE_WIN
+        inside = [v for w, v in q if first <= w <= last - WAVE_WIN]
+        k = sum(v >= WAVE_MATCH for v in inside)
+        if last - first >= STRAY_LONG_S and k >= 0.5 * len(inside):
+            scored.append((k, o, first, last, len(inside)))
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    k, o, first, last, n = scored[0]
+    if len(scored) > 1 and scored[1][0] * 1.5 > k:
+        return None                     # two positions line up about as well: a repeated section
+    for kn in known:                    # a known pass's position must not fit these windows as well
+        kk = sum(v >= WAVE_MATCH for _, v in wave_q(xs, master, kn, first, last))
+        if kk * 2 > k:
+            return None
+    sel = (t >= first / FRAME_S) & (t < last / FRAME_S)
+    e = evaluate(master, h[sel], t[sel]) if sel.any() else None
+    if e is not None and accepted(e, st) and abs(e["offset"] - o) > 0.1:
+        return None                     # the landmarks here are sure of somewhere else
+    if e is None:
+        e = dict(A=0, R=0, N=0.0, offset=o, runner_up_offset=o, conf=0.0, strength=0.0)
+    e = dict(e, offset=o)
+    return dict(off=o, first=first, last=last, ev=e, good=True, stray=False,
+                rescued="found by waveform: %d of %d windows line up" % (k, n))
+
+
 def waveform_rescue(xs, master, guesses):
     """Where the landmarks are too few to decide (a 20 s take, an outro that fingerprints badly),
     compare the waveform: at each landmark guess, and at the best position of a phase correlation of
@@ -1303,7 +1358,8 @@ def waveform_rescue(xs, master, guesses):
     if n < WAVE_WIN + 1:
         return None
     cands = []
-    for o in list(guesses) + [song_search(xs, master, 0.0, n)]:
+    whole = song_search(xs, master, 0.0, n)
+    for o in list(guesses) + [whole]:
         if all(abs(o - c) > 0.08 for c in cands):
             cands.append(o)
     hop = 1.0 if n < 40 else WAVE_HOP
@@ -1314,7 +1370,11 @@ def waveform_rescue(xs, master, guesses):
     scored.sort(reverse=True)
     k, m, o = scored[0]
     rival = max((s[0] for s in scored[1:]), default=0)
-    if k >= 3 and k >= 0.5 * m and k >= 2 * rival:
+    # the landmarks' best guess and a phase correlation of the whole clip, found independently,
+    # landing on the same spot: then a quarter of the windows lining up is enough (a short FX3
+    # take whose scratch audio is mostly the band). Anywhere else lining up half as well still loses.
+    agree = bool(guesses) and abs(o - guesses[0]) < 0.08 and abs(o - whole) < 0.08
+    if k >= 3 and k >= (0.25 if agree else 0.5) * m and k >= 2 * rival:
         return o, k, m
     return None
 
@@ -1339,9 +1399,16 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
             rounds += 1
             lo, hi = gaps.pop()
             found = gap_passes(xs, master, st, h, t, lo, hi, known)
-            if not found:
+            if not any(p["good"] for p in found):
+                # nothing the landmarks can vouch for: search the stretch's waveform against the whole
+                # song, and don't let an unconfirmed landmark guess keep a real performance out
                 sp = stray_song(xs, master, st, h, t, lo, hi, known)
-                found = [sp] if sp else []
+                if sp and (sp["good"] or not found):
+                    found = [sp]
+                if not any(p["good"] for p in found):
+                    gr = gap_rescue(xs, master, st, h, t, lo, hi, known)
+                    if gr:
+                        found = [gr]
             found.sort(key=lambda p: p["first"])
             edge = lo
             for sp in found:
@@ -1415,6 +1482,8 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                         part.notes.append("no window of the waveform lines up at song %.1fs" % (o + p["first"]))
             if part.refine.startswith("landmark only"):
                 part.notes.append(part.refine)
+            if p.get("rescued"):
+                part.notes.append(p["rescued"])
         else:
             part.status = "not placed"
             ambiguous = e["R"] and (e["R"] - e["N"]) > 0.5 * (e["A"] - e["N"])
