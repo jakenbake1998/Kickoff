@@ -980,13 +980,21 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         clip.notes.append("digital silence" if rms < 1e-6 else "audio level %.0f dBFS" % (20 * math.log10(rms))
                           if rms < 10 ** (-60 / 20) else "only timecode on the audio channels")
         return
-    best = None
+    tried = []
     for label, xc in loud:
         hc, tc_ = landmarks(*find_peaks(xc))
         ec = evaluate(master, hc, tc_)
         score = (ec["conf"], ec["A"]) if ec is not None else (-1, 0)
-        if best is None or score > best[0]:
-            best = (score, label, xc, hc, tc_, ec)
+        tried.append((score, label, xc, hc, tc_, ec))
+    best = max(tried, key=lambda c: c[0])
+    if len(tried) > 1 and (best[5] is None or not accepted(best[5], st)):
+        # the landmarks can't tell the channels apart (a Mini LF's ch3 carries a steady tone or noise
+        # that fingerprints as well as the room mic does at chance): the channel whose waveform
+        # lines up with the song clearly, all through the clip, is the scratch mic
+        ph = [(phase_search(c[2], master, 0.0, len(c[2]) / SR)[1], c) for c in tried]
+        r, c = max(ph, key=lambda v: v[0])
+        if c is not best and r >= PHASE_AGREE and r > 1.2 * max(v[0] for v in ph if v[1] is best):
+            best = c
     _, label, x, h, t, ev = best
     if len(chans) > 1:
         clip.audio_pick = label
@@ -1496,6 +1504,7 @@ def gap_passes(xs, master, st, h, t, lo, hi, known):
 
 
 GAP_CHUNK_S = 60.0
+GAP_SHORT_S, GAP_SHORT_MIN_S = 20.0, 12.0
 
 
 def gap_rescue(xs, master, st, h, t, lo, hi, known):
@@ -1508,6 +1517,11 @@ def gap_rescue(xs, master, st, h, t, lo, hi, known):
         return None
     chunk = min(GAP_CHUNK_S, master.duration)
     found = phase_gap(xs, master, st, h, t, lo, hi, known, chunk)
+    if found is None:
+        # a play shorter than a minute is diluted in a minute of talk: 20 s stretches, where one
+        # standing PHASE_ALONE clear is enough, over 12 s or more of 10 s windows that agree
+        found = phase_gap(xs, master, st, h, t, lo, hi, known, min(GAP_SHORT_S, master.duration),
+                          alone_only=True, min_len=GAP_SHORT_MIN_S)
     if found is not None:
         return found
     cands = []
@@ -1618,7 +1632,7 @@ def phase_extent(xs, master, off, lo, hi, a, b):
     return wins[i][0], min(b0, wins[j][0] + PHASE_WIN_S)
 
 
-def phase_gap(xs, master, st, h, t, lo, hi, known, chunk):
+def phase_gap(xs, master, st, h, t, lo, hi, known, chunk, alone_only=False, min_len=STRAY_LONG_S):
     """gap_rescue by phase correlation: each half-overlapping chunk of the stretch against the whole
     song. A position is kept when one chunk's peak stands PHASE_ALONE clear of anywhere else, or two
     neighbouring chunks land on it within a frame, each PHASE_AGREE clear; it covers those chunks
@@ -1631,16 +1645,17 @@ def phase_gap(xs, master, st, h, t, lo, hi, known, chunk):
         if o is None or any(abs(o - k) < 0.08 for k in known):
             continue
         near = [r_ for r_ in res[max(0, i - 1):i + 2] if r_[2] is not None and abs(r_[2] - o) < PHASE_FRAME_S]
-        strong = ratio >= PHASE_ALONE or (len(near) >= 2 and all(r_[3] >= PHASE_AGREE for r_ in near))
+        strong = ratio >= PHASE_ALONE or (not alone_only and len(near) >= 2 and
+                                          all(r_[3] >= PHASE_AGREE for r_ in near))
         if not strong:
             continue
         ext = phase_extent(xs, master, o, lo, hi, min(r_[0] for r_ in near), max(r_[1] for r_ in near))
         if ext is None:
             continue
         first, last = ext
-        if last - first < STRAY_LONG_S:
+        if last - first < min_len:
             continue
-        score = min(r_[3] for r_ in near) if len(near) >= 2 else ratio
+        score = ratio if alone_only or len(near) < 2 else min(r_[3] for r_ in near)
         if best is None or score > best[0]:
             best = (score, o, first, last)
     if best is None:
@@ -1654,6 +1669,9 @@ def phase_gap(xs, master, st, h, t, lo, hi, known, chunk):
         e = dict(A=0, R=0, N=0.0, offset=o, runner_up_offset=o, conf=0.0, strength=0.0)
     return dict(off=o, first=first, last=last, ev=dict(e, offset=o), good=True, stray=False,
                 rescued="found by waveform: phase peak %.1fx the next best" % score)
+
+
+RESCUE_WIN_S, RESCUE_HOP_S = 20.0, 5.0
 
 
 def waveform_rescue(xs, master, guesses):
@@ -1671,6 +1689,19 @@ def waveform_rescue(xs, master, guesses):
     if o is not None:
         agree = bool(guesses) and abs(o - guesses[0]) < PHASE_FRAME_S
         if ratio >= (PHASE_AGREE if agree else PHASE_ALONE):
+            q = [v for _, v in wave_q(xs, master, o, *in_song(xs, master, o, 0.0, n))]
+            return o, sum(v >= WAVE_MATCH for v in q), len(q), ratio
+    # the song may cover only part of the clip (a short FX3 take that rolls on after the band
+    # stops): a 20 s stretch whose own peak lands on the landmarks' guess, PHASE_AGREE clear
+    if guesses and n >= RESCUE_WIN_S + RESCUE_HOP_S:
+        best = None
+        for a in np.arange(0.0, n - RESCUE_WIN_S + 1e-6, RESCUE_HOP_S):
+            o, ratio = phase_search(xs, master, a, a + RESCUE_WIN_S)
+            if o is not None and abs(o - guesses[0]) < PHASE_FRAME_S and ratio >= PHASE_AGREE \
+                    and (best is None or ratio > best[1]):
+                best = (o, ratio)
+        if best is not None:
+            o, ratio = best
             q = [v for _, v in wave_q(xs, master, o, *in_song(xs, master, o, 0.0, n))]
             return o, sum(v >= WAVE_MATCH for v in q), len(q), ratio
     cands = []
@@ -1695,6 +1726,29 @@ def waveform_rescue(xs, master, guesses):
     return None
 
 
+def grow_passes(xs, master, passes, xs_len):
+    """A pass's landmarks can miss minutes of its own play (the band louder than the playback at the
+    start of a DJI take). Grow each pass into the stretch before and after it, up to its neighbours,
+    while its 10 s windows keep peaking on its position PHASE_AGREE clear, then find the exact edge."""
+    for i, p in enumerate(passes):
+        lo = passes[i - 1]["last"] if i else 0.0
+        hi = passes[i + 1]["first"] if i + 1 < len(passes) else xs_len
+        if p["first"] - lo < PHASE_WIN_S and hi - p["last"] < PHASE_WIN_S:
+            continue
+        head = phase_extent(xs, master, p["off"], lo, hi, p["first"], p["first"]) \
+            if p["first"] - lo >= PHASE_WIN_S else None
+        tail = phase_extent(xs, master, p["off"], lo, hi, p["last"] - PHASE_WIN_S, p["last"] - PHASE_WIN_S) \
+            if hi - p["last"] >= PHASE_WIN_S else None
+        first = min(p["first"], head[0]) if head else p["first"]
+        last = max(p["last"], tail[1]) if tail else p["last"]
+        if p["first"] - first < PHASE_WIN_S and last - p["last"] < PHASE_WIN_S:
+            continue                                    # nothing to speak of: keep the landmark edges
+        rivals = [q["off"] for q in passes if q is not p]
+        f0, f1 = pass_edges(xs, master, p["off"], first, last, rivals)
+        p["first"], p["last"] = max(lo, min(p["first"], f0)), min(hi, max(p["last"], f1))
+        p["grown"] = True
+
+
 def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
     """Cut the clip into one Part per pass. Before cutting, each pass's edges are tightened against
     its neighbours and the stretches outside every pass are searched for song audio of their own
@@ -1707,6 +1761,7 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
             rivals = [q["off"] for q in passes if q is not p]
             if rivals:
                 p["first"], p["last"] = pass_edges(xs, master, p["off"], p["first"], p["last"], rivals)
+        grow_passes(xs, master, passes, xs_len)
         known = [p["off"] for p in passes]
         bounds = [0.0] + [v for p in passes for v in (p["first"], p["last"])] + [xs_len]
         gaps = list(zip(bounds[::2], bounds[1::2]))
