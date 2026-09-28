@@ -228,6 +228,7 @@ REASON_SQ = "slow motion (S&Q, audio not real time)"
 REASON_NO_MATCH = "no match to song"
 REASON_LOW_CONF = "confidence below threshold"
 REASON_AMBIGUOUS = "ambiguous match (repeated section of song)"
+REASON_NO_PICTURE = "no picture (blank or no-signal screen)"
 
 
 # ---------------------------------------------------------------- helpers
@@ -620,6 +621,50 @@ def vote_song(songs, clips):
         return None
     top = max(votes.values())
     return next(p for p in songs if votes.get(p) == top), votes
+
+
+def song_versions(song, audio_files):
+    """Other versions of the song (a v1 and a v2 mix, another EQ pass) next to it or in a Music folder:
+    audio files within 10% of its length that aren't stems or effects. Up to 4."""
+    near = []
+    try:
+        d = os.path.dirname(os.path.abspath(song))
+        near = [os.path.join(d, f) for f in sorted(os.listdir(d))
+                if not f.startswith(".") and os.path.splitext(f)[1].lower() in AUDIO_EXT]
+    except OSError:
+        pass
+    music = [p for p in audio_files
+             if any(x.lower() in MUSIC_DIRS for x in os.path.dirname(p).replace("\\", "/").split("/"))]
+    dur = probe_audio(song)[0]
+    out, seen = [], {os.path.abspath(song)}
+    for p in near + music:
+        a = os.path.abspath(p)
+        if a in seen or NOT_SONG.search(os.path.basename(p)):
+            continue
+        seen.add(a)
+        dp = probe_audio(p)[0]
+        if dur and dp and abs(dp - dur) <= 0.1 * dur:
+            out.append(p)
+    return out[:4]
+
+
+def song_shift(song, other):
+    """Seconds to add to a time in `song` to get the same moment in `other`, when the two are the same
+    edit (one mix lined up with the other all the way through), else None."""
+    try:
+        a, mi = load_audio(song), MasterIndex(load_audio(other))
+    except RuntimeError:
+        return None
+    n = len(a)
+    found = []
+    for lo, hi in ((0, n // 2), (n // 2, n)):      # both halves must agree: same edit, same tempo
+        x = a[lo:hi]
+        e = evaluate(mi, *landmarks(*find_peaks(x)))
+        if e is None or not accepted(e, Settings()):
+            return None
+        o, _, _, _ = refine_offset(x, mi, e["offset"], 0.0, len(x) / SR)
+        found.append(o - lo / SR)
+    return found[0] if abs(found[0] - found[1]) < 0.5 / 48 else None
 
 
 def song_nearby(folder, levels=3, ties=None):
@@ -1237,6 +1282,119 @@ def place_on(clip, master, st, cand, multi):
                                          span=ov[1] - ov[0]))
         clip.phase = phase_check(xs, master, offset_audio, *ov)
     clip.status = "placed"
+
+
+# A capture box (Video8, HDMI recorders) keeps recording the room sound while its picture is a solid
+# "no signal" screen, so a pass can match the song perfectly over nothing but blue. Placed stretches
+# are checked against the picture: one frame per second (keyframes of long-GOP files only, so it
+# stays cheap), shrunk to 32x18, and a frame that is one flat color is blank.
+BLANK_CODECS = {"h264", "hevc", "mpeg4", "mpeg2video", "vp9", "av1"}
+BLANK_STD = 4.0            # 0-255 spread of the shrunk frame's pixels around their own mean
+BLANK_MOSTLY = 0.6         # a part at least this blank is set aside
+BLANK_EDGE_S = 3.0         # a blank run this long at a placed part's start or end is cut off it
+
+
+def blank_seconds(path, duration):
+    """Per second of the clip: True where the picture is one flat color (or unknown: None)."""
+    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-v", "info", "-skip_frame", "nokey", "-i", path,
+           "-an", "-sn", "-dn", "-vf", "scale=32:18:flags=area,format=rgb24,showinfo", "-vsync", "passthrough",
+           "-f", "rawvideo", "-"]
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    ts = [float(v) for v in re.findall(rb"pts_time:\s*([-0-9.]+)", r.stderr)]
+    fr = np.frombuffer(r.stdout, np.uint8)
+    n = min(len(ts), len(fr) // (32 * 18 * 3))
+    if not n:
+        return None
+    fr = fr[:n * 32 * 18 * 3].reshape(n, 32 * 18, 3).astype(np.float32)
+    flat = (fr - fr.mean(axis=1, keepdims=True)).std(axis=(1, 2)) < BLANK_STD
+    secs = int(math.ceil(duration)) or 1
+    out = [None] * secs
+    for t, f in zip(ts, flat):                 # each keyframe stands for the time up to the next one
+        i = int(t)
+        if 0 <= i < secs:
+            out[i] = bool(f)
+    last = None
+    for i in range(secs):
+        if out[i] is None:
+            out[i] = last
+        else:
+            last = out[i]
+    return out
+
+
+def drop_blank(clip, blank=None):
+    """Set aside placed stretches whose picture is blank (see blank_seconds), and cut blank runs off the
+    ends of placed passes. Returns True if anything changed."""
+    placed = [p for p in clip.parts if p.status == "placed"] if clip.split else \
+        ([clip] if clip.status == "placed" else [])
+    if not placed or (clip.vcodec or "").lower() not in BLANK_CODECS or not clip.duration:
+        return False
+    if blank is None:
+        blank = blank_seconds(clip.path, clip.duration)
+    if not blank or not any(blank):
+        return False
+
+    def frac(a, b):
+        v = [blank[i] for i in range(int(a), min(len(blank), int(math.ceil(b))))]
+        v = [x for x in v if x is not None]
+        return sum(v) / len(v) if v else 0.0
+
+    changed = False
+    if not clip.split:
+        if frac(0, clip.duration) >= BLANK_MOSTLY:
+            clip.status, clip.offset = "not placed", None
+            clip.reasons.append(REASON_NO_PICTURE)
+            clip.notes.append("%.0f%% of the picture is a flat color" % (100 * frac(0, clip.duration)))
+            return True
+        return False
+    parts = []
+    for p in clip.parts:
+        if p.status != "placed":
+            parts.append(p)
+            continue
+        f = frac(p.src_in, p.src_out)
+        if f >= BLANK_MOSTLY:
+            p.notes.append("%.0f%% of the picture is a flat color, placed at song %.1fs by its sound"
+                           % (100 * f, p.offset + p.src_in))
+            p.status, p.offset, p.reason = "not placed", None, REASON_NO_PICTURE
+            parts.append(p)
+            changed = True
+            continue
+        lo, hi = int(p.src_in), min(len(blank), int(math.ceil(p.src_out)))
+        a = lo
+        while a < hi and blank[a]:
+            a += 1
+        b = hi
+        while b > a and blank[b - 1]:
+            b -= 1
+        head = Part(p.src_in, float(a), status="not placed", reason=REASON_NO_PICTURE) \
+            if a - p.src_in >= BLANK_EDGE_S else None
+        tail = Part(float(b), p.src_out, status="not placed", reason=REASON_NO_PICTURE) \
+            if p.src_out - b >= BLANK_EDGE_S and b > a else None
+        if head:
+            p.src_in = head.src_out
+            parts.append(head)
+        parts.append(p)
+        if tail:
+            p.src_out = tail.src_in
+            parts.append(tail)
+        if head or tail:
+            p.notes.append("blank picture cut off its %s" % " and ".join(
+                w for w, x in (("start", head), ("end", tail)) if x))
+            changed = True
+    clip.parts = parts
+    if changed:
+        left = [p for p in parts if p.status == "placed"]
+        if left:
+            f = left[0]
+            clip.offset, clip.confidence, clip.drift_ms = f.offset, f.confidence, f.drift_ms
+        else:
+            clip.status, clip.offset = "not placed", None
+            clip.reasons.append(REASON_NO_PICTURE)
+    return changed
 
 
 REPEAT_NOTE = "repeated section, check which copy"
@@ -3018,6 +3176,9 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
     L.append("Generated %s by musicsync %s. Sequence rate %g fps. Song starts at timeline "
              "01:00:00:00 in every camera sequence." % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
                                                         VERSION, seq_fps))
+    if getattr(args, "song_note", ""):
+        L.append("")
+        L.append("**Song version:** %s" % args.song_note)
     L.append("")
     L.append("**%d clips found, %d placed, %d not placed.** Confidence threshold %g. %s" % (
         len(clips), len(placed), len(clips) - len(placed), args.threshold,
@@ -3175,6 +3336,10 @@ def main(argv=None):
                     help="rewrite media paths in the XML, e.g. /mnt/footage=/Volumes/SSD/Shoot "
                          "or /mnt/footage=D:/Shoot (repeatable)")
     ap.add_argument("-j", "--jobs", type=int, default=max(1, min(10, os.cpu_count() or 2)))
+    ap.add_argument("--no-version-check", action="store_true",
+                    help="sync to the song given even when the clips match another version of it better")
+    ap.add_argument("--keep-blank", action="store_true",
+                    help="keep placed stretches whose picture is a flat color (see drop_blank)")
     ap.add_argument("--no-cache", action="store_true",
                     help="don't keep decoded camera audio for the next run (see audio_cache_dir)")
     ap.add_argument("--mode", choices=["auto", "music", "setup"], default="auto",
@@ -3285,6 +3450,34 @@ def main(argv=None):
         args.master = None
     if not args.master:
         log("No song to sync to: setting up the project only (bins, Breakups, Edit sequence)")
+    # A Music folder often holds several mixes of the song, and camera audio only lines up with the
+    # one played on set. Let a few clips vote; if they clearly match another version, sync to that
+    # one. When the two versions line up with each other, the chosen song still goes on the timeline
+    # and every clip is shifted onto it; otherwise the matching version replaces it.
+    song_note, sync_song, shift = "", args.master, None
+    if args.master and not args.no_version_check:
+        others = song_versions(args.master, all_audio)
+        if others:
+            event("stage", text="Checking which version of the song the cameras match")
+            log("Other versions of the song: %s" % ", ".join(os.path.basename(p) for p in others))
+            probe_clips = [c for c in find_clips(args.clips, None, [args.out]) if inside(c.path, args.only)]
+            won = vote_song([args.master] + others, probe_clips) if probe_clips else None
+            if won:
+                log("Clips per version: %s" % ", ".join("%s %d" % (os.path.basename(p), k) for p, k in won[1].items()))
+            if won and won[0] != args.master and won[1][won[0]] >= 2 and \
+                    won[1][won[0]] >= 2 * won[1].get(args.master, 0):
+                sync_song = won[0]
+                shift = song_shift(args.master, sync_song)
+                a, b = os.path.basename(args.master), os.path.basename(sync_song)
+                if shift is not None:
+                    song_note = ("The cameras were shot to %s, not %s. Synced to it and placed on %s, "
+                                 "which lines up with it." % (b, a, a))
+                else:
+                    song_note = ("The cameras were shot to %s, not %s, and the two don't line up, so the "
+                                 "project uses %s." % (b, a, b))
+                    args.master = sync_song
+                log(song_note)
+    args.song_note = song_note
 
     def audio_bin(p):      # files under a folder called SFX / Music go to those bins, the rest is Captured
         parts = [x.lower() for x in os.path.relpath(p, args.clips).replace("\\", "/").split("/")[:-1]]
@@ -3298,9 +3491,9 @@ def main(argv=None):
     master = None
     if args.master:
         event("stage", text="Listening to the song")
-        log("Indexing master %s" % args.master)
+        log("Indexing master %s" % sync_song)
         try:
-            master = MasterIndex(load_audio(args.master))
+            master = MasterIndex(load_audio(sync_song))
         except RuntimeError as e:
             sys.exit("error: can't read master: %s" % e)
         log("  %.1f s, %d landmarks" % (master.duration, len(master.h)))
@@ -3317,6 +3510,9 @@ def main(argv=None):
         event("start", project=project_name, folder=args.clips, song=os.path.basename(args.master),
               song_duration=round(master.duration, 2), clips=len(clips), version=VERSION, mode="music")
         match_all(clips, master, args)
+        if shift is not None:
+            move_to_song(clips, shift)
+            master = MasterIndex(load_audio(args.master))
         if args.mode == "auto" and not getattr(args, "song_certain", True) \
                 and not any(c.status == "placed" for c in clips):
             # the "song" lines up with nothing: it's another recording (a boom track on a commercial)
@@ -3418,7 +3614,17 @@ def main(argv=None):
           unreadable=sum(1 for c in clips if not c.readable),
           restarted=sum(1 for c in clips if c.split),
           check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None),
-          worth_a_look=len({id(c) for c, _, _ in doubtful(clips)}))   # clips, not parts
+          worth_a_look=len({id(c) for c, _, _ in doubtful(clips)}),   # clips, not parts
+          song_note=song_note)
+
+
+def move_to_song(clips, shift):
+    """Offsets found on one version of the song, moved onto another that sits `shift` s earlier."""
+    for c in clips:
+        for obj in [c] + (c.parts if c.split else []):
+            for k in ("offset", "repeat_alt", "runner_up_offset"):
+                if getattr(obj, k, None) is not None:
+                    setattr(obj, k, getattr(obj, k) - shift)
 
 
 def match_all(clips, master, args):
@@ -3433,6 +3639,8 @@ def match_all(clips, master, args):
             return c
         try:
             sync_clip(c, master, st)
+            if not getattr(args, "keep_blank", False):
+                drop_blank(c)
         except Exception as e:           # one bad file never kills the batch
             c.reasons.append(REASON_UNREADABLE)
             c.notes.append("error: %s" % e)
