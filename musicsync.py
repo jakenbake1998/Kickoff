@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.29"
+VERSION = "0.5.30"
 
 # ---------------------------------------------------------------- constants
 
@@ -3724,7 +3724,8 @@ def narrative_cameras(args, project_name, clips):
         return c
 
     pending = list(usable)
-    while pending:
+    leads = []                   # reported last: they take no matching, so counting them first made the
+    while pending:               # clips-per-minute (and the time left) look far faster than it is
         # the lowest camera still waiting leads: its clips become takes of their own
         lead = min(letter_of[c.path] for c in pending)
         new = [c for c in pending if letter_of[c.path] == lead]
@@ -3740,7 +3741,7 @@ def narrative_cameras(args, project_name, clips):
             chunks += [x, np.zeros(int(NARR_GAP_S * SR), np.float32)]
             pos += len(x) / SR + NARR_GAP_S
             c.afile = files[-1]
-            report(c)
+            leads.append(c)
         if not pending:
             break
         master = MasterIndex(np.concatenate(chunks))
@@ -3757,6 +3758,8 @@ def narrative_cameras(args, project_name, clips):
                     report(c)
                     log("  %-40s with %s by %s" % (c.rel, os.path.basename(c.afile["clip"].path), c.how))
         pending = left
+    for c in leads:
+        report(c)
     for c in clips:
         if c.status != "placed" and c not in usable:
             report(c)
