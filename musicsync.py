@@ -185,6 +185,7 @@ class Clip:
     parts: list = field(default_factory=list)   # Part per pass of the song; one Part when not split
     seq_start_frame: Optional[int] = None
     notes: list = field(default_factory=list)
+    repeat_alt: Optional[float] = None   # placed at the first of two identical sections; the other
 
 
 @dataclass
@@ -204,6 +205,7 @@ class Part:
     check: str = ""
     track: Optional[int] = None
     notes: list = field(default_factory=list)
+    repeat_alt: Optional[float] = None
 
 
 BRANDS = [("gopro", "GoPro"), ("dji", "DJI"), ("arri", "ARRI"), ("alexa", "ARRI"),
@@ -561,6 +563,7 @@ class Settings:
     max_fps: float = 0.0
     speed_margin: float = 0.0       # extra confidence a sped-up match must clear
     speed_strength: float = 0.5     # and how far above chance it must stand (normal: 0.25)
+    place_repeats: bool = True      # place clips that fit two copies of a section at the first one
 
 
 def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
@@ -656,10 +659,18 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
             clip.notes.append("confirmed by waveform check against song %.2fs"
                               % (ev["runner_up_offset"] - aoff))
         elif (R - N) > 0.5 * (A - N):
-            clip.reasons.append(REASON_AMBIGUOUS)
-            clip.notes.append("fits equally at song %.2fs and %.2fs"
-                              % (coarse - aoff, clip.runner_up_offset))
-            return
+            first = repeat_pick(xs, master, coarse, ev["runner_up_offset"], 0.0, xs_len) \
+                if st.place_repeats else None
+            if first is None:
+                clip.reasons.append(REASON_AMBIGUOUS)
+                clip.notes.append("fits equally at song %.2fs and %.2fs"
+                                  % (coarse - aoff, clip.runner_up_offset))
+                return
+            other = ev["runner_up_offset"] if first == coarse else coarse
+            coarse = first
+            clip.repeat_alt = other - aoff
+            clip.notes.append("%s: placed at the first copy, also fits at song %.2fs"
+                              % (REPEAT_NOTE, other - aoff))
         else:
             clip.reasons.append(REASON_LOW_CONF)
             clip.notes.append("best guess song %.2fs" % (coarse - aoff))
@@ -673,6 +684,22 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         clip.check = check_string(wave_q(xs, master, offset_audio, *ov, drift=clip.drift_ms,
                                          span=ov[1] - ov[0]))
     clip.status = "placed"
+
+
+REPEAT_NOTE = "repeated section, check which copy"
+
+
+def repeat_pick(xs, master, off1, off2, lo, hi):
+    """For a stretch that fits two places in the song equally: when the audio is really the same at
+    both (a pasted chorus), lip sync is right at either, so return the earlier one. None when that
+    can't be confirmed from the waveform (then the clip is set aside)."""
+    if xs is None:
+        return None
+    for off in (off1, off2):
+        q = wave_q(xs, master, off, *in_song(xs, master, off, lo, hi))
+        if len(q) < 2 or sum(v >= WAVE_MATCH for _, v in q) < 0.8 * len(q):
+            return None
+    return min(off1, off2)
 
 
 def refine_offset(xs, master, coarse, lo, hi):
@@ -927,7 +954,17 @@ def split_passes(clip, master, st, h, t, x, speed, xs):
                 part.notes.append(part.refine)
         else:
             part.status = "not placed"
-            if e["R"] and (e["R"] - e["N"]) > 0.5 * (e["A"] - e["N"]):
+            ambiguous = e["R"] and (e["R"] - e["N"]) > 0.5 * (e["A"] - e["N"])
+            first = repeat_pick(xs, master, p["off"], e["runner_up_offset"], lo, hi) \
+                if ambiguous and st.place_repeats else None
+            if first is not None:
+                other = e["runner_up_offset"] if first == p["off"] else p["off"]
+                o, part.drift_ms, part.refine, ov = refine_offset(xs, master, first, lo, hi)
+                part.offset, part.status, part.repeat_alt = o - aoff, "placed", other - aoff
+                part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms, span=ov[1] - ov[0]))
+                part.notes.append("%s: placed at the first copy, also fits at song %.1fs"
+                                  % (REPEAT_NOTE, other + p["first"]))
+            elif ambiguous:
                 part.reason = REASON_AMBIGUOUS
                 part.notes.append("this pass starts at song %.1fs or %.1fs (repeated section)"
                                   % (p["off"] + p["first"], e["runner_up_offset"] + p["first"]))
@@ -1401,13 +1438,11 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label):
         start = song_frame + int(round((p.offset + a / seq_fps * c.speed) * seq_fps))
         if p.src_in == 0:
             c.seq_start_frame = start
-        n = len(c.parts)
         entries.append(dict(media=Media.of_clip(c, seq_fps), start=start, vtrack=p.track,
                             atrack=(first_a + p.track - 1) if args.scratch_audio != "off" else None,
                             aenabled=args.scratch_audio == "on", label=label, speed=c.speed,
                             src=(p.src_in, p.src_out) if c.split else None,
-                            name=("%s (pass %d of %d)" % (os.path.basename(c.path), c.parts.index(p) + 1, n))
-                            if c.split else None))
+                            name=clip_name(c, p)))
     start_tc = 3600 * rate_xml(seq_fps)[0] - song_frame
     return entries, start_tc
 
@@ -1510,6 +1545,17 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             xw.master_clip(b, m)
         maybe_empty(b, ["Audio", bname], bool(items))
     return root
+
+
+def clip_name(c, p):
+    """Timeline name: file name, plus which pass of a restarted take, plus a flag when it was placed
+    at the first of two identical sections."""
+    name = os.path.basename(c.path)
+    if c.split:
+        name += " (pass %d of %d)" % (c.parts.index(p) + 1, len(c.parts))
+    if p.repeat_alt is not None:
+        name += " (check chorus)"
+    return name if name != os.path.basename(c.path) else None
 
 
 def placements_of(clips):
@@ -1661,8 +1707,23 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
                     p.check or ""))
         L.append("")
     doubt = [(c, i, p) for c in clips for i, p in enumerate(c.parts, 1)
-             if p.status == "placed" and p.check and
+             if p.status == "placed" and p.check and p.repeat_alt is None and
              int(p.check.split("/")[0]) < 0.7 * int(p.check.split("/")[1])]
+    repeats = [(c, i, p) for c in clips for i, p in enumerate(c.parts, 1)
+               if p.status == "placed" and p.repeat_alt is not None]
+    if repeats:
+        L.append("## Check which chorus")
+        L.append("")
+        L.append("These only cover a section that's in the song twice with the same audio (a pasted "
+                 "chorus), so they lip-sync at either copy. They're placed at the first copy and named "
+                 "`(check chorus)`; slide one to the other copy if that's where it was shot "
+                 "(`--set-aside-repeats` leaves them out instead).")
+        L.append("")
+        for c, i, p in repeats:
+            L.append("- %s%s: placed at song %s, also fits at %s (%+.2f s)" % (
+                c.rel, " pass %d" % i if c.split else "", fmt_clock(p.offset + p.src_in * c.speed),
+                fmt_clock(p.repeat_alt + p.src_in * c.speed), p.repeat_alt - p.offset))
+        L.append("")
     if doubt:
         L.append("## Worth a look")
         L.append("")
@@ -1746,6 +1807,9 @@ def main(argv=None):
     ap.add_argument("--scratch-audio", choices=["off", "disabled", "on"], default="disabled",
                     help="put each clip's scratch audio on its own audio track (default: present but disabled)")
     ap.add_argument("--no-master-audio", action="store_true", help="don't put the master song on A1")
+    ap.add_argument("--set-aside-repeats", dest="place_repeats", action="store_false",
+                    help="set aside clips that fit two identical copies of a section (a pasted chorus) "
+                         "instead of placing them at the first copy, marked (check chorus)")
     ap.add_argument("--path-map", action="append", default=[], metavar="OLD=NEW",
                     help="rewrite media paths in the XML, e.g. /mnt/footage=/Volumes/SSD/Shoot "
                          "or /mnt/footage=D:/Shoot (repeatable)")
@@ -1808,7 +1872,8 @@ def main(argv=None):
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         list(ex.map(probe, clips))
 
-    st = Settings(threshold=args.threshold, min_hashes=args.min_landmarks, max_fps=args.max_fps)
+    st = Settings(threshold=args.threshold, min_hashes=args.min_landmarks, max_fps=args.max_fps,
+                  place_repeats=args.place_repeats)
     log("Matching")
     done = 0
 
@@ -1840,7 +1905,7 @@ def main(argv=None):
         if c.status == "placed" and not c.split:
             c.parts = [Part(0.0, c.duration, offset=c.offset, status="placed", confidence=c.confidence,
                             aligned=c.aligned, runner_up=c.runner_up, drift_ms=c.drift_ms, refine=c.refine,
-                            check=c.check)]
+                            check=c.check, repeat_alt=c.repeat_alt)]
     labels = assign_cameras(clips, args.group_by)
     placed = [c for c in clips if c.status == "placed"]
     seq_fps = args.fps or (collections.Counter(c.fps for c in placed if c.fps).most_common(1) or

@@ -295,7 +295,7 @@ def main(out):
     add(os.path.join(arri, "B001C002_260927_R1AB.mov"), "24000/1001", 45, 41.37, meta=arri_meta,
         acodec="pcm_s16le", speed=1.001)
     add(os.path.join(arri, "B001C003_260927_R1AB.mov"), "24000/1001", 12, marks["chorus2"] + 2.0,
-        expect="ambiguous", meta=arri_meta, acodec="pcm_s16le", live_drums=False)
+        expect="chorus", meta=arri_meta, acodec="pcm_s16le", live_drums=False)
     add(os.path.join(arri, "B001C004_260927_R1AB.mov"), "24000/1001", 15, expect="audio track is silent",
         audio="silent", meta=arri_meta, acodec="pcm_s16le")
     # C cam: GoPro, one normal-speed take and one 60p take that still has scratch audio (must sync)
@@ -317,7 +317,7 @@ def main(out):
                ["placed", "placed"])                               # stopped, restarted from the top
     add_passes(os.path.join(sony, "C0008.MP4"), "24000/1001", 70,
                [(0, 20, 25), (29, 56, 16), (48, 0, 20)],            # 2nd pass is only the pasted chorus
-               ["placed", "ambiguous", "placed"])
+               ["placed", "chorus", "placed"])
     add_passes(os.path.join(arri, "B001C006_260927_R1AB.mov"), "24000/1001", 40, [(0, 5, 20), (20, 60, 20)],
                ["placed", "placed"], meta=arri_meta, acodec="pcm_s16le")      # jump, no stop
     add_passes(os.path.join(gopro, "GX010004.MP4"), "30000/1001", 46, [(0, 30, 15), (19, 45, 25)],

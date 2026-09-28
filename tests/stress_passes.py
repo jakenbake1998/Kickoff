@@ -5,7 +5,7 @@
 
 Builds N takes (single pass, restart, straight jump, pause, three passes) from the synthetic song
 through the simulated room, runs the matcher on each, and counts passes placed at the right song
-position, a frame or three off (two passes whose song positions differ by under 0.3 s are treated
+position, at the other copy of a pasted chorus (flagged "check chorus": lip sync is the same), a frame or three off (two passes whose song positions differ by under 0.3 s are treated
 as one pass that drifted), at a wrong one (should always be 0), and missed. Misses are listed with how many seconds
 of the pass lie outside the pasted chorus: a pass that only covers the chorus fits both copies and
 is correctly left unplaced."""
@@ -52,7 +52,8 @@ def take(seed):
     clip = m.Clip(path="take%d" % seed, rel="take%d" % seed, duration=length, fps=23.976, has_audio=True)
     m.load_audio = lambda path, stream="a:0": audio
     m.sync_clip(clip, MASTER, m.Settings())
-    got = [(p.offset, p.status) for p in clip.parts] if clip.split else [(clip.offset, clip.status)]
+    got = [(p.offset, p.status, p.repeat_alt) for p in clip.parts] if clip.split else \
+        [(clip.offset, clip.status, clip.repeat_alt)]
     return seed, kind, passes, got
 
 
@@ -63,7 +64,8 @@ def outside_chorus(s0, d):
 if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 100
     t0 = time.time()
-    agg = defaultdict(lambda: [0, 0, 0, 0, 0])
+    agg = defaultdict(lambda: [0, 0, 0, 0, 0, 0])
+    gap = CHORUS[1][0] - CHORUS[0][0]
     missed = []
     with ProcessPoolExecutor(os.cpu_count() or 2) as ex:
         for seed, kind, passes, got in ex.map(take, range(n)):
@@ -71,18 +73,22 @@ if __name__ == "__main__":
             a[0] += 1
             for c0, s0, d in passes:
                 a[1] += 1
-                if any(st == "placed" and abs(o - (s0 - c0)) < 0.03 for o, st in got):
+                if any(st == "placed" and alt is None and abs(o - (s0 - c0)) < 0.03 for o, st, alt in got):
                     a[2] += 1
+                elif any(st == "placed" and alt is not None and
+                         min(abs(o - (s0 - c0) + k) for k in (-gap, 0, gap)) < 0.03 for o, st, alt in got):
+                    a[5] += 1          # chorus-only pass placed at a copy of the chorus, flagged
                 else:
                     missed.append((seed, kind, round(s0, 1), round(d, 1), round(outside_chorus(s0, d), 1)))
             exp = [s0 - c0 for c0, s0, _ in passes]
-            err = [min(abs(o - e) for e in exp) for o, st in got if st == "placed"]
+            err = [min(abs(o - e + k) for e in exp for k in ((-gap, 0, gap) if alt is not None else (0,)))
+                   for o, st, alt in got if st == "placed"]
             a[3] += sum(1 for e in err if e >= 0.15)            # visibly out of sync
             a[4] += sum(1 for e in err if 0.03 <= e < 0.15)     # a frame or three off
     for kind in KINDS:
-        t, p, ok, bad, near = agg[kind]
-        print("%-8s takes %3d  passes %3d  placed right %3d  within 3 frames %d  placed WRONG %d"
-              % (kind, t, p, ok, near, bad))
+        t, p, ok, bad, near, rep_ = agg[kind]
+        print("%-8s takes %3d  passes %3d  placed right %3d  at a chorus copy (flagged) %3d  within 3 frames %d"
+              "  placed WRONG %d" % (kind, t, p, ok, rep_, near, bad))
     print("missed passes (seed, kind, song start, length, seconds outside the chorus):")
     for x in sorted(missed, key=lambda x: -x[4]):
         print("  ", x)

@@ -3,7 +3,9 @@
     python3 check.py SYNTH_DIR/expected.json OUT_DIR/sync_report.csv"""
 import collections, csv, json, sys
 
-exp = json.load(open(sys.argv[1]))["clips"]
+data = json.load(open(sys.argv[1]))
+exp = data["clips"]
+gap = data["song_marks"]["chorus2"] - data["song_marks"]["chorus1"]    # the pasted chorus repeats
 rows = collections.defaultdict(list)
 for r in csv.DictReader(open(sys.argv[2])):
     rows[r["file"]].append(r)
@@ -17,9 +19,13 @@ def secs(clock):
     return int(m) * 60 + float(s)
 
 
-def placed_ok(r, offset):
+def placed_ok(r, offset, chorus=False):
     if r["status"] != "placed":
         return False, "not placed: %s" % r["reason"]
+    if chorus:     # a chorus-only clip lip-syncs at either copy: placed at one, flagged in the notes
+        if "repeated section" not in r["notes"]:
+            return False, "placed without the check-chorus flag"
+        offset = min((offset - gap, offset, offset + gap), key=lambda o: abs(float(r["offset_seconds"]) - o))
     err = (float(r["offset_seconds"]) - offset) * 1000
     return abs(err) < tol, "error %+.1f ms (%+.2f frames), conf %s, check %s" % (
         err, err / 1000 * fps, r["confidence"], r["waveform_check"] or "-")
@@ -34,8 +40,8 @@ for f, e in sorted(exp.items()):
         ok = len(rs) == len(e["passes"])
         detail = ["%d passes" % len(rs)]
         for k, (r, p) in enumerate(zip(rs, e["passes"])):
-            if p["expect"] == "placed":
-                good, d = placed_ok(r, p["offset"])
+            if p["expect"] in ("placed", "chorus"):
+                good, d = placed_ok(r, p["offset"], p["expect"] == "chorus")
             else:
                 good, d = r["status"] != "placed" and p["expect"] in r["reason"], r["reason"] or "placed!"
             a, b = (secs(v) for v in r["clip_range"].split("-"))
@@ -45,8 +51,8 @@ for f, e in sorted(exp.items()):
             ok = ok and good
             detail.append("[%s %s %s]" % (r["clip_range"], "ok" if good else "BAD", d))
         detail = " ".join(detail)
-    elif e["expect"] == "placed":
-        ok, detail = placed_ok(r, e["offset"])
+    elif e["expect"] in ("placed", "chorus"):
+        ok, detail = placed_ok(r, e["offset"], e["expect"] == "chorus")
         ok = ok and len(rs) == 1
     else:
         ok = r["status"] != "placed" and e["expect"] in r["reason"]

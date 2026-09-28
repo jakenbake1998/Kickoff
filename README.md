@@ -90,7 +90,7 @@ Nothing is guessed. Every clip that isn't placed gets a reason in the report:
 | `no audio track` | No audio stream (typical for slow motion) |
 | `audio track is silent` | Audio stream present but empty |
 | `no match to song` | Best alignment is no better than chance: B-roll, narrative, wrong song |
-| `ambiguous match (repeated section of song)` | Fits equally well at two places, e.g. a clip that only covers a copy-pasted chorus. The report lists both song times |
+| `ambiguous match (repeated section of song)` | Fits equally well at two places, and the audio at the two isn't clearly identical (or you passed `--set-aside-repeats`). The report lists both song times. Clips covering only a copy-pasted chorus are placed instead: see "Repeated chorus" below |
 | `confidence below threshold` | A likely position exists but not decisively enough (`--threshold`, default 60) |
 | `unreadable file` | ffmpeg can't open it. RED `.R3D` and `.braw` are in this group; sync their proxies instead |
 
@@ -107,17 +107,26 @@ camera kept rolling, each pass is found on its own:
   passes are the same file with different in and out points.
 - The report lists every pass with its clip time, track and song time, in its own section.
 - A repeated chorus doesn't count as a jump: when one position explains both stretches, it stays
-  one pass. A pass that only covers a copy-pasted chorus is listed but not placed (it fits both
-  choruses equally).
+  one pass. A pass that only covers a copy-pasted chorus is placed at the first copy and flagged
+  (see "Repeated chorus" below).
 - A bit of song shorter than 3 seconds (a false start) isn't split out.
 - A take where the song stops and never restarts syncs as one clip, and the report's "Worth a look"
   section flags the stretch where the audio no longer matches.
 
 Tested with `tests/stress_passes.py 300`: 300 random single, restarted, paused, jumped and
 three-pass takes (600 passes, 3 to 15 dB signal-to-noise, with and without a live drummer). No pass
-was placed at a wrong position. 542 were placed exactly; the rest are passes with no more than
-3 seconds of song outside the repeated chorus, correctly left unplaced, plus one take whose two
-passes sat only 0.1 s apart in the song and was placed as one clip, 1 frame off.
+was placed at a wrong position. 542 were placed exactly and 37 chorus-only passes at a flagged
+chorus copy. 19 were left unplaced: passes that are mostly repeated chorus with 3 seconds or less
+of anything else, where neither position can be confirmed. One take whose two passes sat only
+0.1 s apart in the song was placed as one clip, 1 frame off.
+
+## Repeated chorus
+
+When a clip (or a pass) only covers a section that appears twice in the song with the same audio,
+it lip-syncs correctly at either copy, but nothing in the audio says which one was being shot.
+Kickoff checks the waveform matches at both copies, places it at the first, adds `(check chorus)`
+to its name, and lists it under "Check which chorus" in the report with both song times. Slide it
+to the other copy if that's where it belongs. `--set-aside-repeats` sets these aside instead.
 
 ## Waveform check
 
@@ -179,6 +188,7 @@ A, B, C... in order. `--group-by model` or `--group-by folder` forces one rule.
 --name NAME           project name (default: folder name)
 --per-camera          also write each sync sequence as its own XML
 --no-master-audio     leave the song off A1
+--set-aside-repeats   don't place chorus-only clips at the first chorus
 --path-map OLD=NEW    rewrite media paths in the XML (repeatable)
 -j 8                  parallel files; use -j 2 when reading from a single spinning drive
 ```
