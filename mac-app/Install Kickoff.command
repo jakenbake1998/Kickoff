@@ -34,16 +34,17 @@ echo "https://raw.githubusercontent.com/jakenbake1998/Kickoff/main" > "$SUPPORT/
 echo "Engine installed."
 
 if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
-  if command -v brew >/dev/null 2>&1; then
-    echo "Installing ffmpeg with Homebrew..."
-    brew install ffmpeg
-  else
+  if ! command -v brew >/dev/null 2>&1; then
     echo
-    echo "ffmpeg is needed and Homebrew isn't installed."
-    echo "Install Homebrew from https://brew.sh (one command), then run this installer again."
-    open "https://brew.sh"
-    exit 1
+    echo "Kickoff needs ffmpeg, which comes from Homebrew. Installing Homebrew now:"
+    echo "type your Mac password when asked (nothing shows as you type) and press Return to go on."
+    echo
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || {
+      echo; echo "Homebrew didn't install. Run this installer again to retry."; exit 1; }
+    eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
   fi
+  echo "Installing ffmpeg with Homebrew (a few minutes)..."
+  brew install ffmpeg || { echo; echo "ffmpeg didn't install. Run this installer again to retry."; exit 1; }
 fi
 echo "ffmpeg: $(command -v ffmpeg)"
 

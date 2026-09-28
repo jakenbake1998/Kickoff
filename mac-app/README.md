@@ -9,8 +9,8 @@ Drop a shoot folder on Kickoff and it writes, inside that folder, `Premiere Sync
    Terminal window and press Return. (Double-clicking it works on older macOS; newer versions block
    scripts from the internet unless you allow it in System Settings > Privacy & Security > Open Anyway.)
 2. If asked, let it install Apple's Command Line Tools, then run the installer again.
-3. If ffmpeg isn't on the Mac and Homebrew isn't either, it opens brew.sh: paste the one install
-   command there into Terminal, then run the installer again.
+3. If ffmpeg isn't on the Mac, the installer installs it with Homebrew, installing Homebrew first
+   if needed. It asks for your Mac password once; nothing shows as you type.
 4. Kickoff.app lands in your home Applications folder. Drag it to the Dock.
 
 Kickoff updates itself from GitHub: the engine before every run, the window each time you open
