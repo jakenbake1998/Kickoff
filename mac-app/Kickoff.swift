@@ -234,6 +234,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
 
+    // the page's process died (a WebKit crash, or memory): load it again; the page keeps its boxes
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        ready = false
+        webView.reload()
+    }
+
     func js(_ code: String) {
         web?.evaluateJavaScript(code, completionHandler: nil)
     }
@@ -267,8 +273,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let panel = NSOpenPanel()
         panel.canChooseDirectories = target != "song"
         panel.canChooseFiles = target != "export"
-        if target == "song" { panel.allowedContentTypes = [.audio] }
-        else if panel.canChooseFiles { panel.allowedContentTypes = [.audiovisualContent, .folder] }
+        // exactly the files usable() keeps, so nothing that can be chosen is dropped afterwards
+        let audioTypes = audioExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
+        let videoTypes = videoExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
+        if target == "song" { panel.allowedContentTypes = audioTypes }
+        else if panel.canChooseFiles { panel.allowedContentTypes = [UTType.folder] + audioTypes + videoTypes }
         panel.allowsMultipleSelection = target == "footage" || target == "any"
         panel.canCreateDirectories = target == "export"
         panel.prompt = target == "export" ? "Export Here" : "Add"
@@ -474,8 +483,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
         let editItem = NSMenuItem()
         main.addItem(editItem)
-        let editMenu = NSMenu(title: "Edit")
+        let editMenu = NSMenu(title: "Edit")                   // these keys reach the page's text fields
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = editMenu
 

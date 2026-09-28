@@ -49,6 +49,7 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .status{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:12.5px;margin-top:-10px}
 .status span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .status span:last-child{font-variant-numeric:tabular-nums;flex:none}
+.status #eta:not(:empty){margin-left:14px}
 
 /* progress in plain words while a run goes: "28 synced so far, 6 set aside" */
 .stats{margin:0;color:var(--muted);font-size:14px}
@@ -99,6 +100,27 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .modeswitch{display:grid;grid-template-columns:1fr 1fr;width:100%;padding:4px;border-radius:12px}
 .modeswitch button{padding:10px 14px;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;border-radius:9px}
 .modeswitch button svg{margin:0}
+/* a run going while Settings or History is open: the tabs fade into a small progress bar in the same spot,
+   and it turns back into the tabs (the run's tab lit) on the way back */
+.tabswrap{position:relative}
+.tabswrap .modeswitch,.minirun{transition:opacity .35s ease,transform .35s ease}
+.minirun{position:absolute;inset:0;display:flex;align-items:center;gap:16px;padding:0 18px;border-radius:12px;border:1px solid color-mix(in srgb,var(--accent) 55%,transparent);
+  background:var(--panel);color:var(--ink);font:600 14px var(--body);opacity:0;transform:scale(.985);pointer-events:none}
+.minirun:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--panel))}
+.tabswrap.busy .modeswitch{opacity:0;transform:scale(.985);pointer-events:none}
+.tabswrap.busy .minirun{opacity:1;transform:none;pointer-events:auto}
+.minirun .mlabel{flex:none;display:flex;align-items:center;gap:6px}
+.minirun .mlabel:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.minirun .mtrack{flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.minirun .mtrack i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.minirun .mtrack.busy i{width:30%;animation:slide 1.2s ease-in-out infinite}
+.minirun .mcount{flex:none;color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.minirun.done .mlabel:before,.minirun.done .mtrack i{background:var(--good)}
+.minirun.fail .mlabel:before,.minirun.fail .mtrack i{background:var(--bad)}
+/* back to the tabs: the lit tab grows out of the progress fill */
+.tabswrap.morph .modeswitch button[aria-pressed="true"]{animation:pillIn .45s cubic-bezier(.3,.7,.3,1) both}
+@keyframes pillIn{from{clip-path:inset(42% calc(100% - var(--fill,30%)) 42% 0 round 3px)}to{clip-path:inset(0 0 0 0 round 9px)}}
+@media (prefers-reduced-motion:reduce){.tabswrap .modeswitch,.minirun{transition:none}.tabswrap.morph .modeswitch button{animation:none!important}}
 #bStart{width:100%;padding:15px 20px;font:700 17px var(--display);border-radius:12px;letter-spacing:.01em}
 #bStart:not(:disabled){box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 28%,transparent)}
 #bStart:disabled{opacity:.45;cursor:default}
@@ -209,9 +231,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .chips{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;max-width:100%}
 .chipf{display:inline-flex;align-items:center;gap:2px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 2px 2px 8px;font-size:12.5px;font-weight:600}
 .chipf span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chipf button,.box .clr{border:0;background:none;color:var(--muted);padding:0 6px;font-size:14px;line-height:1.3;border-radius:4px}
-.chipf button:hover,.box .clr:hover{color:var(--ink);background:var(--line)}
-.box .clr{font-size:12px;font-weight:600;margin-top:2px}
+.chipf button{border:0;background:none;color:var(--muted);padding:0 6px;font-size:14px;line-height:1.3;border-radius:4px}
+.chipf button:hover{color:var(--ink);background:var(--line)}
+/* the X in a filled box's corner: empties that box */
+.box{position:relative}
+.box .bx{position:absolute;top:8px;right:8px;width:28px;height:28px;padding:0;display:grid;place-items:center;border:0;background:none;color:var(--muted);border-radius:7px}
+.box .bx:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.box .bx svg{margin:0}
 .syncto{display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--accent);font-size:13.5px;font-weight:700;gap:4px;padding:0 2px}
 .job .rowx{border:0;background:none;color:var(--muted);font-size:17px;padding:0;border-radius:6px;align-self:center;height:30px}
 .job .rowx:hover{color:var(--ink);background:var(--line)}
@@ -254,7 +280,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 #vRun>*{flex:none}
 #vRun>#hints{flex:0 1 auto;min-height:0;overflow-y:auto}
 /* spare height is shared above the content and above the buttons, so a short screen sits mid-window */
-#vRun>.vtop{margin-top:auto;margin-bottom:-16px;height:0}
+#vRun>.vtop{margin-top:auto;margin-bottom:-16px;height:0}   /* pinned in px by pinStage() before Start */
 #vHist,#vSet{display:flex;flex-direction:column;gap:12px;flex:1;min-height:0}
 #vHist[hidden],#vSet[hidden]{display:none!important}
 #histList{flex:1;min-height:0;overflow-y:auto;align-content:start}
@@ -378,9 +404,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <button class="histbtn" id="bHist" aria-pressed="false" title="Every run so far"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>History</button>
   </div>
   </div>
+  <div class="tabswrap" id="tabsWrap">
   <div class="seg tabs modeswitch" role="tablist" aria-label="Kind of project">
     <button data-view="music" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Music video</button>
     <button data-view="setup" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>Other projects</button>
+  </div>
+  <button class="minirun" id="miniRun" inert><span class="mlabel" id="miniLabel">Back to syncing</span><span class="mtrack" id="miniTrack"><i id="miniBar"></i></span><span class="mcount" id="miniCount"></span></button>
   </div>
 
   <section id="vHist" class="hist" hidden>
@@ -457,7 +486,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <div id="run" hidden>
     <div style="display:grid;gap:18px">
       <div class="prog" id="prog"><i id="bar"></i></div>
-      <div class="status"><span id="stage">Starting</span><span id="count"></span></div>
+      <div class="status"><span id="stage">Starting</span><span><span id="count"></span><span id="eta"></span></span></div>
     </div>
   </div>
 
@@ -503,6 +532,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
   <div class="btns" id="btnsErr" hidden>
     <button class="pri" id="bRetry">Try again</button>
+    <button class="quiet" id="bBackBoxes" style="margin-left:0" hidden>Back to the boxes</button>
     <button class="newrun" id="bNew2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New run</button>
   </div>
   </section>
@@ -603,9 +633,17 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   var ICON_FOLDER = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 
   // ---- adding things: dropped on a box, picked for a box, or dropped anywhere / from the Dock
+  function resultShowing() { return !$("btnsDone").hidden || !$("btnsErr").hidden || !$("batch").hidden; }
+  // rows (or the Other projects queue) whose run finished are cleared, so they don't run again
+  function clearFinished() {
+    jobs = jobs.filter(function (j) { return !j.done; });
+    if (!jobs.length) jobs = [{ song: null, footage: [] }];
+    if (queueDone) { queue = []; setupName = ""; $("qName").innerHTML = ""; queueDone = false; }
+  }
+  function leaveResult() { clearFinished(); batch = null; reset(); }
   function ready() {                      // leave a finished run's result for the next setup
     if (running()) return false;
-    if (!$("btnsDone").hidden || !$("btnsErr").hidden || !$("batch").hidden) reset();
+    if (resultShowing()) leaveResult();
     if ($("vRun").hidden) showView(mode);
     return true;
   }
@@ -653,6 +691,30 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     return l;
   }
   var setupName = "";
+  var queueDone = false;           // the queue's run finished: cleared when the next thing is added
+  // the boxes are kept on this Mac, so a relaunch (or an update) brings them back; finished runs are left out
+  function saveBoxes() {
+    try {
+      localStorage.setItem("kickoff-boxes", JSON.stringify({
+        jobs: jobs.filter(function (j) { return !j.done; }).map(function (j) { return { song: j.song, footage: j.footage, name: j.name || "" }; }),
+        queue: queueDone ? [] : queue, setupName: queueDone ? "" : setupName }));
+    } catch (e) {}
+  }
+  function loadBoxes() {
+    try {
+      var saved = JSON.parse(localStorage.getItem("kickoff-boxes") || "null");
+      if (!saved || typeof saved !== "object") return;
+      var str = function (x) { return typeof x === "string"; };
+      if (Array.isArray(saved.jobs)) {
+        var js = saved.jobs.filter(function (o) { return o && typeof o === "object"; }).map(function (o) {
+          return { song: str(o.song) ? o.song : null, footage: Array.isArray(o.footage) ? o.footage.filter(str) : [], name: str(o.name) ? o.name : "" };
+        });
+        if (js.length) jobs = js;
+      }
+      if (Array.isArray(saved.queue)) queue = saved.queue.filter(str);
+      if (str(saved.setupName)) setupName = saved.setupName;
+    } catch (e) {}
+  }
 
   function addFootage(r, folders) {
     folders.forEach(function (f) { if (jobs[r].footage.indexOf(f) < 0) jobs[r].footage.push(f); });
@@ -663,6 +725,19 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     else add(paths);
   }
 
+  var ICON_X = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  function boxX(what, clear) {            // the corner X of a filled box
+    var x = document.createElement("button");
+    x.className = "bx"; x.title = "Remove"; x.setAttribute("aria-label", "Remove the " + what);
+    x.innerHTML = ICON_X;
+    x.addEventListener("click", function (ev) { ev.stopPropagation(); if (running()) return; clear(); renderStage(); });
+    return x;
+  }
+  function boxKey(ev, target, i) {        // Enter or Space on a box: the same as clicking it
+    if (ev.target !== ev.currentTarget || (ev.key !== "Enter" && ev.key !== " ")) return;
+    ev.preventDefault();
+    if (!running()) post({ cmd: "pick", target: target, row: i });
+  }
   function renderJobs() {
     var wrap = $("jobs");
     wrap.innerHTML = "";
@@ -689,13 +764,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       sub.textContent = j.song ? parent(j.song) : j.footage.length ? "or leave it: Kickoff looks in the footage's Music folder"
         : "WAV, AIFF, MP3 or any other audio file";
       sb.append(v, sub);
-      if (j.song) {
-        var c = document.createElement("button");
-        c.className = "clr"; c.textContent = "Remove";
-        c.addEventListener("click", function (ev) { ev.stopPropagation(); j.song = null; renderStage(); });
-        sb.appendChild(c);
-      }
+      if (j.song) sb.appendChild(boxX("song", function () { j.song = null; }));
       sb.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "song", row: i }); });
+      sb.addEventListener("keydown", function (ev) { boxKey(ev, "song", i); });
       // sync to
       var mid = document.createElement("div");
       mid.className = "syncto";
@@ -724,7 +795,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         more.className = "sub";
         more.textContent = j.footage.length > 1 ? "One project, in " + projectName(j.footage) + " · drop or click to add more"
           : "Drop or click to add more cards";
-        fb.append(chips, more);
+        fb.append(chips, more, boxX("footage", function () { j.footage = []; }));
       } else {
         var v2 = document.createElement("div");
         v2.className = "v ph";
@@ -735,6 +806,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         fb.append(v2, s2);
       }
       fb.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "footage", row: i }); });
+      fb.addEventListener("keydown", function (ev) { boxKey(ev, "footage", i); });
       var rx = document.createElement("button");
       rx.className = "rowx";
       rx.textContent = "×";
@@ -748,7 +820,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       row.append(sb, mid, fb);
       if (rx.hidden) row.classList.add("one"); else row.append(rx);
       wrap.appendChild(row);
-      if (j.song || j.footage.length) wrap.appendChild(nameField(j.name || "", function (v) { j.name = v; },
+      if (j.song || j.footage.length) wrap.appendChild(nameField(j.name || "", function (v) { j.name = v; saveBoxes(); },
         j.footage.length ? projectName(j.footage) : "the footage folder's name"));
     });
   }
@@ -756,7 +828,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function runsToStart() {                // [{paths, mode, name}], or a reason Start is off
     if (mode === "setup") {
       var folders = queue.filter(function (p) { return !isSong(p); });
-      return folders.length ? [{ paths: queue.slice(), mode: "setup", name: label(queue), xml: setupName.trim() }]
+      return folders.length ? [{ paths: queue.slice(), mode: "setup", name: label(queue), xml: setupName.trim(), queue: true }]
         : "Add the shoot folder or cards.";
     }
     var used = jobs.filter(function (j) { return j.song || j.footage.length; });
@@ -767,7 +839,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     }
     // no song in the box: the engine looks for it in the footage (a Music folder, or the song file)
     return used.map(function (j) {
-      return { paths: (j.song ? [j.song] : []).concat(j.footage), mode: "music", xml: (j.name || "").trim(),
+      return { paths: (j.song ? [j.song] : []).concat(j.footage), mode: "music", xml: (j.name || "").trim(), job: j,
                name: j.song ? base(j.song) : projectName(j.footage) };
     });
   }
@@ -792,7 +864,28 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (music) $("qNote").textContent = "";
     var note = typeof runs === "string" && (music ? jobs.some(function (j) { return j.song || j.footage.length; }) : false) ? runs : "";
     $("modeNote").textContent = note || MODE_NOTES[mode];
+    saveBoxes();
+    pinStage();
   }
+  // The Song/Footage row (or the drop box) stays where it is while things are added: the empty screen
+  // is centred once for this window height, and rows that appear later go below without moving it.
+  var pinned = null;               // { h: window height, mode, top: px from the screen's top to the first box }
+  function firstBox() { return mode === "music" ? document.querySelector("#jobs .box") : $("drop"); }
+  function pinStage() {
+    var sp = document.querySelector("#vRun > .vtop"), m = document.querySelector("main"), run = $("vRun");
+    if (run.hidden) return;
+    if (running() || resultShowing()) { sp.style.marginTop = ""; pinned = null; return; }
+    var at = function () { return firstBox().getBoundingClientRect().top - run.getBoundingClientRect().top; };
+    if (!pinned || pinned.h !== window.innerHeight || pinned.mode !== mode) {
+      sp.style.marginTop = "";                   // centred the usual way, then held there
+      pinned = { h: window.innerHeight, mode: mode, top: at() };
+    }
+    var cur = parseFloat(getComputedStyle(sp).marginTop) || 0;
+    sp.style.marginTop = Math.max(0, cur + pinned.top - at()) + "px";
+    var over = m.scrollHeight - m.clientHeight;  // too tall for the window: move up only as far as needed
+    if (over > 0) sp.style.marginTop = Math.max(0, parseFloat(sp.style.marginTop) - over) + "px";
+  }
+  window.addEventListener("resize", function () { pinned = null; if (!$("vRun").hidden) pinStage(); });
 
   function renderQueue() {
     var list = $("qList");
@@ -820,8 +913,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       list.appendChild(row);
     });
     var qn = $("qName");
-    if (!qn.firstChild && queue.length) qn.appendChild(nameField(setupName, function (v) { setupName = v; }, ""));
-    if (!queue.length) qn.innerHTML = "";
+    if (!qn.firstChild && queue.length) qn.appendChild(nameField(setupName, function (v) { setupName = v; saveBoxes(); }, ""));
+    if (!queue.length) { qn.innerHTML = ""; setupName = ""; }
     var inp = qn.querySelector("input");
     if (inp) inp.placeholder = projectName(queue);
     var folders = queue.filter(function (p) { return !isSong(p); });
@@ -852,11 +945,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function start() {
     var runs = runsToStart();
     if (running() || typeof runs === "string") return;
-    batch = { runs: runs, i: 0, ids: [] };
+    batch = { runs: runs, i: 0, ids: [], rebuild: $("rebuild").checked };
     runNext();
   }
   function runNext() {
-    var r = batch.runs[batch.i];
+    var r = batch && batch.runs[batch.i];
+    if (!r) return;
     post({ cmd: "run", paths: r.paths, mode: r.mode, xmlDir: xmlDir || "drive", xmlName: r.xml || "",
            folder: r.paths.filter(function (p) { return !isSong(p); })[0] });
   }
@@ -871,24 +965,67 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     state.paths = paths;
     state.folder = paths.filter(function (p) { return !isSong(p); })[0] || paths[0];
     state.t0 = Date.now();
-    showView(mode);
+    if (!$("vRun").hidden) showView(mode);      // the next video of a batch leaves Settings or History open
     show("jobsWrap", false); show("queue", false); show("btnsStart", false); show("hints", false); show("modes", false);
     var d = $("drop");
     d.className = "drop";
     show("drop", true);
     var song = paths.filter(isSong)[0], folders = paths.filter(function (p) { return !isSong(p); });
-    var name = song ? base(song) : label(paths);
+    var name = folders.length ? projectName(folders) : label(paths);     // the card has a folder icon: the footage is its title
     var of = batch && batch.runs.length > 1 ? "Music video " + (batch.i + 1) + " of " + batch.runs.length + " · " : "";
     $("dropTitle").textContent = name;
-    $("dropSub").textContent = of + (song ? "syncing " + folders.map(base).join(", ") : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
+    $("dropSub").textContent = of + (song ? "song: " + base(song) : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
     setTitle("Kickoff — " + name);
     $("prog").className = "prog busy";
     $("bar").style.width = "";
     $("stage").textContent = "Checking for updates";
     $("count").textContent = "";
+    $("eta").textContent = "";
+    clearInterval(tick); tick = setInterval(timing, 1000);
     show("run", true); show("btnsRun", true); show("details", true);
+    document.querySelector("#vRun > .vtop").style.marginTop = ""; pinned = null;   // the run screen centres as before
   }
 
+  // "2:14 elapsed · about 6 min left": the pace of the clips done so far, once there are 3 to go on
+  var tick = null;
+  function timeLeft() {
+    if (!state.total || !state.tClips || (state.done || 0) < 3) return "";
+    var s = (Date.now() - state.tClips) / 1000 / state.done * (state.total - state.done);
+    return s > 60 ? "about " + Math.round(s / 60) + " min left" : "less than a minute left";
+  }
+  function timing() {
+    if (!running() || !state.t0) { clearInterval(tick); tick = null; $("eta").textContent = ""; return; }
+    var left = timeLeft();
+    $("eta").textContent = clock((Date.now() - state.t0) / 1000) + " elapsed" + (left ? " · " + left : "");
+    updateMini();
+  }
+  function songOf(e) { var sg = state.paths.filter(isSong)[0]; return sg ? base(sg) : e.song || ""; }
+  var miniEnd = null;              // a run ended while Settings or History was open: "done", "stopped" or "error"
+  function updateMini() {
+    var wrap = $("tabsWrap"), live = running(), on = $("vRun").hidden && (live || !!miniEnd);
+    if (!$("vRun").hidden) miniEnd = null;
+    if (on !== wrap.classList.contains("busy")) {
+      wrap.classList.toggle("busy", on);
+      document.querySelector(".modeswitch").inert = on;
+      $("miniRun").inert = !on;
+      if (!on) {                                  // the fill turns back into the run's tab
+        wrap.style.setProperty("--fill", $("miniBar").style.width || "30%");
+        wrap.classList.remove("morph"); void wrap.offsetWidth; wrap.classList.add("morph");
+        setTimeout(function () { wrap.classList.remove("morph"); }, 500);
+      }
+    }
+    if (!on) return;
+    var pct = state.total && state.done ? Math.min(100, 100 * state.done / state.total) : 0;
+    $("miniRun").className = "minirun" + (live ? "" : miniEnd === "done" ? " done" : " fail");
+    $("miniLabel").textContent = live ? "Back to syncing" : miniEnd === "done" ? "Done: see results"
+      : miniEnd === "stopped" ? "Stopped: see why" : "Kickoff hit an error: see why";
+    $("miniTrack").className = "mtrack" + (live && !pct ? " busy" : "");
+    $("miniBar").style.width = live ? (pct ? pct.toFixed(1) + "%" : "") : "100%";
+    var left = live ? timeLeft() : "";
+    $("miniCount").textContent = live && state.total && state.done != null && !state.setup
+      ? state.done + " of " + state.total + (left ? " · " + left : "") : "";
+  }
+  $("miniRun").addEventListener("click", function () { showView(mode); });
   function setCounts() {
     $("sSynced").textContent = state.synced;
     $("sAside").textContent = state.aside;
@@ -898,8 +1035,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (e.event === "stage") {
       $("stage").textContent = e.text;
     } else if (e.event === "start" && e.add) {
-      state.total = e.clips; state.add = e.add;
-      $("dropSub").textContent = runOf() + label(state.paths) + " · adding to " + e.project;
+      state.total = e.clips; state.add = e.add; state.tClips = Date.now(); state.done = 0;
+      $("dropSub").textContent = runOf() + "adding to " + e.project + (e.mode !== "setup" && songOf(e) ? " · song: " + songOf(e) : "");
       $("stage").textContent = "Adding " + plural(e.clips, "new clip") + " to " + e.project;
       $("count").textContent = e.clips ? "0 / " + e.clips : "";
       $("prog").className = e.mode === "setup" ? "prog busy" : "prog";
@@ -909,16 +1046,16 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start" && e.mode === "setup") {
       var fellBack = state.total > 0;              // it tried the song first and nothing lined up
-      state.total = e.clips; state.synced = 0; state.aside = 0; state.setup = true;
-      $("dropSub").textContent = runOf() + label(state.paths) + " · project setup only";
+      state.total = e.clips; state.synced = 0; state.aside = 0; state.setup = true; state.done = 0; state.tClips = 0;
+      $("dropSub").textContent = runOf() + "project setup only";
       $("stage").textContent = fellBack ? "Nothing lines up with that song, so this is set up as a regular project"
         : "Setting up " + plural(e.clips, "clip") + " (no song to sync to)";
       $("prog").className = "prog busy";
       show("stats", false);
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start") {
-      state.total = e.clips;
-      $("dropSub").textContent = runOf() + label(state.paths) + (state.paths.some(isSong) ? "" : " · song: " + e.song);
+      state.total = e.clips; state.tClips = Date.now(); state.done = 0;
+      $("dropSub").textContent = runOf() + "song: " + songOf(e);
       $("stage").textContent = "Syncing " + plural(e.clips, "clip") + " to " + e.song;
       $("count").textContent = "0 / " + e.clips;
       $("prog").className = "prog";
@@ -929,7 +1066,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "clip") {
       if (e.status === "placed") state.synced++; else state.aside++;
+      state.done = e.done; state.total = e.total;
       setCounts();
+      updateMini();
       $("bar").style.width = (100 * e.done / e.total).toFixed(1) + "%";
       $("count").textContent = e.done + " / " + e.total;
       $("stage").textContent = base(e.file) + (e.status === "placed"
@@ -1088,6 +1227,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("aside").classList.remove("moves");
     $("bOpen").textContent = "Open in Premiere";
     $("bRetry").hidden = false;
+    $("bBackBoxes").hidden = true;
     $("bStartOver").hidden = true;
     if (e.nothing_new) return finishNothing(e);
     if (e.add) return finishAdd(e);
@@ -1174,15 +1314,21 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function onExit(code) {
     var stoppedByUser = code === -15 || code === 15;
     if (!(code === 0 && state.result)) failed(code, stoppedByUser);
+    setTimeout(function () {                    // after this exit is dealt with (the next video may be starting)
+      if ($("vRun").hidden && !running()) miniEnd = code === 0 && state.result ? "done" : stoppedByUser ? "stopped" : "error";
+      updateMini();
+    }, 0);
     if (!batch) return;
     if (!stoppedByUser && batch.i < batch.runs.length - 1) {   // on to the next music video
       batch.i++;
-      setTimeout(runNext, 900);
+      nextTimer = setTimeout(function () { nextTimer = null; runNext(); }, 900);
       return;
     }
     if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); optSummary(); }
-    if (batch.runs.length > 1) showBatch();
+    if (batch.runs.length > 1 && !stoppedByUser) showBatch();   // stopped: Try again carries on from that video
+    if (!$("vSet").hidden && pane === "files") renderSettings();   // Choose… works again
   }
+  var nextTimer = null;            // the pause between one music video and the next
 
   // several music videos: a card per run, the same as in History
   function showBatch() {
@@ -1197,11 +1343,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       : ok + " of " + plural(runs.length, "music video") + " done";
     box.appendChild(hd);
     runs.forEach(function (h) { box.appendChild(entryCard(h)); });
-    ["drop", "run", "stats", "camsWrap", "aside", "todo", "error", "btnsDone", "btnsErr"].forEach(function (id) { show(id, false); });
+    ["drop", "run", "hero", "stats", "camsWrap", "aside", "todo", "error", "btnsDone", "btnsErr"].forEach(function (id) { show(id, false); });
     $("details").open = false;
     show("batch", true);
     show("btnsErr", true);
     $("bRetry").hidden = true;
+    $("bBackBoxes").hidden = ok === runs.length;
     setTitle("Kickoff");
   }
 
@@ -1223,6 +1370,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     show("error", true);
     show("btnsErr", true);
     $("bRetry").hidden = false;
+    $("bBackBoxes").hidden = false;
     record(stoppedByUser ? "stopped" : "error", null, $("errText").textContent);
   }
 
@@ -1240,6 +1388,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       entry.restarted = e.restarted || 0;
     }
     if (err) entry.error = String(err).slice(0, 400);
+    var run = batch && batch.runs[batch.i];
+    if (run) entry.name = run.xml || "";
+    if (run && e) {                              // done or nothing new: its row is cleared when the next thing is added
+      if (run.job) run.job.done = true;
+      else if (run.queue) queueDone = true;
+      saveBoxes();
+    }
     history.unshift(entry);
     post({ cmd: "history-add", entry: entry });
     if (batch) batch.ids.push(entry.id);
@@ -1307,8 +1462,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     t.textContent = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
     var ti = document.createElement("span");
     ti.className = "t";
-    var sg = (h.paths || []).filter(isSong)[0];
-    ti.textContent = h.project || (sg ? base(sg).replace(/\.[^.]+$/, "") : label(h.paths || []));
+    var sg = (h.paths || []).filter(isSong)[0], hf = (h.paths || []).filter(function (p) { return !isSong(p); });
+    ti.textContent = h.project || (hf.length ? projectName(hf) : sg ? base(sg).replace(/\.[^.]+$/, "") : "");
     var b = document.createElement("span");
     b.className = "badge " + desc[1];
     b.textContent = desc[0];
@@ -1333,13 +1488,21 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (h.xml) act(h.add ? "Import into Premiere" : "Open in Premiere", function () { post({ cmd: "premiere", path: h.xml }); });
     if (h.report) act(h.mode === "setup" ? "Clip list" : "Report", function () { post({ cmd: "report", path: h.report }); });
     if (h.xml || (h.paths && h.paths.length)) act("Show in Finder", function () { post({ cmd: "reveal", path: h.xml || h.paths[0] }); });
-    if (h.paths && h.paths.length) act("Run again", function () {
+    if (h.paths && h.paths.length) act("Put back", function () {   // into the boxes, next to what's there
       if (running()) return;
+      clearTimeout(nextTimer); nextTimer = null;
+      if (resultShowing()) leaveResult();
       var m = h.mode === "setup" ? "setup" : "music";
       showView(m);
-      reset();
-      if (m === "setup") queue = h.paths.slice();
-      else jobs = [{ song: h.paths.filter(isSong)[0] || null, footage: h.paths.filter(function (p) { return !isSong(p); }) }];
+      var stem = h.xml ? base(h.xml).replace(/\.xml$/i, "") : "";
+      var name = typeof h.name === "string" ? h.name : stem !== h.project ? stem : "";
+      if (m === "setup") {                        // one queue: the folders join it
+        h.paths.forEach(function (p) { if (queue.indexOf(p) < 0) queue.push(p); });
+        if (!setupName) { setupName = name; $("qName").innerHTML = ""; }
+      } else {
+        var row = { song: h.paths.filter(isSong)[0] || null, footage: h.paths.filter(function (p) { return !isSong(p); }), name: name };
+        if (jobs.some(function (j) { return j.song || j.footage.length; })) jobs.push(row); else jobs = [row];
+      }
       renderStage();
     });
     act("Remove", function () {
@@ -1354,13 +1517,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function showView(v) {             // "music", "setup", "hist" or "set"
     var aside = v === "hist" || v === "set";
     if (!aside && v !== mode) {
-      if (running()) v = mode;                  // a run in progress: stay on its screen
-      else setMode(v);                          // a finished run stays on screen until New run
+      if (running() || resultShowing()) v = mode;   // a run, or its result: stay on its screen until New run
+      else setMode(v);
     }
     show("vRun", !aside);
     show("vHist", v === "hist");
     show("vSet", v === "set");
     document.querySelectorAll(".modeswitch button").forEach(function (b) { b.setAttribute("aria-pressed", String(!aside && b.dataset.view === v)); });
+    updateMini();
     $("bHist").setAttribute("aria-pressed", String(v === "hist"));
     $("bSet").setAttribute("aria-pressed", String(v === "set"));
     if (v === "set") renderSettings();
@@ -1394,19 +1558,30 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (atEnd) log.scrollTop = log.scrollHeight;
   }
 
-  function running() { return !$("btnsRun").hidden; }
+  function running() { return !$("btnsRun").hidden || !!nextTimer; }   // the pause between music videos too
   $("drop").addEventListener("click", function () { if (!running() && $("btnsDone").hidden) post({ cmd: "pick", target: "any" }); });
   $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick", target: "any" }); });
   $("bOpen").addEventListener("click", function () { post({ cmd: "premiere", path: state.result.xml }); });
   $("bReport").addEventListener("click", function () { post({ cmd: "report", path: state.result.report }); });
   $("bReveal").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.xml }); });
-  function fresh() { queue = []; jobs = [{ song: null, footage: [] }]; batch = null; reset(); }
+  function fresh() {
+    clearTimeout(nextTimer); nextTimer = null;
+    queue = []; jobs = [{ song: null, footage: [] }]; setupName = ""; queueDone = false; $("qName").innerHTML = "";
+    batch = null; reset();                  // reset saves the empty boxes
+  }
   $("bNew").addEventListener("click", fresh);
   $("bNew2").addEventListener("click", fresh);
   $("bRetry").addEventListener("click", function () {      // the run that failed, then the rest of the batch
     if (!state.paths.length || running()) return;
     if (!batch) batch = { runs: [{ paths: state.paths, mode: mode }], i: 0, ids: [] };
+    if (batch.rebuild && !$("rebuild").checked) { $("rebuild").checked = true; post({ cmd: "rebuild", on: true }); optSummary(); }
     runNext();
+  });
+  $("bBackBoxes").addEventListener("click", function () {  // after a stop or an error: the boxes as they were
+    if (running()) return;
+    jobs.forEach(function (j) { delete j.done; });
+    queueDone = false;
+    batch = null; reset();
   });
   $("bStart").addEventListener("click", start);
   $("bStartOver").addEventListener("click", function () {   // "Nothing new": rebuild the same run from scratch
@@ -1414,13 +1589,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("rebuild").checked = true;
     post({ cmd: "rebuild", on: true });
     var r0 = batch && batch.runs[batch.i];
-    batch = { runs: [r0 || { paths: state.paths, mode: mode }], i: 0, ids: [] };
+    batch = { runs: [r0 || { paths: state.paths, mode: mode }], i: 0, ids: [], rebuild: true };
     runNext();
   });
   $("bExport").addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
   $("bExportReset").addEventListener("click", function () { setXmlDir(""); });
   $("bAddJob").addEventListener("click", function () { if (!running()) { jobs.push({ song: null, footage: [] }); renderStage(); } });
-  $("bClear").addEventListener("click", function () { queue = []; renderStage(); });
+  $("bClear").addEventListener("click", function () { queue = []; setupName = ""; $("qName").innerHTML = ""; renderStage(); });
   $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
 
 
@@ -1601,6 +1776,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       g = group("Project XML", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
       var v = el("span", { class: "hint" }, esc(xmlDir || "The top of the drive the footage is on"));
       var b = el("button", {}, "Choose…");
+      if (running()) { b.disabled = true; b.title = "Available when the run finishes"; }
       b.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
       var wrap = el("span", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }); wrap.appendChild(v); wrap.appendChild(b);
       if (xmlDir) { var r0 = el("button", { class: "quiet", style: "margin-left:0" }, "Use the drive"); r0.addEventListener("click", function () { setXmlDir(""); renderSettings(); }); wrap.appendChild(r0); }
@@ -1881,6 +2057,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     },
     reset: reset
   };
+  loadBoxes();
   setMode(mode);
   setXmlDir(xmlDir);
   showView(mode);
