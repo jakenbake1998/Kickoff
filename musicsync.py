@@ -1867,8 +1867,11 @@ class Xmeml:
                     track_of[id(ci)], index_of[id(ci)] = at, count["a", at]
                     items.append((ci, "audio"))
             self._link(items, track_of, index_of)
-        for t in vtracks + atracks:
-            sub(t, "enabled", "TRUE")
+        muted = {e["atrack"] + k for e in entries if e.get("mute") and e.get("atrack")
+                 for k in range(len(e.get("asrc") or [1]))}
+        for i, t in enumerate(vtracks + atracks):
+            # a muted track (the song in a Condensed sequence) is there but silent
+            sub(t, "enabled", "FALSE" if i - len(vtracks) + 1 in muted else "TRUE")
             sub(t, "locked", "FALSE")
         add_labels(seq, label)
         return seq
@@ -2051,7 +2054,8 @@ def condense(entries, fps):
     out = []
     for e in entries:
         if not e.get("vtrack"):
-            out.append(e)
+            # the song is muted here: CamsNested and Edit nest these and play the song on their own A1
+            out.append(dict(e, mute=True) if e.get("atrack") else e)
             continue
         k = place[id(e)]
         d = e["atrack"] - e["vtrack"] if e.get("atrack") else None
