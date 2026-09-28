@@ -22,8 +22,8 @@ func usable(_ urls: [URL]) -> [URL] {
 }
 
 final class DropWebView: WKWebView {
-    var onDrop: (([URL]) -> Void)?
-    var onDragging: ((Bool) -> Void)?
+    var onDrop: (([URL], CGPoint) -> Void)?           // what was dropped, and where (page coordinates)
+    var onDragging: ((Bool, CGPoint) -> Void)?
 
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
@@ -38,25 +38,33 @@ final class DropWebView: WKWebView {
         return usable(objs.compactMap { $0 as? URL })
     }
 
+    // the page's own coordinates (top-left origin), so it can tell which box a drop landed on
+    private func pagePoint(_ info: NSDraggingInfo) -> CGPoint {
+        let p = convert(info.draggingLocation, from: nil)
+        return CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard !items(sender).isEmpty else { return [] }
-        onDragging?(true)
+        onDragging?(true, pagePoint(sender))
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        return items(sender).isEmpty ? [] : .copy
+        guard !items(sender).isEmpty else { return [] }
+        onDragging?(true, pagePoint(sender))
+        return .copy
     }
 
-    override func draggingExited(_ sender: NSDraggingInfo?) { onDragging?(false) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { onDragging?(false, .zero) }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !items(sender).isEmpty }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        onDragging?(false)
+        onDragging?(false, .zero)
         let urls = items(sender)
         guard !urls.isEmpty else { return false }
-        onDrop?(urls)
+        onDrop?(urls, pagePoint(sender))
         return true
     }
 
@@ -82,8 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         web = DropWebView(frame: frame, configuration: cfg)
         web.setValue(false, forKey: "drawsBackground")          // no white flash while loading
         web.navigationDelegate = self
-        web.onDrop = { [weak self] urls in self?.stage(urls) }
-        web.onDragging = { [weak self] on in self?.js("Kickoff.dragging(\(on))") }
+        web.onDrop = { [weak self] urls, at in self?.stage(urls, at: at) }
+        web.onDragging = { [weak self] on, at in self?.js("Kickoff.dragging(\(on), \(Int(at.x)), \(Int(at.y)))") }
 
         window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -108,12 +116,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         stage(usable(urls))
     }
 
-    // add to the list in the window; nothing runs until Start
-    func stage(_ urls: [URL]) {
+    // hand to the window, which puts each in the box it was dropped on; nothing runs until Start
+    func stage(_ urls: [URL], at: CGPoint? = nil) {
         guard !urls.isEmpty else { return }
         guard ready else { pending += urls; return }
         window.makeKeyAndOrderFront(nil)
-        js("Kickoff.add(\(json(urls.map { $0.path })))")
+        let paths = json(urls.map { $0.path })
+        if let at = at {
+            js("Kickoff.drop ? Kickoff.drop(\(paths), \(Int(at.x)), \(Int(at.y))) : Kickoff.add(\(paths))")
+        } else {
+            js("Kickoff.add(\(paths))")
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -155,9 +168,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
         case "mode": mode = body["mode"] as? String ?? "auto"
         case "rebuild": rebuild = body["on"] as? Bool ?? false
-        case "pick": pick()
+        case "pick": pick(target: body["target"] as? String ?? "any", row: body["row"] as? Int ?? -1)
         case "run":
             let paths = body["paths"] as? [String] ?? (body["folder"] as? String).map { [$0] } ?? []
+            if let m = body["mode"] as? String { mode = m }
             if !paths.isEmpty { run(paths) }
         case "history-add":
             if let entry = body["entry"] as? [String: Any] {
@@ -220,17 +234,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     // MARK: running the engine
 
-    @objc func pick() {
+    @objc func pickFromMenu() { pick(target: "any", row: -1) }
+
+    // target: "song" (one audio file), "footage" (folders) or "any"; row: which song/footage row
+    func pick(target: String, row: Int) {
         guard proc?.isRunning != true else { NSSound.beep(); return }
         let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowedContentTypes = [.audio, .folder]
-        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = target != "song"
+        panel.canChooseFiles = target != "footage"
+        if target != "footage" { panel.allowedContentTypes = [.audio, .folder] }
+        panel.allowsMultipleSelection = target != "song"
         panel.prompt = "Add"
-        panel.message = "Choose the shoot folder, or cards (and the song if it isn't in the folder)"
+        panel.message = target == "song" ? "Choose the song"
+            : target == "footage" ? "Choose the footage: the shoot folder, a day, or cards"
+            : "Choose the shoot folder or cards (and the song if it isn't in the folder)"
         panel.beginSheetModal(for: window) { [weak self] result in
-            if result == .OK { self?.stage(usable(panel.urls)) }
+            guard let self = self, result == .OK else { return }
+            let paths = self.json(usable(panel.urls).map { $0.path })
+            if target == "any" {
+                self.js("Kickoff.add(\(paths))")
+            } else {
+                self.js("Kickoff.picked(\(paths), \(self.json(target)), \(row))")
+            }
         }
     }
 
@@ -400,7 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let fileItem = NSMenuItem()
         main.addItem(fileItem)
         let fileMenu = NSMenu(title: "File")
-        let open = fileMenu.addItem(withTitle: "Add Folders…", action: #selector(pick), keyEquivalent: "o")
+        let open = fileMenu.addItem(withTitle: "Add Folders…", action: #selector(pickFromMenu), keyEquivalent: "o")
         open.target = self
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileItem.submenu = fileMenu

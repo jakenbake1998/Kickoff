@@ -109,6 +109,34 @@ pre.log{margin:8px 0 0;max-height:220px;overflow:auto;background:#101215;border:
 .qnote{font-size:12.5px;color:var(--muted);margin:2px 0 0}
 button:disabled{opacity:.45;cursor:default;filter:none}
 
+/* music video: song -> sync to -> footage rows */
+.jobs{display:grid;gap:10px}
+.job{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1.35fr) 30px;gap:10px;align-items:stretch}
+.box{border:1.5px dashed color-mix(in srgb,var(--accent) 55%,transparent);border-radius:12px;padding:12px 14px;min-height:92px;
+  background:color-mix(in srgb,var(--accent) 6%,transparent);display:flex;flex-direction:column;justify-content:center;gap:4px;cursor:pointer;min-width:0;
+  transition:background .12s,border-color .12s}
+.box:hover,.box.over{background:color-mix(in srgb,var(--accent) 15%,transparent);border-color:var(--accent);border-style:solid}
+.box.filled{border-style:solid;border-color:var(--line);background:var(--panel)}
+.box.filled:hover,.box.filled.over{border-color:var(--accent)}
+.box .k{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:6px}
+.box .k svg{color:var(--accent)}
+.box .v{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.box .v.ph{color:var(--muted);font-weight:500}
+.box .sub{font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chipf{display:inline-flex;align-items:center;gap:2px;max-width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 2px 2px 8px;font-size:12.5px;font-weight:600}
+.chipf span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chipf button,.box .clr{border:0;background:none;color:var(--muted);padding:0 6px;font-size:14px;line-height:1.3;border-radius:4px}
+.chipf button:hover,.box .clr:hover{color:var(--ink);background:var(--line)}
+.box .clr{align-self:flex-start;margin-left:-6px;font-size:12px;font-weight:600}
+.syncto{display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--accent);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;gap:2px}
+.job .rowx{border:0;background:none;color:var(--muted);font-size:17px;padding:0;border-radius:6px;align-self:center;height:30px}
+.job .rowx:hover{color:var(--ink);background:var(--line)}
+.addjob{justify-self:start;background:none;border:1px dashed var(--line);color:var(--muted)}
+.addjob:hover{color:var(--ink);border-color:var(--muted)}
+.jobn{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-bottom:-4px}
+@media (max-width:560px){.job{grid-template-columns:minmax(0,1fr) 30px}.job .syncto{grid-column:1;flex-direction:row;gap:6px}.job .box.foot{grid-column:1}.job .rowx{grid-row:1;grid-column:2}}
+.batch{display:grid;gap:8px}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .tabs button{padding:5px 12px;font-size:12.5px}
 
@@ -145,7 +173,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div><h1>Kickoff</h1><div class="tag">Drop a shoot folder. Get a Premiere project.</div></div>
   </div>
   <div class="seg tabs" role="tablist" aria-label="View">
-    <button data-view="run" aria-pressed="true">New run</button>
+    <button data-view="music" aria-pressed="true">Music video</button>
+    <button data-view="setup" aria-pressed="false">Other projects</button>
     <button data-view="hist" aria-pressed="false">History</button>
   </div>
   </div>
@@ -156,6 +185,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </section>
 
   <section id="vRun" style="display:flex;flex-direction:column;gap:18px;flex:1">
+
+  <div class="jobs" id="jobsWrap">
+    <div class="jobs" id="jobs"></div>
+    <button class="addjob" id="bAddJob">+ Add another song</button>
+  </div>
 
   <div class="drop idle" id="drop" role="button" tabindex="0" aria-label="Choose a shoot folder">
     <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
@@ -169,11 +203,6 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
 
   <div class="modes" id="modes">
-    <div class="seg" role="group" aria-label="Kind of project">
-      <button data-mode="auto" aria-pressed="true">Auto</button>
-      <button data-mode="music" aria-pressed="false">Music video</button>
-      <button data-mode="setup" aria-pressed="false">Project setup only</button>
-    </div>
     <p id="modeNote"></p>
     <label class="check"><input type="checkbox" id="rebuild"> Start over: rebuild the whole project, even if this folder was run before</label>
   </div>
@@ -187,7 +216,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div data-for="music"><span>Every clip synced to the song by its audio</span><span>A Cam_Sync, B Cam_Sync&hellip;</span></div>
     <div data-for="music"><span>Takes where the song restarted, split into passes</span><span>own tracks</span></div>
     <div data-for="music"><span>Your bins, Breakup and Edit sequences, label colors</span><span>one .xml</span></div>
-    <div><span>Run the same folder again (or drop a new card) to add just what's new</span><span>DIT days</span></div>
+    <div><span>Run the same footage again (or a new card) to add just what's new</span><span>DIT days</span></div>
     <div data-for="music"><span>Sync sequences in 4K, every clip scaled to fit</span><span>3840x2160</span></div>
   </div>
 
@@ -210,6 +239,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <div class="list" id="aside" hidden></div>
   <div class="error" id="error" hidden><b id="errTitle">Kickoff hit an error</b><p id="errText"></p></div>
+
+  <div class="batch" id="batch" hidden></div>
 
   <details id="details" hidden><summary>Details</summary><pre class="log" id="log"></pre></details>
 
@@ -257,29 +288,25 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     [/^unreadable/, "can't be read (RED/BRAW?)", "check report"]
   ];
   var MODE_NOTES = {
-    auto: "Syncs to the song when the folder has one and the clips line up with it. Otherwise it just sets up the project.",
-    music: "Music video: every clip is synced to the song. The folder needs the song (in a Music folder, or named master/song/mix).",
-    setup: "Commercials and other jobs: bins, Breakups and an Edit sequence, no syncing."
+    music: "Each song syncs only to the footage beside it. Add a row for every music video; they run one after another.",
+    setup: "Commercials and other jobs: bins, Breakups and an Edit sequence, no syncing. Drop the shoot folder, or cards."
   };
-  var mode = "auto";
-  try { mode = localStorage.getItem("kickoff-mode") || "auto"; } catch (e) {}
-  if (!MODE_NOTES[mode]) mode = "auto";
+  // the screen picks the kind of job: Music video (song -> footage rows) or Other projects (set up only)
+  var mode = "music";
+  try { mode = localStorage.getItem("kickoff-screen") || "music"; } catch (e) {}
+  if (!MODE_NOTES[mode]) mode = "music";
   function setMode(m) {
     mode = m;
-    try { localStorage.setItem("kickoff-mode", m); } catch (e) {}
-    document.querySelectorAll(".seg button[data-mode]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === m)); });
+    try { localStorage.setItem("kickoff-screen", m); } catch (e) {}
     $("modeNote").textContent = MODE_NOTES[m];
-    document.querySelectorAll("#hints [data-for]").forEach(function (d) {
-      d.hidden = d.dataset.for !== (m === "setup" ? "setup" : "music");
-    });
+    document.querySelectorAll("#hints [data-for]").forEach(function (d) { d.hidden = d.dataset.for !== m; });
     post({ cmd: "mode", mode: m });
   }
-  document.querySelectorAll(".seg button[data-mode]").forEach(function (b) {
-    b.addEventListener("click", function () { setMode(b.dataset.mode); });
-  });
   $("rebuild").addEventListener("change", function () { post({ cmd: "rebuild", on: $("rebuild").checked }); });
   var state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
-  var queue = [];                  // folders and songs waiting for Start
+  var queue = [];                  // Other projects: folders waiting for Start
+  var jobs = [{ song: null, footage: [] }];   // Music video: each song and the footage it syncs to
+  var batch = null;                // the runs Start began: { runs: [{paths, mode, name}], i, ids }
   var history = [];
 
   var native = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kickoff);
@@ -303,16 +330,176 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     return f.length === 1 ? base(f[0]) : f.length + " folders";
   }
 
-  // ---- the list of folders before Start
-  function add(paths) {
-    if (running()) return;
-    if (!$("btnsDone").hidden || !$("btnsErr").hidden) reset();
-    showView("run");
-    (paths || []).forEach(function (p) {
-      if (isSong(p)) queue = queue.filter(function (q) { return !isSong(q); });    // one song
-      if (queue.indexOf(p) < 0) queue.push(p);
+  var ICON_SONG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+  var ICON_FOLDER = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+
+  // ---- adding things: dropped on a box, picked for a box, or dropped anywhere / from the Dock
+  function ready() {                      // leave a finished run's result for the next setup
+    if (running()) return false;
+    if (!$("btnsDone").hidden || !$("btnsErr").hidden || !$("batch").hidden) reset();
+    if ($("vRun").hidden) showView(mode);
+    return true;
+  }
+
+  function add(paths, target, row) {
+    if (!ready()) return;
+    paths = paths || [];
+    if (mode === "setup") {
+      paths.forEach(function (p) {
+        if (isSong(p)) queue = queue.filter(function (q) { return !isSong(q); });    // one song
+        if (queue.indexOf(p) < 0) queue.push(p);
+      });
+      return renderStage();
+    }
+    var songs = paths.filter(isSong), folders = paths.filter(function (p) { return !isSong(p); });
+    var r = row != null && row >= 0 && row < jobs.length ? row : -1;
+    if (r >= 0) {                                   // on a box: into that row
+      if (songs.length) jobs[r].song = songs.shift();
+      addFootage(r, folders);
+      folders = [];
+    }
+    songs.forEach(function (sg) {                   // each other song: the first row without one, else a new row
+      var j = jobs.findIndex(function (x) { return !x.song; });
+      if (j < 0) { jobs.push({ song: null, footage: [] }); j = jobs.length - 1; }
+      jobs[j].song = sg;
+      if (folders.length) { addFootage(j, folders); folders = []; }   // song and footage dropped together
     });
-    renderQueue();
+    if (folders.length) {                           // footage alone: the first row still missing it
+      var k = jobs.findIndex(function (x) { return !x.footage.length; });
+      addFootage(k < 0 ? jobs.length - 1 : k, folders);
+    }
+    renderStage();
+  }
+  function addFootage(r, folders) {
+    folders.forEach(function (f) { if (jobs[r].footage.indexOf(f) < 0) jobs[r].footage.push(f); });
+  }
+  function drop(paths, x, y) {
+    var el = document.elementFromPoint(x, y), box = el && el.closest ? el.closest(".box") : null;
+    if (mode === "music" && box && !$("vRun").hidden) add(paths, box.dataset.kind, +box.dataset.row);
+    else add(paths);
+  }
+
+  function renderJobs() {
+    var wrap = $("jobs");
+    wrap.innerHTML = "";
+    jobs.forEach(function (j, i) {
+      if (jobs.length > 1) {
+        var n = document.createElement("div");
+        n.className = "jobn";
+        n.textContent = "Music video " + (i + 1);
+        wrap.appendChild(n);
+      }
+      var row = document.createElement("div");
+      row.className = "job";
+      // song box
+      var sb = document.createElement("div");
+      sb.className = "box song" + (j.song ? " filled" : "");
+      sb.dataset.kind = "song"; sb.dataset.row = i;
+      sb.setAttribute("role", "button"); sb.tabIndex = 0;
+      sb.innerHTML = '<div class="k">' + ICON_SONG + ' Song</div>';
+      var v = document.createElement("div");
+      v.className = "v" + (j.song ? "" : " ph");
+      v.textContent = j.song ? base(j.song) : "Drop the song here";
+      var sub = document.createElement("div");
+      sub.className = "sub";
+      sub.textContent = j.song ? parent(j.song) : "or click to choose it";
+      sb.append(v, sub);
+      if (j.song) {
+        var c = document.createElement("button");
+        c.className = "clr"; c.textContent = "Remove";
+        c.addEventListener("click", function (ev) { ev.stopPropagation(); j.song = null; renderStage(); });
+        sb.appendChild(c);
+      }
+      sb.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "song", row: i }); });
+      // sync to
+      var mid = document.createElement("div");
+      mid.className = "syncto";
+      mid.innerHTML = '<span>sync to</span><svg width="22" height="14" viewBox="0 0 22 14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 7h19M14 1l6 6-6 6"/></svg>';
+      // footage box
+      var fb = document.createElement("div");
+      fb.className = "box foot" + (j.footage.length ? " filled" : "");
+      fb.dataset.kind = "footage"; fb.dataset.row = i;
+      fb.setAttribute("role", "button"); fb.tabIndex = 0;
+      fb.innerHTML = '<div class="k">' + ICON_FOLDER + ' Footage</div>';
+      if (j.footage.length) {
+        var chips = document.createElement("div");
+        chips.className = "chips";
+        j.footage.forEach(function (f, fi) {
+          var ch = document.createElement("span");
+          ch.className = "chipf"; ch.title = f;
+          var t = document.createElement("span");
+          t.textContent = base(f);
+          var x = document.createElement("button");
+          x.textContent = "×"; x.setAttribute("aria-label", "Remove " + base(f));
+          x.addEventListener("click", function (ev) { ev.stopPropagation(); j.footage.splice(fi, 1); renderStage(); });
+          ch.append(t, x);
+          chips.appendChild(ch);
+        });
+        var more = document.createElement("div");
+        more.className = "sub";
+        more.textContent = j.footage.length > 1 ? "One project, in " + base(commonFolder(j.footage)) + " · drop or click to add more"
+          : "Drop or click to add more cards";
+        fb.append(chips, more);
+      } else {
+        var v2 = document.createElement("div");
+        v2.className = "v ph";
+        v2.textContent = "Drop the footage here";
+        var s2 = document.createElement("div");
+        s2.className = "sub";
+        s2.textContent = "the shoot folder, a day, or cards";
+        fb.append(v2, s2);
+      }
+      fb.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "footage", row: i }); });
+      var rx = document.createElement("button");
+      rx.className = "rowx";
+      rx.textContent = "×";
+      rx.title = "Remove this music video";
+      rx.hidden = jobs.length === 1 && !j.song && !j.footage.length;
+      rx.addEventListener("click", function () {
+        jobs.splice(i, 1);
+        if (!jobs.length) jobs.push({ song: null, footage: [] });
+        renderStage();
+      });
+      row.append(sb, mid, fb, rx);
+      wrap.appendChild(row);
+    });
+  }
+
+  function runsToStart() {                // [{paths, mode, name}], or a reason Start is off
+    if (mode === "setup") {
+      var folders = queue.filter(function (p) { return !isSong(p); });
+      return folders.length ? [{ paths: queue.slice(), mode: "setup", name: label(queue) }] : "Add the shoot folder or cards.";
+    }
+    var used = jobs.filter(function (j) { return j.song || j.footage.length; });
+    if (!used.length) return "Add a song and the footage to sync to it.";
+    for (var i = 0; i < jobs.length; i++) {
+      var j = jobs[i], n = jobs.length > 1 ? "Music video " + (i + 1) : "This music video";
+      if (j.song && !j.footage.length) return n + " needs its footage.";
+      if (!j.song && j.footage.length) return n + " needs its song.";
+    }
+    return used.map(function (j) { return { paths: [j.song].concat(j.footage), mode: "music", name: base(j.song) }; });
+  }
+
+  function renderStage() {
+    var music = mode === "music";
+    show("jobsWrap", music);
+    show("drop", !music);
+    if (music) {
+      renderJobs();
+      show("queue", false);
+      show("hints", jobs.length === 1 && !jobs[0].song && !jobs[0].footage.length);
+    } else {
+      renderQueue();
+    }
+    var runs = runsToStart();
+    $("bStart").disabled = typeof runs === "string";
+    $("bStart").textContent = typeof runs === "string" || runs.length === 1 && music ? "Start"
+      : music ? "Start " + runs.length + " music videos"
+      : runs[0].paths.filter(function (p) { return !isSong(p); }).length > 1 ? "Start with " + runs[0].paths.length + " folders" : "Start";
+    $("bStart").title = typeof runs === "string" ? runs : "";
+    if (music) $("qNote").textContent = "";
+    var note = typeof runs === "string" && (music ? jobs.some(function (j) { return j.song || j.footage.length; }) : false) ? runs : "";
+    $("modeNote").textContent = note || MODE_NOTES[mode];
   }
 
   function renderQueue() {
@@ -336,11 +523,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       x.className = "x";
       x.setAttribute("aria-label", "Remove " + base(p));
       x.textContent = "×";
-      x.addEventListener("click", function (ev) { ev.stopPropagation(); queue.splice(i, 1); renderQueue(); });
+      x.addEventListener("click", function (ev) { ev.stopPropagation(); queue.splice(i, 1); renderStage(); });
       row.append(txt, x);
       list.appendChild(row);
     });
-    var folders = queue.filter(function (p) { return !isSong(p); }), song = queue.filter(isSong)[0];
+    var folders = queue.filter(function (p) { return !isSong(p); });
     show("queue", queue.length > 0);
     show("hints", queue.length === 0);
     var d = $("drop");
@@ -348,51 +535,60 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("dropTitle").textContent = queue.length ? "Drop more folders or cards" : "Drop a shoot folder here";
     $("dropSub").innerHTML = queue.length ? "or click to add &nbsp;<kbd>⌘O</kbd>"
       : "or cards, one at a time or together &middot; click to choose &nbsp;<kbd>⌘O</kbd>";
-    $("qCount").textContent = "Ready to run · " + plural(queue.length, "item");
-    var note = "";
-    if (folders.length > 1) note = "Taken together as one project, in " + base(commonFolder(folders)) + ". Cards of a project set up before are added to it.";
-    else if (folders.length === 1) note = "Press Start when everything is in the list.";
-    else if (song) note = "Add the shoot folder or cards to sync to this song.";
-    if (song && folders.length) note += " Syncing to " + base(song) + ".";
-    $("qNote").textContent = note;
-    $("bStart").disabled = folders.length === 0;
-    $("bStart").textContent = folders.length > 1 ? "Start with " + folders.length + " folders" : "Start";
+    $("qCount").textContent = "Ready to set up · " + plural(queue.length, "item");
+    $("qNote").textContent = folders.length > 1
+      ? "Taken together as one project, in " + base(commonFolder(folders)) + ". Cards of a project set up before are added to it."
+      : "";
   }
 
   function reset() {
     state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
     show("modes", true);
-    ["run", "stats", "camsWrap", "aside", "error", "details", "btnsDone", "btnsRun", "btnsErr"].forEach(function (id) { show(id, false); });
+    ["run", "stats", "camsWrap", "aside", "error", "details", "btnsDone", "btnsRun", "btnsErr", "batch"].forEach(function (id) { show(id, false); });
     show("btnsStart", true);
     $("log").textContent = "";
     setTitle("Kickoff");
-    renderQueue();
+    renderStage();
+  }
+
+  // ---- running: Start runs each music video (or the one setup) in turn
+  function start() {
+    var runs = runsToStart();
+    if (running() || typeof runs === "string") return;
+    batch = { runs: runs, i: 0, ids: [] };
+    runNext();
+  }
+  function runNext() {
+    var r = batch.runs[batch.i];
+    post({ cmd: "run", paths: r.paths, mode: r.mode, folder: r.paths.filter(function (p) { return !isSong(p); })[0] });
+  }
+
+  function runOf() {
+    return batch && batch.runs.length > 1 ? "Music video " + (batch.i + 1) + " of " + batch.runs.length + " · " : "";
   }
 
   function started(paths) {
     if (typeof paths === "string") paths = [paths];      // an older app passes one folder
-    var keep = queue;
     reset();
-    queue = keep;
     state.paths = paths;
     state.folder = paths.filter(function (p) { return !isSong(p); })[0] || paths[0];
     state.t0 = Date.now();
-    showView("run");
+    showView(mode);
+    show("jobsWrap", false); show("queue", false); show("btnsStart", false); show("hints", false); show("modes", false);
     var d = $("drop");
     d.className = "drop";
-    var name = label(paths);
+    show("drop", true);
+    var song = paths.filter(isSong)[0], folders = paths.filter(function (p) { return !isSong(p); });
+    var name = song ? base(song) : label(paths);
+    var of = batch && batch.runs.length > 1 ? "Music video " + (batch.i + 1) + " of " + batch.runs.length + " · " : "";
     $("dropTitle").textContent = name;
-    $("dropSub").textContent = paths.length === 1 ? paths[0] : paths.map(base).join(", ");
-    show("queue", false); show("btnsStart", false);
+    $("dropSub").textContent = of + (song ? "syncing " + folders.map(base).join(", ") : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
     setTitle("Kickoff — " + name);
     $("prog").className = "prog busy";
     $("bar").style.width = "";
     $("stage").textContent = "Checking for updates";
     $("count").textContent = "";
-    show("hints", false); show("modes", false);
-    if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); }
     show("run", true); show("btnsRun", true); show("details", true);
-    show("hints", false);
   }
 
   function setCounts() {
@@ -405,7 +601,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("stage").textContent = e.text;
     } else if (e.event === "start" && e.add) {
       state.total = e.clips; state.add = e.add;
-      $("dropSub").textContent = label(state.paths) + " · adding to " + e.project;
+      $("dropSub").textContent = runOf() + label(state.paths) + " · adding to " + e.project;
       $("stage").textContent = "Adding " + plural(e.clips, "new clip") + " to " + e.project;
       $("count").textContent = e.clips ? "0 / " + e.clips : "";
       $("prog").className = e.mode === "setup" ? "prog busy" : "prog";
@@ -416,7 +612,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     } else if (e.event === "start" && e.mode === "setup") {
       var fellBack = state.total > 0;              // it tried the song first and nothing lined up
       state.total = e.clips; state.synced = 0; state.aside = 0; state.setup = true;
-      $("dropSub").textContent = label(state.paths) + " · project setup only";
+      $("dropSub").textContent = runOf() + label(state.paths) + " · project setup only";
       $("stage").textContent = fellBack ? "Nothing lines up with that song, so this is set up as a regular project"
         : "Setting up " + plural(e.clips, "clip") + " (no song to sync to)";
       $("prog").className = "prog busy";
@@ -424,7 +620,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start") {
       state.total = e.clips;
-      $("dropSub").textContent = label(state.paths) + " · song: " + e.song;
+      $("dropSub").textContent = runOf() + label(state.paths) + (state.paths.some(isSong) ? "" : " · song: " + e.song);
       $("stage").textContent = "Syncing " + plural(e.clips, "clip") + " to " + e.song;
       $("count").textContent = "0 / " + e.clips;
       $("prog").className = "prog";
@@ -620,8 +816,40 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function onExit(code) {
-    if (code === 0 && state.result) return;
     var stoppedByUser = code === -15 || code === 15;
+    if (!(code === 0 && state.result)) failed(code, stoppedByUser);
+    if (!batch) return;
+    if (!stoppedByUser && batch.i < batch.runs.length - 1) {   // on to the next music video
+      batch.i++;
+      setTimeout(runNext, 900);
+      return;
+    }
+    if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); }
+    if (batch.runs.length > 1) showBatch();
+  }
+
+  // several music videos: a card per run, the same as in History
+  function showBatch() {
+    var ids = batch.ids, box = $("batch");
+    box.innerHTML = "";
+    var runs = history.filter(function (h) { return ids.indexOf(h.id) >= 0; }).reverse();
+    var ok = runs.filter(function (h) { return h.outcome === "done"; }).length;
+    var hd = document.createElement("div");
+    hd.className = "hhead";
+    hd.innerHTML = "<h2></h2>";
+    hd.firstChild.textContent = ok === runs.length ? plural(runs.length, "music video") + " done"
+      : ok + " of " + plural(runs.length, "music video") + " done";
+    box.appendChild(hd);
+    runs.forEach(function (h) { box.appendChild(entryCard(h)); });
+    ["drop", "run", "stats", "camsWrap", "aside", "error", "btnsDone", "btnsErr"].forEach(function (id) { show(id, false); });
+    $("details").open = false;
+    show("batch", true);
+    show("btnsErr", true);
+    $("bRetry").hidden = true;
+    setTitle("Kickoff");
+  }
+
+  function failed(code, stoppedByUser) {
     show("btnsRun", false);
     $("prog").className = "prog";
     if (code === -15 || code === 15) {        // stopped by the user
@@ -638,6 +866,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     }
     show("error", true);
     show("btnsErr", true);
+    $("bRetry").hidden = false;
     record(stoppedByUser ? "stopped" : "error", null, $("errText").textContent);
   }
 
@@ -657,6 +886,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (err) entry.error = String(err).slice(0, 400);
     history.unshift(entry);
     post({ cmd: "history-add", entry: entry });
+    if (batch) batch.ids.push(entry.id);
     renderHistory();
   }
 
@@ -706,56 +936,75 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         list.appendChild(hd);
         lastDay = dn;
       }
-      var desc = describe(h);
-      var card = document.createElement("div");
-      card.className = "entry";
-      var r1 = document.createElement("div");
-      r1.className = "r1";
-      var t = document.createElement("time");
-      t.textContent = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-      var ti = document.createElement("span");
-      ti.className = "t";
-      ti.textContent = h.project || label(h.paths || []);
-      var b = document.createElement("span");
-      b.className = "badge " + desc[1];
-      b.textContent = desc[0];
-      r1.append(t, ti, b);
-      var sum = document.createElement("div");
-      sum.className = "sum";
-      sum.textContent = desc[2];
-      var items = document.createElement("div");
-      items.className = "items";
-      items.textContent = (h.paths || []).length === 1 ? h.paths[0] : (h.paths || []).map(base).join(", ");
-      items.title = (h.paths || []).join("\n");
-      card.append(r1, sum, items);
-      var acts = document.createElement("div");
-      acts.className = "acts";
-      function act(text, fn, cls) {
-        var bt = document.createElement("button");
-        bt.textContent = text;
-        if (cls) bt.className = cls;
-        bt.addEventListener("click", fn);
-        acts.appendChild(bt);
-      }
-      if (h.xml) act(h.add ? "Import into Premiere" : "Open in Premiere", function () { post({ cmd: "premiere", path: h.xml }); });
-      if (h.report) act(h.mode === "setup" ? "Clip list" : "Report", function () { post({ cmd: "report", path: h.report }); });
-      if (h.xml || (h.paths && h.paths.length)) act("Show in Finder", function () { post({ cmd: "reveal", path: h.xml || h.paths[0] }); });
-      if (h.paths && h.paths.length) act("Run again", function () { queue = []; showView("run"); reset(); add(h.paths); });
-      act("Remove", function () {
-        history = history.filter(function (x) { return x.id !== h.id; });
-        post({ cmd: "history-remove", id: h.id });
-        renderHistory();
-      }, "del");
-      card.appendChild(acts);
-      list.appendChild(card);
+      list.appendChild(entryCard(h));
     });
   }
 
-  function showView(v) {
-    show("vRun", v === "run");
+  function entryCard(h) {
+    var d = new Date(h.at);
+    var desc = describe(h);
+    var card = document.createElement("div");
+    card.className = "entry";
+    var r1 = document.createElement("div");
+    r1.className = "r1";
+    var t = document.createElement("time");
+    t.textContent = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    var ti = document.createElement("span");
+    ti.className = "t";
+    var sg = (h.paths || []).filter(isSong)[0];
+    ti.textContent = h.project || (sg ? base(sg).replace(/\.[^.]+$/, "") : label(h.paths || []));
+    var b = document.createElement("span");
+    b.className = "badge " + desc[1];
+    b.textContent = desc[0];
+    r1.append(t, ti, b);
+    var sum = document.createElement("div");
+    sum.className = "sum";
+    sum.textContent = desc[2];
+    var items = document.createElement("div");
+    items.className = "items";
+    items.textContent = (h.paths || []).length === 1 ? h.paths[0] : (h.paths || []).map(base).join(", ");
+    items.title = (h.paths || []).join("\n");
+    card.append(r1, sum, items);
+    var acts = document.createElement("div");
+    acts.className = "acts";
+    function act(text, fn, cls) {
+      var bt = document.createElement("button");
+      bt.textContent = text;
+      if (cls) bt.className = cls;
+      bt.addEventListener("click", fn);
+      acts.appendChild(bt);
+    }
+    if (h.xml) act(h.add ? "Import into Premiere" : "Open in Premiere", function () { post({ cmd: "premiere", path: h.xml }); });
+    if (h.report) act(h.mode === "setup" ? "Clip list" : "Report", function () { post({ cmd: "report", path: h.report }); });
+    if (h.xml || (h.paths && h.paths.length)) act("Show in Finder", function () { post({ cmd: "reveal", path: h.xml || h.paths[0] }); });
+    if (h.paths && h.paths.length) act("Run again", function () {
+      if (running()) return;
+      var m = h.mode === "setup" ? "setup" : "music";
+      showView(m);
+      reset();
+      if (m === "setup") queue = h.paths.slice();
+      else jobs = [{ song: h.paths.filter(isSong)[0] || null, footage: h.paths.filter(function (p) { return !isSong(p); }) }];
+      renderStage();
+    });
+    act("Remove", function () {
+      history = history.filter(function (x) { return x.id !== h.id; });
+      post({ cmd: "history-remove", id: h.id });
+      renderHistory();
+    }, "del");
+    card.appendChild(acts);
+    return card;
+  }
+
+  function showView(v) {             // "music", "setup" or "hist"
+    if (v !== "hist" && v !== mode) {
+      if (running() || !$("batch").hidden || !$("btnsDone").hidden || !$("btnsErr").hidden) {
+        if (running()) v = mode; else { setMode(v); reset(); }
+      } else setMode(v);
+    }
+    show("vRun", v !== "hist");
     show("vHist", v === "hist");
     document.querySelectorAll(".tabs button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.view === v)); });
-    if (v === "hist") renderHistory();
+    if (v === "hist") renderHistory(); else if (!running() && $("batch").hidden && $("btnsDone").hidden && $("btnsErr").hidden) renderStage();
   }
   document.querySelectorAll(".tabs button").forEach(function (b) {
     b.addEventListener("click", function () { showView(b.dataset.view); });
@@ -784,19 +1033,22 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function running() { return !$("btnsRun").hidden; }
-  $("drop").addEventListener("click", function () { if (!running()) post({ cmd: "pick" }); });
-  $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick" }); });
+  $("drop").addEventListener("click", function () { if (!running() && $("btnsDone").hidden) post({ cmd: "pick", target: "any" }); });
+  $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick", target: "any" }); });
   $("bOpen").addEventListener("click", function () { post({ cmd: "premiere", path: state.result.xml }); });
   $("bReport").addEventListener("click", function () { post({ cmd: "report", path: state.result.report }); });
   $("bReveal").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.xml }); });
-  $("bNew").addEventListener("click", function () { queue = []; reset(); });
-  $("bNew2").addEventListener("click", function () { queue = []; reset(); });
-  $("bRetry").addEventListener("click", function () { if (state.paths.length) post({ cmd: "run", paths: state.paths, folder: state.folder }); });
-  $("bStart").addEventListener("click", function () {
-    if (!running() && queue.some(function (p) { return !isSong(p); }))
-      post({ cmd: "run", paths: queue.slice(), folder: queue.filter(function (p) { return !isSong(p); })[0] });
+  function fresh() { queue = []; jobs = [{ song: null, footage: [] }]; batch = null; reset(); }
+  $("bNew").addEventListener("click", fresh);
+  $("bNew2").addEventListener("click", fresh);
+  $("bRetry").addEventListener("click", function () {      // the run that failed, then the rest of the batch
+    if (!state.paths.length || running()) return;
+    if (!batch) batch = { runs: [{ paths: state.paths, mode: mode }], i: 0, ids: [] };
+    runNext();
   });
-  $("bClear").addEventListener("click", function () { queue = []; renderQueue(); });
+  $("bStart").addEventListener("click", start);
+  $("bAddJob").addEventListener("click", function () { if (!running()) { jobs.push({ song: null, footage: [] }); renderStage(); } });
+  $("bClear").addEventListener("click", function () { queue = []; renderStage(); });
   $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
 
   window.Kickoff = {
@@ -804,9 +1056,18 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     event: onEvent,
     log: onLog,
     exit: onExit,
-    add: add,
+    add: function (paths) { add(paths); },
+    drop: drop,
+    picked: function (paths, target, row) { add(paths, target, row); },
     history: function (list) { history = Array.isArray(list) ? list : []; renderHistory(); },
-    dragging: function (on) { if (!running()) { showView("run"); $("drop").classList.toggle("over", !!on); } },
+    dragging: function (on, x, y) {
+      if (running()) return;
+      if (on && !$("vHist").hidden) showView(mode);
+      document.querySelectorAll(".box.over").forEach(function (b) { b.classList.remove("over"); });
+      var el = on && x != null ? document.elementFromPoint(x, y) : null, box = el && el.closest ? el.closest(".box") : null;
+      if (box) box.classList.add("over");
+      $("drop").classList.toggle("over", !!on && mode === "setup");
+    },
     info: function (i) {
       if (i.version) $("ver").textContent = "Engine " + i.version;
       if (i.update) $("upd").textContent = i.update;
@@ -814,7 +1075,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     reset: reset
   };
   setMode(mode);
-  renderQueue();
+  showView(mode);
   renderHistory();
   post({ cmd: "ready" });
 })();
