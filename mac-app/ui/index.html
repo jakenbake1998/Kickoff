@@ -258,9 +258,55 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .sgroup input[type=text],.sgroup input[type=number],.sgroup select{background:var(--bg);border:1px solid var(--line);border-radius:7px;color:var(--ink);font:13px var(--body);padding:6px 9px;min-width:0}
 .sgroup input:focus,.sgroup select:focus{outline:none;border-color:var(--accent)}
 .sgroup input[type=number]{width:80px}
-.lrow{display:grid;grid-template-columns:70px 16px 180px;gap:10px;align-items:center;font-size:13px}
-.lrow .chip{width:16px;height:16px;border-radius:4px}
-.lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:8px 20px}
+.lgrid{display:grid;gap:8px}
+.lrow{display:flex;align-items:center;gap:14px;font-size:13px;flex-wrap:wrap}
+.lrow .k{width:56px;font-weight:600}
+.swatches{display:flex;gap:5px;flex-wrap:wrap}
+.sw{width:22px;height:22px;padding:0;border-radius:5px;border:0;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);cursor:pointer}
+.sw:hover{transform:scale(1.12)}
+.sw.on{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--ink)}
+.lname{color:var(--muted);font-size:12.5px;min-width:70px}
+.lx{padding:2px 8px;background:none;border-color:transparent;color:var(--muted)}
+.lx:hover{color:var(--bad)}
+/* Settings > Folder structure: a bin tree like Premiere's Project panel. Drag a bin between others to
+   move it, onto another to put it inside. Double-click a name to rename it. */
+.bt{position:relative;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px;display:grid;gap:1px;
+  font-size:13.5px;touch-action:none;-webkit-user-select:none;user-select:none}
+.bt-row{position:relative;display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 calc(8px + var(--d) * 22px);
+  border-radius:7px;cursor:grab;border:1px solid transparent}
+.bt-row:hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.bt-row.drag-src{opacity:.35}
+.bt-row.drop-in{background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:var(--accent)}
+.bt-caret{width:14px;height:14px;flex:none;display:grid;place-items:center;color:var(--muted);border:0;background:none;padding:0;cursor:pointer;border-radius:3px}
+.bt-caret svg{transition:transform .12s}
+.bt-caret.shut svg{transform:rotate(-90deg)}
+.bt-caret:hover{color:var(--ink)}
+.bt-caret.none{visibility:hidden}
+.bt-fold{width:17px;height:13px;flex:none;border-radius:2px;background:#8a919c;position:relative;margin-top:2px}
+.bt-fold:before{content:"";position:absolute;left:0;top:-3px;width:7px;height:4px;border-radius:2px 2px 0 0;background:inherit}
+.bt-row.kick .bt-fold{background:var(--accent)}
+.bt-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;padding:3px 5px;border-radius:5px;border:1px solid transparent}
+.bt-name[contenteditable="true"]{cursor:text;background:var(--panel);border-color:var(--accent);outline:none;text-overflow:clip}
+.bt-what{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+.bt-acts{display:flex;gap:2px;margin-left:auto;opacity:0;transition:opacity .1s;flex:none}
+.bt-row:hover .bt-acts,.bt-row:focus-within .bt-acts{opacity:1}
+.bt-acts button{border:0;background:none;color:var(--muted);padding:4px 7px;border-radius:6px;font:600 12px var(--body);cursor:pointer;display:flex;align-items:center;gap:4px}
+.bt-acts button:hover{color:var(--ink);background:var(--line)}
+.bt-acts button.del:hover{color:var(--bad)}
+.bt-line{position:absolute;height:2px;background:var(--accent);border-radius:1px;pointer-events:none;display:none}
+.bt-line:before{content:"";position:absolute;left:-4px;top:-3px;width:8px;height:8px;border-radius:50%;border:2px solid var(--accent);background:var(--bg);box-sizing:border-box}
+.bt-ghost{position:fixed;z-index:60;pointer-events:none;display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;
+  background:var(--panel);border:1px solid var(--accent);box-shadow:0 8px 24px rgba(0,0,0,.45);font:600 13.5px var(--body);color:var(--ink)}
+.bt-ghost .bt-fold{margin-top:2px}
+.bt-toast{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);min-height:28px}
+.bt-toast button{padding:3px 10px;font-size:12px}
+.bt-bar{display:flex;align-items:center;gap:10px}
+.bt-bar .bt-new{display:flex;align-items:center;gap:6px;padding:6px 12px;font-size:12.5px;color:var(--accent);background:none;
+  border:1px solid color-mix(in srgb,var(--accent) 55%,transparent);border-radius:8px;cursor:pointer;font-weight:600}
+.bt-bar .bt-new:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.bt-key{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-left:auto}
+.bt-key .bt-fold{margin-top:1px}
+.bt-name[contenteditable="true"]{-webkit-user-select:text;user-select:text}
 .btree{display:grid;gap:4px}
 .brow{display:flex;align-items:center;gap:6px;font-size:13px;min-width:0}
 .brow input{width:220px}
@@ -1474,30 +1520,46 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       });
       P.appendChild(g);
     } else if (pane === "labels") {
-      g = group("Camera label colors", "Premiere's label colors for each camera's bin, clips and sequences.");
-      var grid = el("div", { class: "lgrid" });
-      "ABCDEFGH".split("").forEach(function (L) {
+      g = group("Camera label colors", "Premiere's label color for each camera's bin, clips and sequences.");
+      var list = el("div", { class: "lgrid" });
+      camLetters().forEach(function (L, k) {
         var r = el("div", { class: "lrow" });
         r.appendChild(el("span", { class: "k" }, L + " Cam"));
-        var chip = el("i", { class: "chip" }); chip.style.background = "var(" + CAM_COLORS[labelFor(L)] + ")";
-        r.appendChild(chip);
-        r.appendChild(select(LABEL_ORDER.map(function (n) { return [n, n]; }), labelFor(L), function (v) {
-          settings.labels[L] = v; chip.style.background = "var(" + CAM_COLORS[v] + ")";
-        }));
-        grid.appendChild(r);
+        var sw = el("div", { class: "swatches", role: "radiogroup", "aria-label": L + " Cam label color" });
+        LABEL_ORDER.forEach(function (n) {
+          var b = el("button", { class: "sw" + (labelFor(L) === n ? " on" : ""), title: n, "aria-label": n, role: "radio",
+            "aria-checked": String(labelFor(L) === n) });
+          b.style.background = "var(" + CAM_COLORS[n] + ")";
+          b.addEventListener("click", function () { settings.labels[L] = n; saveSettings(); renderSettings(); });
+          sw.appendChild(b);
+        });
+        r.appendChild(sw);
+        r.appendChild(el("span", { class: "lname" }, esc(labelFor(L))));
+        if (k >= 6) {
+          var x = el("button", { class: "lx", title: "Remove " + L + " Cam" }, "&#10005;");
+          x.addEventListener("click", function () {
+            camLetters().slice(k).forEach(function (M) { delete settings.labels[M]; });
+            saveSettings(); renderSettings();
+          });
+          r.appendChild(x);
+        }
+        list.appendChild(r);
       });
-      g.appendChild(grid);
-      g.appendChild(el("p", {}, "Cameras after H start over from the top of Premiere's list."));
+      g.appendChild(list);
+      var next = String.fromCharCode(65 + camLetters().length);
+      if (camLetters().length < 26) {
+        var addc = el("button", { class: "addbin" }, "+ Add camera (" + next + " Cam)");
+        addc.addEventListener("click", function () { settings.labels[next] = labelFor(next); saveSettings(); renderSettings(); });
+        g.appendChild(addc);
+      }
       P.appendChild(g);
     } else if (pane === "bins") {
-      g = group("Folder structure", "Rename a bin by typing, move it with the arrows (&larr; &rarr; take it out of or into the bin above), add or remove bins. Bins Kickoff fills can be renamed and moved but not removed.");
-      var t = el("div", { class: "btree" });
-      walkBins(settings.bins, function (b, d, path) { t.appendChild(binRow(b, d, path)); });
-      g.appendChild(t);
-      var add = el("button", { class: "addbin" }, "+ Add a bin");
-      add.addEventListener("click", function () { settings.bins.push({ name: "New bin" }); saveSettings(); renderSettings(); focusLast(); });
-      g.appendChild(add);
+      g = group("Folder structure", "Drag a bin to move it, or drop it on another bin to put it inside. Double-click a name to rename it.");
+      var holder = el("div", { style: "display:grid;gap:10px" });
+      g.appendChild(holder);
       P.appendChild(g);
+      BinTree(holder, { bins: settings.bins, required: REQUIRED, notes: ROLE_NOTE, scroller: P,
+        onChange: function () { saveSettings(); } });
     } else if (pane === "files") {
       g = group("Project XML", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
       var v = el("span", { class: "hint" }, esc(xmlDir || "The top of the drive the footage is on"));
@@ -1528,50 +1590,214 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       P.appendChild(g);
     }
   }
-  function focusLast() { var ins = $("pane-bins").querySelectorAll("input"); if (ins.length) { ins[ins.length - 1].focus(); ins[ins.length - 1].select(); } }
-  function at(path) {                      // [list, index] for a bin's path
-    var list = settings.bins;
-    for (var i = 0; i < path.length - 1; i++) list = list[path[i]].children;
-    return [list, path[path.length - 1]];
+  // cameras shown under Label colors: A to F, plus any added (the last letter with a saved color)
+  function camLetters() {
+    var n = 6;
+    Object.keys(settings.labels).forEach(function (L) { n = Math.max(n, L.charCodeAt(0) - 64); });
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZ".slice(0, Math.min(n, 26)).split("");
   }
-  function binRow(b, depth, path) {
-    var r = el("div", { class: "brow" });
-    r.style.paddingLeft = (depth * 26) + "px";
-    var li = at(path), list = li[0], i = li[1];
-    function btn(label, title, ok, fn, cls) {
-      var x = el("button", { class: "ib" + (cls ? " " + cls : ""), title: title }, label);
-      x.disabled = !ok;
-      x.addEventListener("click", function () { fn(); if (!b.children || !b.children.length) delete b.children; saveSettings(); renderSettings(); });
-      r.appendChild(x);
+  // Settings > Folder structure: drag a bin between others to move it, onto another to put it inside,
+  // double-click a name to rename it. Bins Kickoff fills (orange) can move but not be removed.
+  // Mouse (pointer) events, not HTML drag and drop: the window's own file dropping owns that.
+  function BinTree(host, opts) {
+    var bins = opts.bins, shut = new WeakSet(), drag = null, undo = null, undoTimer = null, hoverTimer = null;
+    var ICON_CARET = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    var ICON_PLUS = '<svg width="11" height="11" viewBox="0 0 12 12"><path d="M6 2v8M2 6h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+    var ICON_BIN = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>';
+    host.innerHTML = "";
+    var bar = document.createElement("div"); bar.className = "bt-bar";
+    bar.innerHTML = '<button class="bt-new">' + ICON_PLUS + 'New bin</button>' +
+      '<span class="bt-key"><i class="bt-fold" style="background:var(--accent)"></i>Kickoff puts things in these, so they can move but not be removed</span>';
+    var tree = document.createElement("div"); tree.className = "bt";
+    var line = document.createElement("div"); line.className = "bt-line";
+    var toast = document.createElement("div"); toast.className = "bt-toast";
+    host.appendChild(bar); host.appendChild(tree); host.appendChild(toast);
+
+    function kids(b) { return b.children || (b.children = []); }
+    function tidy(list) { list.forEach(function (b) { if (b.children && !b.children.length) delete b.children; else if (b.children) tidy(b.children); }); }
+    function holds(b, other) {            // is other b itself or somewhere inside it?
+      if (b === other) return true;
+      return (b.children || []).some(function (c) { return holds(c, other); });
     }
-    btn("&uarr;", "Move up", i > 0, function () { list.splice(i - 1, 0, list.splice(i, 1)[0]); });
-    btn("&darr;", "Move down", i < list.length - 1, function () { list.splice(i + 1, 0, list.splice(i, 1)[0]); });
-    btn("&larr;", "Take it out of " + (depth ? at(path.slice(0, -1))[0][path[path.length - 2]].name : ""), depth > 0, function () {
-      var pl = at(path.slice(0, -1)), p = pl[0][pl[1]];
-      p.children.splice(i, 1);
-      if (!p.children.length) delete p.children;
-      pl[0].splice(pl[1] + 1, 0, b);
-    });
-    btn("&rarr;", i > 0 ? "Put it inside " + list[i - 1].name : "", i > 0, function () {
-      var into = list[i - 1];
-      list.splice(i, 1);
-      (into.children = into.children || []).push(b);
-    });
-    r.appendChild(el("i", { class: "fold" }));
-    var inp = el("input", { type: "text", spellcheck: "false" }); inp.value = b.name;
-    inp.addEventListener("input", function () { b.name = inp.value.trim() || "Bin"; saveSettings(); });
-    r.appendChild(inp);
-    var add = el("button", { class: "ib", title: "Add a bin inside " + b.name }, "+ inside");
-    add.addEventListener("click", function () { (b.children = b.children || []).push({ name: "New bin" }); saveSettings(); renderSettings(); });
-    r.appendChild(add);
-    if (hasRequired(b)) {
-      r.appendChild(el("span", { class: "tag2" }, b.role && ROLE_NOTE[b.role] ? "Kickoff fills this: " + ROLE_NOTE[b.role] : "holds a bin Kickoff fills"));
-    } else {
-      btn("&#10005;", "Remove " + b.name, true, function () { list.splice(i, 1); }, "x");
-      if (b.role && ROLE_NOTE[b.role]) r.appendChild(el("span", { class: "tag2" }, ROLE_NOTE[b.role]));
+    function locate(b, list) {            // [list, index] of b
+      list = list || bins;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] === b) return [list, i];
+        var f = list[i].children && locate(b, list[i].children);
+        if (f) return f;
+      }
+      return null;
     }
-    return r;
+    function required(b) { return !!opts.required[b.role] || (b.children || []).some(required); }
+    function changed() { tidy(bins); opts.onChange(bins); render(); }
+
+    function render() {
+      tree.innerHTML = ""; tree.appendChild(line);
+      (function draw(list, d) {
+        list.forEach(function (b) {
+          var r = document.createElement("div");
+          r.className = "bt-row" + (b.role && opts.required[b.role] ? " kick" : "");
+          r.style.setProperty("--d", d);
+          r._bin = b; r._depth = d;
+          var has = b.children && b.children.length;
+          r.innerHTML = '<button class="bt-caret' + (has ? (shut.has(b) ? " shut" : "") : " none") + '" tabindex="-1" aria-label="Open or close">' + ICON_CARET + '</button>' +
+            '<i class="bt-fold"></i>' +
+            '<span class="bt-name"></span><span class="bt-what"></span><span class="bt-acts"></span>';
+          r.querySelector(".bt-name").textContent = b.name;
+          r.querySelector(".bt-what").textContent = (b.role && opts.notes[b.role]) || "";
+          var acts = r.querySelector(".bt-acts");
+          var add = document.createElement("button"); add.innerHTML = ICON_PLUS + "Bin inside"; add.title = "Add a bin inside " + b.name;
+          add.addEventListener("click", function () { var nb = { name: "New bin" }; kids(b).push(nb); shut.delete(b); changed(); rename(nb); });
+          acts.appendChild(add);
+          if (!required(b)) {
+            var del = document.createElement("button"); del.className = "del"; del.innerHTML = ICON_BIN; del.title = "Remove " + b.name;
+            del.addEventListener("click", function () { remove(b); });
+            acts.appendChild(del);
+          }
+          r.querySelector(".bt-caret").addEventListener("click", function () { if (shut.has(b)) shut.delete(b); else shut.add(b); render(); });
+          r.querySelector(".bt-name").addEventListener("dblclick", function () { rename(b); });
+          r.addEventListener("pointerdown", press);
+          tree.appendChild(r);
+          if (has && !shut.has(b)) draw(b.children, d + 1);
+        });
+      })(bins, 0);
+    }
+
+    function rowOf(b) { return Array.prototype.find.call(tree.querySelectorAll(".bt-row"), function (r) { return r._bin === b; }); }
+    function rename(b) {
+      var r = rowOf(b); if (!r) return;
+      var n = r.querySelector(".bt-name"), before = b.name;
+      n.contentEditable = "true"; n.focus();
+      var range = document.createRange(); range.selectNodeContents(n);
+      var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      function done(keep) {
+        n.removeEventListener("blur", onBlur); n.removeEventListener("keydown", onKey);
+        n.contentEditable = "false";
+        b.name = keep ? (n.textContent.replace(/\s+/g, " ").trim() || before) : before;
+        changed();
+      }
+      function onBlur() { done(true); }
+      function onKey(ev) {
+        if (ev.key === "Enter") { ev.preventDefault(); n.blur(); }
+        else if (ev.key === "Escape") { ev.preventDefault(); n.removeEventListener("blur", onBlur); done(false); }
+      }
+      n.addEventListener("blur", onBlur); n.addEventListener("keydown", onKey);
+    }
+
+    function remove(b) {
+      var at = locate(b); if (!at) return;
+      at[0].splice(at[1], 1);
+      undo = { bin: b, list: at[0], i: at[1] };
+      changed();
+      toast.innerHTML = "";
+      var t = document.createElement("span"); t.textContent = "Removed " + b.name + ".";
+      var u = document.createElement("button"); u.textContent = "Undo";
+      u.addEventListener("click", function () {
+        if (!undo) return;
+        undo.list.splice(Math.min(undo.i, undo.list.length), 0, undo.bin);
+        undo = null; toast.innerHTML = ""; changed();
+      });
+      toast.appendChild(t); toast.appendChild(u);
+      clearTimeout(undoTimer);
+      undoTimer = setTimeout(function () { undo = null; toast.innerHTML = ""; }, 8000);
+    }
+
+    bar.querySelector(".bt-new").addEventListener("click", function () {
+      var nb = { name: "New bin" }; bins.push(nb); changed(); rename(nb);
+      tree.scrollTop = tree.scrollHeight;
+    });
+
+    // ---- dragging
+    function press(ev) {
+      if (ev.button !== 0 || ev.target.closest("button") || ev.target.isContentEditable) return;
+      var r = ev.currentTarget;
+      drag = { row: r, bin: r._bin, x: ev.clientX, y: ev.clientY, on: false, target: null };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", release);
+      document.addEventListener("pointercancel", release);
+    }
+    function clear() {
+      line.style.display = "none";
+      tree.querySelectorAll(".drop-in").forEach(function (e) { e.classList.remove("drop-in"); });
+    }
+    function move(ev) {
+      if (!drag) return;
+      if (!drag.on) {
+        if (Math.abs(ev.clientX - drag.x) + Math.abs(ev.clientY - drag.y) < 5) return;
+        drag.on = true;
+        drag.row.classList.add("drag-src");
+        drag.ghost = document.createElement("div"); drag.ghost.className = "bt-ghost";
+        drag.ghost.innerHTML = '<i class="bt-fold"' + (drag.row.classList.contains("kick") ? ' style="background:var(--accent)"' : "") + '></i>';
+        drag.ghost.appendChild(document.createTextNode(drag.bin.name));
+        document.body.appendChild(drag.ghost);
+        document.body.style.cursor = "grabbing";
+      }
+      drag.ghost.style.left = (ev.clientX + 12) + "px"; drag.ghost.style.top = (ev.clientY - 14) + "px";
+      var sc = opts.scroller || document.scrollingElement, sb = sc === document.scrollingElement ?
+        { top: 0, bottom: window.innerHeight } : sc.getBoundingClientRect();      // near an edge: scroll
+      if (ev.clientY > sb.bottom - 36) sc.scrollTop += 14; else if (ev.clientY < sb.top + 36) sc.scrollTop -= 14;
+      clear();
+      drag.target = null;
+      var el = document.elementFromPoint(ev.clientX, ev.clientY), r = el && el.closest && el.closest(".bt-row");
+      var rows = tree.querySelectorAll(".bt-row");
+      if (!r && rows.length) {                // below the last bin: to the end of the top level
+        var last = rows[rows.length - 1].getBoundingClientRect(), tb = tree.getBoundingClientRect();
+        if (ev.clientY > last.bottom && ev.clientY < tb.bottom + 30 && ev.clientX > tb.left && ev.clientX < tb.right) {
+          drag.target = { end: true };
+          showLine(last.bottom, 0);
+        }
+        return;
+      }
+      if (!r || holds(drag.bin, r._bin)) { clearTimeout(hoverTimer); drag.hover = null; return; }
+      var box = r.getBoundingClientRect(), f = (ev.clientY - box.top) / box.height;
+      if (f < 0.28) { drag.target = { bin: r._bin, where: "before" }; showLine(box.top, r._depth); }
+      else if (f > 0.72 && !(r._bin.children && r._bin.children.length && !shut.has(r._bin))) {
+        drag.target = { bin: r._bin, where: "after" }; showLine(box.bottom, r._depth);
+      } else {
+        drag.target = { bin: r._bin, where: "into" }; r.classList.add("drop-in");
+        if (shut.has(r._bin) && drag.hover !== r._bin) {     // hold over a closed bin to open it
+          clearTimeout(hoverTimer); drag.hover = r._bin;
+          hoverTimer = setTimeout(function () { if (drag && drag.hover) { shut.delete(drag.hover); render(); rowOf(drag.bin) && rowOf(drag.bin).classList.add("drag-src"); } }, 600);
+        }
+      }
+      if (!drag.target || drag.target.where !== "into") { clearTimeout(hoverTimer); drag.hover = null; }
+    }
+    function showLine(y, depth) {
+      var tb = tree.getBoundingClientRect();
+      line.style.display = "block";
+      line.style.top = (y - tb.top - 1 + tree.scrollTop) + "px";
+      line.style.left = (14 + depth * 22) + "px";
+      line.style.right = "8px";
+    }
+    function release() {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", release);
+      document.removeEventListener("pointercancel", release);
+      clearTimeout(hoverTimer);
+      document.body.style.cursor = "";
+      if (!drag) return;
+      var d = drag; drag = null;
+      if (d.ghost) d.ghost.remove();
+      clear();
+      if (!d.on) return;                     // a click, not a drag
+      if (!d.target) { render(); return; }
+      var from = locate(d.bin); if (!from) return;
+      from[0].splice(from[1], 1);
+      if (d.target.end) bins.push(d.bin);
+      else if (d.target.where === "into") { kids(d.target.bin).push(d.bin); shut.delete(d.target.bin); }
+      else {
+        var at = locate(d.target.bin);
+        at[0].splice(at[1] + (d.target.where === "after" ? 1 : 0), 0, d.bin);
+      }
+      changed();
+      var nr = rowOf(d.bin);
+      if (nr) { nr.animate([{ background: "color-mix(in srgb, var(--accent) 22%, transparent)" }, { background: "transparent" }], { duration: 700 }); }
+    }
+
+    render();
+    return { render: render, set: function (b) { bins = b; render(); } };
   }
+
   document.querySelectorAll("#sTabs button").forEach(function (b) {
     b.addEventListener("click", function () { pane = b.dataset.pane; renderSettings(); });
   });
