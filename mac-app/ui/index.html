@@ -49,6 +49,7 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .status{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:12.5px;margin-top:-10px}
 .status span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .status span:last-child{font-variant-numeric:tabular-nums;flex:none}
+.status #eta:not(:empty){margin-left:14px}
 
 /* progress in plain words while a run goes: "28 synced so far, 6 set aside" */
 .stats{margin:0;color:var(--muted);font-size:14px}
@@ -461,7 +462,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <div id="run" hidden>
     <div style="display:grid;gap:18px">
       <div class="prog" id="prog"><i id="bar"></i></div>
-      <div class="status"><span id="stage">Starting</span><span id="count"></span></div>
+      <div class="status"><span id="stage">Starting</span><span><span id="count"></span><span id="eta"></span></span></div>
     </div>
   </div>
 
@@ -946,19 +947,34 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     d.className = "drop";
     show("drop", true);
     var song = paths.filter(isSong)[0], folders = paths.filter(function (p) { return !isSong(p); });
-    var name = song ? base(song) : label(paths);
+    var name = folders.length ? projectName(folders) : label(paths);     // the card has a folder icon: the footage is its title
     var of = batch && batch.runs.length > 1 ? "Music video " + (batch.i + 1) + " of " + batch.runs.length + " · " : "";
     $("dropTitle").textContent = name;
-    $("dropSub").textContent = of + (song ? "syncing " + folders.map(base).join(", ") : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
+    $("dropSub").textContent = of + (song ? "song: " + base(song) : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
     setTitle("Kickoff — " + name);
     $("prog").className = "prog busy";
     $("bar").style.width = "";
     $("stage").textContent = "Checking for updates";
     $("count").textContent = "";
+    $("eta").textContent = "";
+    clearInterval(tick); tick = setInterval(timing, 1000);
     show("run", true); show("btnsRun", true); show("details", true);
     document.querySelector("#vRun > .vtop").style.marginTop = ""; pinned = null;   // the run screen centres as before
   }
 
+  // "2:14 elapsed · about 6 min left": the pace of the clips done so far, once there are 3 to go on
+  var tick = null;
+  function timeLeft() {
+    if (!state.total || !state.tClips || (state.done || 0) < 3) return "";
+    var s = (Date.now() - state.tClips) / 1000 / state.done * (state.total - state.done);
+    return s > 60 ? "about " + Math.round(s / 60) + " min left" : "less than a minute left";
+  }
+  function timing() {
+    if (!running() || !state.t0) { clearInterval(tick); tick = null; $("eta").textContent = ""; return; }
+    var left = timeLeft();
+    $("eta").textContent = clock((Date.now() - state.t0) / 1000) + " elapsed" + (left ? " · " + left : "");
+  }
+  function songOf(e) { var sg = state.paths.filter(isSong)[0]; return sg ? base(sg) : e.song || ""; }
   function setCounts() {
     $("sSynced").textContent = state.synced;
     $("sAside").textContent = state.aside;
@@ -968,8 +984,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (e.event === "stage") {
       $("stage").textContent = e.text;
     } else if (e.event === "start" && e.add) {
-      state.total = e.clips; state.add = e.add;
-      $("dropSub").textContent = runOf() + label(state.paths) + " · adding to " + e.project;
+      state.total = e.clips; state.add = e.add; state.tClips = Date.now(); state.done = 0;
+      $("dropSub").textContent = runOf() + "adding to " + e.project + (e.mode !== "setup" && songOf(e) ? " · song: " + songOf(e) : "");
       $("stage").textContent = "Adding " + plural(e.clips, "new clip") + " to " + e.project;
       $("count").textContent = e.clips ? "0 / " + e.clips : "";
       $("prog").className = e.mode === "setup" ? "prog busy" : "prog";
@@ -979,16 +995,16 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start" && e.mode === "setup") {
       var fellBack = state.total > 0;              // it tried the song first and nothing lined up
-      state.total = e.clips; state.synced = 0; state.aside = 0; state.setup = true;
-      $("dropSub").textContent = runOf() + label(state.paths) + " · project setup only";
+      state.total = e.clips; state.synced = 0; state.aside = 0; state.setup = true; state.done = 0; state.tClips = 0;
+      $("dropSub").textContent = runOf() + "project setup only";
       $("stage").textContent = fellBack ? "Nothing lines up with that song, so this is set up as a regular project"
         : "Setting up " + plural(e.clips, "clip") + " (no song to sync to)";
       $("prog").className = "prog busy";
       show("stats", false);
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start") {
-      state.total = e.clips;
-      $("dropSub").textContent = runOf() + label(state.paths) + (state.paths.some(isSong) ? "" : " · song: " + e.song);
+      state.total = e.clips; state.tClips = Date.now(); state.done = 0;
+      $("dropSub").textContent = runOf() + "song: " + songOf(e);
       $("stage").textContent = "Syncing " + plural(e.clips, "clip") + " to " + e.song;
       $("count").textContent = "0 / " + e.clips;
       $("prog").className = "prog";
@@ -999,6 +1015,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "clip") {
       if (e.status === "placed") state.synced++; else state.aside++;
+      state.done = e.done; state.total = e.total;
       setCounts();
       $("bar").style.width = (100 * e.done / e.total).toFixed(1) + "%";
       $("count").textContent = e.done + " / " + e.total;
