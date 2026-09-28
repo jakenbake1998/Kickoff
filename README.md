@@ -18,7 +18,8 @@ python3 musicsync.py "/Volumes/Shoot/White Wolf"
 ```
 
 It finds the song itself (the only audio file, or the one in a `Music` folder or named
-master/song/mix; otherwise pass `--master "Song.wav"`). Camera card dumps can go in as they are
+master/song/mix; with several there, it passes over stems, instrumentals and clicks and takes the
+longest; otherwise pass `--master "Song.wav"`). Camera card dumps can go in as they are
 (`A_CAM/PRIVATE/M4ROOT/CLIP/...`, `B_CAM/A001C003_....mxf`); Sony proxy and thumbnail folders are
 skipped. Any other audio files (boom, lav, Zoom recorder) are treated as captured audio.
 
@@ -217,6 +218,14 @@ also followed in overlapping 10 second windows from head to tail. If the camera 
 differs from the master (23.976 vs 24 is a 0.1% error, about 3 frames over 2 minutes), the report
 shows the head-to-tail drift in ms and frames and lists clips that drift a frame or more. Those
 clips are placed so the error is split, in sync at their middle.
+
+## Which audio channel
+
+Cameras put the scratch mic on different channels: an ARRI Mini LF records timecode on channel 3
+and the mic on 4, with 1-2 nearly silent. Kickoff never mixes channels down first. It reads every
+channel of every audio stream, skips silent ones and timecode (a constant-level square wave),
+tries the rest against the song and keeps the one that matches best. The report notes which one
+(`scratch audio on channel 4`).
 
 ## Camera grouping
 

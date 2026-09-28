@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 # ---------------------------------------------------------------- constants
 
@@ -166,6 +166,8 @@ class Clip:
     vcodec: str = ""
     has_audio: bool = False
     audio_channels: int = 0
+    audio_layout: list = field(default_factory=list)    # channels in each audio stream, in order
+    audio_pick: str = ""                 # which stream/channel the scratch mic was found on
     audio_rate: int = 48000
     audio_offset: float = 0.0     # audio stream start minus video stream start
     make: str = ""
@@ -269,6 +271,7 @@ def probe(clip: Clip):
     v = next((s for s in streams if s.get("codec_type") == "video"
               and not (s.get("disposition") or {}).get("attached_pic")), None)
     a = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    clip.audio_layout = [int(s.get("channels") or 1) for s in streams if s.get("codec_type") == "audio"]
     if v is None and a is None:
         clip.readable = False
         clip.probe_error = "no video or audio streams"
@@ -354,15 +357,43 @@ def find_audio(folder, skip_dirs=()):
     return out
 
 
+SONG_HINT = re.compile(r"music|master|song|track|mix|playback", re.I)
+NOT_SONG = re.compile(r"stem|instrumental|\binst\b|a ?cappella|acapella|vocals? only|click|"
+                      r"\bsfx\b|\bvo\b|voice ?over|wild ?track|room ?tone|\bboom\b|\blav\b|zoom\d", re.I)
+
+
 def pick_master(folder, audio_files):
-    """Guess the master song in a dropped folder: an audio file named or filed as music/master/song."""
+    """Guess the master song in a dropped folder. A file in a Music/Song folder, or named
+    master/song/mix, wins; stems, instrumentals, clicks and sound recordings are passed over; of
+    several equally likely files, the longest (a full mix, not an edit or a stem) is taken."""
     if len(audio_files) == 1:
         return audio_files[0]
-    hint = re.compile(r"music|master|song|track|mix|playback", re.I)
-    cands = [p for p in audio_files if hint.search(os.path.relpath(p, folder))]
-    if len(cands) == 1:
-        return cands[0]
-    return None
+
+    def score(p):
+        rel = os.path.relpath(p, folder)
+        dirs = [d.lower() for d in rel.replace("\\", "/").split("/")[:-1]]
+        name = os.path.basename(p)
+        sc = 0
+        if any(d in ("music", "song", "songs", "master", "playback", "track") for d in dirs):
+            sc += 4
+        elif SONG_HINT.search(rel):
+            sc += 2
+        if SONG_HINT.search(name):
+            sc += 1
+        if NOT_SONG.search(rel):
+            sc -= 5
+        if any(d in ("sfx", "sound effects", "sound", "audio", "captured") for d in dirs):
+            sc -= 3
+        return sc
+    scored = sorted(((score(p), p) for p in audio_files), key=lambda sp: -sp[0])
+    if not scored or scored[0][0] <= 0:
+        return None
+    top = [p for sc, p in scored if sc == scored[0][0]]
+    if len(top) > 1:
+        top.sort(key=lambda p: -probe_audio(p)[0])
+        log("Several possible songs: %s. Using the longest, %s (pass --master to pick another)"
+            % (", ".join(os.path.basename(p) for p in top), os.path.basename(top[0])))
+    return top[0]
 
 
 def probe_audio(path):
@@ -402,6 +433,46 @@ def load_audio(path, stream="a:0"):
     if r.returncode != 0:
         raise RuntimeError(r.stderr.decode(errors="replace").strip()[-300:])
     return np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+MAX_CHANNELS = 16
+
+
+def load_channels(path, layout):
+    """Every audio channel of the file as its own mono track: [(label, samples)]. Cameras put the
+    scratch mic on different channels (an ARRI Mini LF: timecode on 3, mic on 4, 1-2 nearly silent),
+    and a downmix buries it, so channels are never mixed before one is chosen."""
+    out = []
+    for i, ch in enumerate(layout or [1]):
+        r = run(["ffmpeg", "-v", "error", "-nostdin", "-i", path, "-map", "0:a:%d" % i, "-vn",
+                 "-ar", str(SR), "-f", "f32le", "-acodec", "pcm_f32le", "-"])
+        if r.returncode != 0:
+            if out:
+                continue
+            raise RuntimeError(r.stderr.decode(errors="replace").strip()[-300:])
+        x = np.frombuffer(r.stdout, dtype=np.float32)
+        ch = max(1, ch)
+        x = x[:len(x) // ch * ch].reshape(-1, ch)
+        for c in range(ch):
+            label = ("channel %d" % (c + 1)) if len(layout) <= 1 else ("stream %d channel %d" % (i + 1, c + 1)) \
+                if ch > 1 else "channel %d" % (i + 1)
+            out.append((label, np.ascontiguousarray(x[:, c])))
+            if len(out) >= MAX_CHANNELS:
+                return out
+    return out
+
+
+def is_timecode(x):
+    """LTC timecode recorded as audio: a square wave at a constant level, switching 1900-4000 times
+    a second. It never matches a song; skipping it saves the time of trying."""
+    if len(x) < SR:
+        return False
+    seg = x[:SR * 10]
+    rms = float(np.sqrt(np.mean(seg ** 2)))
+    if rms <= 0:
+        return False
+    zc = np.count_nonzero(np.diff(np.signbit(seg))) / (len(seg) / SR)
+    return 1500 < zc < 5000 and float(np.median(np.abs(seg))) / rms > 0.85
 
 
 def spectrogram(x):
@@ -599,19 +670,36 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         return
 
     try:
-        x = load_audio(clip.path)
+        chans = load_channels(clip.path, clip.audio_layout)
     except RuntimeError as e:
         clip.reasons.append(REASON_UNREADABLE)
         clip.notes.append("audio decode failed: %s" % e)
         return
-    rms = float(np.sqrt(np.mean(x ** 2))) if len(x) else 0.0
-    if rms < 10 ** (-70 / 20):
+    # the scratch mic: of the channels that carry sound (not silence, not timecode), the one that
+    # matches the song best. A wrong channel simply doesn't match.
+    loud, levels = [], []
+    for label, xc in chans:
+        rms = float(np.sqrt(np.mean(xc ** 2))) if len(xc) else 0.0
+        levels.append(rms)
+        if rms >= 10 ** (-60 / 20) and not is_timecode(xc):
+            loud.append((label, xc))
+    if not loud:
+        rms = max(levels or [0.0])
         clip.reasons.append(REASON_SILENT)
-        clip.notes.append("digital silence" if rms < 1e-6 else "audio level %.0f dBFS" % (20 * math.log10(rms)))
+        clip.notes.append("digital silence" if rms < 1e-6 else "audio level %.0f dBFS" % (20 * math.log10(rms))
+                          if rms < 10 ** (-60 / 20) else "only timecode on the audio channels")
         return
-
-    h, t = landmarks(*find_peaks(x))
-    ev = evaluate(master, h, t)
+    best = None
+    for label, xc in loud:
+        hc, tc_ = landmarks(*find_peaks(xc))
+        ec = evaluate(master, hc, tc_)
+        score = (ec["conf"], ec["A"]) if ec is not None else (-1, 0)
+        if best is None or score > best[0]:
+            best = (score, label, xc, hc, tc_, ec)
+    _, label, x, h, t, ev = best
+    if len(chans) > 1:
+        clip.audio_pick = label
+        clip.notes.append("scratch audio on %s" % label)
     if ev is None:
         clip.reasons.append(REASON_NO_MATCH)
         return
@@ -2008,6 +2096,9 @@ def main(argv=None):
                      "--master.\nAudio files found:\n  " + names)
         if args.master:
             log("Master song: %s" % os.path.relpath(args.master, args.clips))
+            rel = os.path.relpath(args.master, args.clips)
+            # found by its folder or name (not just the only audio file): don't second-guess it
+            args.song_certain = bool(SONG_HINT.search(rel))
     if args.mode == "setup":
         args.master = None
     if not args.master:
@@ -2044,7 +2135,8 @@ def main(argv=None):
         event("start", project=project_name, folder=args.clips, song=os.path.basename(args.master),
               song_duration=round(master.duration, 2), clips=len(clips), version=VERSION, mode="music")
         match_all(clips, master, args)
-        if args.mode == "auto" and not any(c.status == "placed" for c in clips):
+        if args.mode == "auto" and not getattr(args, "song_certain", True) \
+                and not any(c.status == "placed" for c in clips):
             # the "song" lines up with nothing: it's another recording (a boom track on a commercial)
             log("Nothing lines up with %s, so this isn't a music video shoot: setting up the project "
                 "only, with that file under Audio > Captured" % os.path.basename(args.master))
@@ -2182,7 +2274,8 @@ def match_all(clips, master, args):
                   passes=len(c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "")
             placed += c.status == "placed"
             tried += c.status == "placed" or (c.reasons[:1] in ([REASON_NO_MATCH], [REASON_LOW_CONF]))
-            if args.mode == "auto" and not placed and tried >= 12 and not give_up:
+            if args.mode == "auto" and not getattr(args, "song_certain", True) and not placed \
+                    and tried >= 12 and not give_up:
                 log("12 clips with sound and none lines up with the song: not a music video shoot")
                 give_up.append(True)
 

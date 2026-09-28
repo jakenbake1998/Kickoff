@@ -50,7 +50,7 @@ def take(seed):
     kw = dict(snr_db=r.uniform(3, 15), live_drums=bool(r.integers(0, 2)))
     audio = signal.resample_poly(ms.passes_audio(SONG, passes, length, **kw), 147, 640).astype(np.float32)
     clip = m.Clip(path="take%d" % seed, rel="take%d" % seed, duration=length, fps=23.976, has_audio=True)
-    m.load_audio = lambda path, stream="a:0": audio
+    m.load_channels = lambda path, layout: [("channel 1", audio)]
     m.sync_clip(clip, MASTER, m.Settings())
     got = [(p.offset, p.status, p.repeat_alt) for p in clip.parts] if clip.split else \
         [(clip.offset, clip.status, clip.repeat_alt)]

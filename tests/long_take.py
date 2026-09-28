@@ -32,7 +32,7 @@ def run(seed=5, n=12):
     audio = signal.resample_poly(ms.passes_audio(sp.SONG, passes, length, snr_db=8, live_drums=True),
                                  147, 640).astype(np.float32)
     clip = m.Clip(path="long", rel="long", duration=length, fps=23.976, has_audio=True)
-    m.load_audio = lambda path, stream="a:0": audio
+    m.load_channels = lambda path, layout: [("channel 1", audio)]
     t0 = time.time()
     m.sync_clip(clip, sp.MASTER, m.Settings())
     print("%.0f s take, %d passes, matched in %.1f s" % (length, n, time.time() - t0))
