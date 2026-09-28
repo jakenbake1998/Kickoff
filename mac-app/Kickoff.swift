@@ -421,13 +421,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     // MARK: menu
 
+    // The About box shows Kickoff's real version (the engine's VERSION), not the bundle's fixed 1.0.
+    @objc func showAbout() {
+        var v = "?"
+        if let text = try? String(contentsOf: support.appendingPathComponent("musicsync.py"), encoding: .utf8),
+           let r = text.range(of: #"VERSION = "([^"]+)""#, options: .regularExpression) {
+            v = String(text[r]).replacingOccurrences(of: "VERSION = ", with: "")
+                .replacingOccurrences(of: "\"", with: "")
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationVersion: "Version \(v)", .version: ""])
+    }
+
     func buildMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem()
         main.addItem(appItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About Kickoff", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
-                        keyEquivalent: "")
+        appMenu.addItem(withTitle: "About Kickoff", action: #selector(showAbout), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Kickoff", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(.separator())
