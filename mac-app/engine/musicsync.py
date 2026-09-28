@@ -204,6 +204,7 @@ class Clip:
     speed: float = 1.0                   # song playback speed on set (2.0 = played at 2x)
     speed_mode: str = ""
     check: str = ""                      # waveform check: "14/15" windows that match at the offset
+    phase: Optional[float] = None        # phase check at the offset (see phase_check): how clear the peak is
     split: bool = False                  # the song restarts / jumps inside this take (see parts)
     parts: list = field(default_factory=list)   # Part per pass of the song; one Part when not split
     seq_start_frame: Optional[int] = None
@@ -226,6 +227,7 @@ class Part:
     drift_ms: Optional[float] = None
     refine: str = ""
     check: str = ""
+    phase: Optional[float] = None
     track: Optional[int] = None
     notes: list = field(default_factory=list)
     repeat_alt: Optional[float] = None
@@ -882,9 +884,11 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         # too few landmarks to be sure (a short take, a sparse outro): let the waveform decide
         rescued = waveform_rescue(xs, master, [coarse] + ([ev["runner_up_offset"]] if R else []))
     if rescued is not None:
-        coarse, n_ok, n = rescued
-        clip.notes.append("placed by waveform: %d of %d windows line up (landmarks %d vs %d by chance)"
-                          % (n_ok, n, A, N))
+        coarse, n_ok, n, ratio = rescued
+        clip.notes.append(("placed by waveform: phase peak %.1fx the next best (landmarks %d vs %d by chance)"
+                           % (ratio, A, N)) if ratio else
+                          ("placed by waveform: %d of %d windows line up (landmarks %d vs %d by chance)"
+                           % (n_ok, n, A, N)))
     elif A < st.min_hashes or ev["strength"] < 0.25:
         clip.reasons.append(REASON_NO_MATCH)
         clip.notes.append("best alignment %d landmarks vs %d by chance" % (A, N))
@@ -931,6 +935,7 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
     if xs is not None:
         clip.check = check_string(wave_q(xs, master, offset_audio, *ov, drift=clip.drift_ms,
                                          span=ov[1] - ov[0]))
+        clip.phase = phase_check(xs, master, offset_audio, *ov)
     clip.status = "placed"
 
 
@@ -1008,10 +1013,16 @@ def check_string(q):
 
 
 def doubtful(clips):
-    """Placed parts whose waveform lines up in under 70% of its windows: worth a look."""
+    """Placed parts the phase check doesn't back up (no stretch of the part peaks clearly at its
+    position), or, when it couldn't run, whose waveform lines up in under 70% of its 4 s windows:
+    worth a look. (The window count alone flagged nearly every real clip: camera audio of a live
+    room rarely lines up in 4 s windows, even at the right spot.)"""
+    def weak(p):
+        if p.phase is not None:
+            return p.phase < PHASE_AGREE
+        return bool(p.check) and int(p.check.split("/")[0]) < 0.7 * int(p.check.split("/")[1])
     return [(c, i, p) for c in clips for i, p in enumerate(c.parts, 1)
-            if p.status == "placed" and p.check and p.repeat_alt is None and
-            int(p.check.split("/")[0]) < 0.7 * int(p.check.split("/")[1])]
+            if p.status == "placed" and p.repeat_alt is None and weak(p)]
 
 
 def decisive(xs, master, off, rival, lo, hi):
@@ -1341,6 +1352,9 @@ def gap_rescue(xs, master, st, h, t, lo, hi, known):
     if hi - lo < STRAY_LONG_S:
         return None
     chunk = min(GAP_CHUNK_S, master.duration)
+    found = phase_gap(xs, master, st, h, t, lo, hi, known, chunk)
+    if found is not None:
+        return found
     cands = []
     for a in np.arange(lo, max(lo, hi - chunk) + 1e-6, chunk / 2):
         o = song_search(xs, master, a, min(hi, a + chunk))
@@ -1381,6 +1395,112 @@ def gap_rescue(xs, master, st, h, t, lo, hi, known):
                 rescued="found by waveform: %d of %d windows line up" % (k, n))
 
 
+def local_phase(xs, master, off, a, b, search=2.0):
+    """(offset, ratio) of clip stretch [a, b] against the song within +-search s of `off`: the phase
+    peak there and how far it stands above the best one 0.25 s or more away from it."""
+    seg = xs[int(max(0.0, a) * SR):int(b * SR)]
+    m0 = int(round((a + off - search) * SR))
+    m1 = m0 + len(seg) + int(2 * search * SR)
+    if len(seg) < SR or m0 < 0 or m1 > len(master.audio):
+        return None, 0.0
+    ref = master.audio[m0:m1]
+    n = 1 << int(math.ceil(math.log2(len(ref) + len(seg))))
+    X = np.fft.rfft(ref, n) * np.conj(np.fft.rfft(seg, n))
+    freqs = np.fft.rfftfreq(n, 1 / SR)
+    X[(freqs < 150) | (freqs > 4000)] = 0
+    X /= np.maximum(np.abs(X), 1e-12)
+    cc = np.fft.irfft(X, n)[:int(2 * search * SR) + 1]
+    k = int(np.argmax(cc))
+    ex = int(PHASE_EXCL_S * SR)
+    rest = np.concatenate([cc[:max(0, k - ex)], cc[k + ex + 1:]])
+    second = float(rest.max()) if len(rest) else 0.0
+    return off - search + k / SR, (float(cc[k]) / second if second > 0 else 0.0)
+
+
+PHASE_WIN_S, PHASE_HOP_S = 10.0, 5.0
+PHASE_CHECK_S = 30.0
+
+
+def phase_check(xs, master, off, lo, hi):
+    """How clearly the clip stretch [lo, hi] lines up at `off`: of up to three 30 s stretches spread
+    across it, the best peak ratio (see local_phase) among those whose peak lands on `off` within a
+    frame; 0.0 when none does. At least PHASE_AGREE backs the position up."""
+    if xs is None:
+        return None
+    a0, b0 = max(lo, -off), min(hi, len(xs) / SR, master.duration - off)
+    if b0 - a0 < 2.0:
+        return None
+    L = min(PHASE_CHECK_S, b0 - a0)
+    starts = [a0] if b0 - a0 <= L + 1 else list(np.linspace(a0, b0 - L, 3))
+    best = 0.0
+    for a in starts:
+        o, ratio = local_phase(xs, master, off, a, a + L)
+        if o is not None and abs(o - off) < PHASE_FRAME_S:
+            best = max(best, ratio)
+    return round(best, 2)
+
+
+def phase_extent(xs, master, off, lo, hi, a, b):
+    """The run of 10 s windows around [a, b] (inside [lo, hi]) whose own phase peak lands on `off`
+    within a frame and stands PHASE_AGREE clear: where one performance at `off` starts and ends."""
+    a0, b0 = in_song(xs, master, off, lo, hi)
+    wins = []
+    w = a0
+    while w + PHASE_WIN_S <= b0 + 1e-6:
+        o, ratio = local_phase(xs, master, off, w, w + PHASE_WIN_S)
+        wins.append((w, o is not None and abs(o - off) < PHASE_FRAME_S and ratio >= PHASE_AGREE))
+        w += PHASE_HOP_S
+    hit = [i for i, (w, ok) in enumerate(wins) if ok and a - PHASE_WIN_S <= w <= b]
+    if not hit:
+        return None
+    i = j = hit[len(hit) // 2]
+    while i > 0 and wins[i - 1][1]:                    # grow while neighbouring windows agree
+        i -= 1
+    while j + 1 < len(wins) and (wins[j + 1][1] or (j + 2 < len(wins) and wins[j + 2][1])):
+        j += 1                                         # (one weak window inside a play is allowed)
+    if not wins[j][1]:
+        j -= 1
+    return wins[i][0], min(b0, wins[j][0] + PHASE_WIN_S)
+
+
+def phase_gap(xs, master, st, h, t, lo, hi, known, chunk):
+    """gap_rescue by phase correlation: each half-overlapping chunk of the stretch against the whole
+    song. A position is kept when one chunk's peak stands PHASE_ALONE clear of anywhere else, or two
+    neighbouring chunks land on it within a frame, each PHASE_AGREE clear; it covers those chunks
+    (inside the song), runs STRAY_LONG_S or longer, isn't a known pass, and the landmarks in it
+    aren't sure of somewhere else."""
+    steps = list(np.arange(lo, max(lo, hi - chunk) + 1e-6, chunk / 2))
+    res = [(a, min(hi, a + chunk)) + phase_search(xs, master, a, min(hi, a + chunk)) for a in steps]
+    best = None
+    for i, (a, b, o, ratio) in enumerate(res):
+        if o is None or any(abs(o - k) < 0.08 for k in known):
+            continue
+        near = [r_ for r_ in res[max(0, i - 1):i + 2] if r_[2] is not None and abs(r_[2] - o) < PHASE_FRAME_S]
+        strong = ratio >= PHASE_ALONE or (len(near) >= 2 and all(r_[3] >= PHASE_AGREE for r_ in near))
+        if not strong:
+            continue
+        ext = phase_extent(xs, master, o, lo, hi, min(r_[0] for r_ in near), max(r_[1] for r_ in near))
+        if ext is None:
+            continue
+        first, last = ext
+        if last - first < STRAY_LONG_S:
+            continue
+        score = min(r_[3] for r_ in near) if len(near) >= 2 else ratio
+        if best is None or score > best[0]:
+            best = (score, o, first, last)
+    if best is None:
+        return None
+    score, o, first, last = best
+    sel = (t >= first / FRAME_S) & (t < last / FRAME_S)
+    e = evaluate(master, h[sel], t[sel]) if sel.any() else None
+    if e is not None and accepted(e, st) and abs(e["offset"] - o) > 0.1:
+        return None                     # the landmarks here are sure of somewhere else
+    if e is None:
+        e = dict(A=0, R=0, N=0.0, offset=o, runner_up_offset=o, conf=0.0, strength=0.0)
+    return dict(off=o, first=first, last=last, ev=dict(e, offset=o), good=True, stray=False,
+                rescued="found by waveform: phase peak %.1fx the next best" % score)
+
+
 def waveform_rescue(xs, master, guesses):
     """Where the landmarks are too few to decide (a 20 s take, an outro that fingerprints badly),
     compare the waveform: at each landmark guess, and at the best position of a phase correlation of
@@ -1390,6 +1510,14 @@ def waveform_rescue(xs, master, guesses):
     n = len(xs) / SR
     if n < WAVE_WIN + 1:
         return None
+    # the whole clip's phase correlation against the whole song: its peak standing clear of every
+    # other position decides, on its own or where the landmarks' best guess lands on the same spot
+    o, ratio = phase_search(xs, master, 0.0, n)
+    if o is not None:
+        agree = bool(guesses) and abs(o - guesses[0]) < PHASE_FRAME_S
+        if ratio >= (PHASE_AGREE if agree else PHASE_ALONE):
+            q = [v for _, v in wave_q(xs, master, o, *in_song(xs, master, o, 0.0, n))]
+            return o, sum(v >= WAVE_MATCH for v in q), len(q), ratio
     cands = []
     whole = song_search(xs, master, 0.0, n)
     for o in list(guesses) + [whole]:
@@ -1408,7 +1536,7 @@ def waveform_rescue(xs, master, guesses):
     # take whose scratch audio is mostly the band). Anywhere else lining up half as well still loses.
     agree = bool(guesses) and abs(o - guesses[0]) < 0.08 and abs(o - whole) < 0.08
     if k >= 3 and k >= (0.25 if agree else 0.5) * m and k >= 2 * rival:
-        return o, k, m
+        return o, k, m, None
     return None
 
 
@@ -1497,8 +1625,9 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
             if xs is not None:
                 part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms,
                                                  span=ov[1] - ov[0]))
+                part.phase = phase_check(xs, master, o, *ov)
                 k, m = (int(v) for v in part.check.split("/")) if part.check else (0, 0)
-                if m >= 4 and k < 0.2 * m:
+                if m >= 4 and k < 0.2 * m and not part.phase:
                     # the waveform doesn't back this position up: search the stretch on its own
                     o2 = song_search(xs, master, hlo, hhi)
                     q2 = [v for _, v in wave_q(xs, master, o2, *in_song(xs, master, o2, hlo, hhi))]
@@ -1508,6 +1637,7 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                         part.offset = o - aoff
                         part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms,
                                                          span=ov[1] - ov[0]))
+                        part.phase = phase_check(xs, master, o, *ov)
                         part.notes.append("moved by waveform check (landmarks pointed %.1f s away)" % (p["off"] - o))
                     elif k == 0:
                         part.status, part.offset = "not placed", None
@@ -1527,6 +1657,7 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                 o, part.drift_ms, part.refine, ov = refine_offset(xs, master, first, hlo, hhi)
                 part.offset, part.status, part.repeat_alt = o - aoff, "placed", other - aoff
                 part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms, span=ov[1] - ov[0]))
+                part.phase = phase_check(xs, master, o, *ov)
                 part.notes.append("%s: placed at the first copy, also fits at song %.1fs"
                                   % (REPEAT_NOTE, other + p["first"]))
             elif p.get("stray"):
@@ -2401,7 +2532,7 @@ def write_xml(root, path):
 # ---------------------------------------------------------------- reports
 
 COLUMNS = ["file", "status", "reason", "camera", "track", "pass", "clip_range", "playback_speed", "offset_seconds",
-           "offset_timecode", "timeline_timecode", "confidence", "waveform_check", "matching_landmarks",
+           "offset_timecode", "timeline_timecode", "confidence", "waveform_check", "phase_check", "matching_landmarks",
            "runner_up_landmarks",
            "drift_ms_head_to_tail", "drift_frames", "fps", "duration_s", "resolution", "audio",
            "camera_model", "serial", "notes"]
@@ -2431,7 +2562,7 @@ def clip_row(c, seq_fps, preroll, part=None):
         c = dataclasses.replace(c, status=part.status, reasons=[part.reason] if part.reason else [],
                                 track=part.track, offset=part.offset, confidence=part.confidence,
                                 aligned=part.aligned, runner_up=part.runner_up, drift_ms=part.drift_ms,
-                                check=part.check, notes=part.notes)
+                                check=part.check, phase=part.phase, notes=part.notes)
     drift_frames = round(c.drift_ms / 1000 * fps, 2) if c.drift_ms is not None else ""
     return {
         "file": c.rel,
@@ -2448,6 +2579,7 @@ def clip_row(c, seq_fps, preroll, part=None):
         if c.offset is not None else "",
         "confidence": "%.1f" % c.confidence if c.confidence is not None else "",
         "waveform_check": ("%s windows match" % c.check) if c.check else "",
+        "phase_check": "%.2f" % c.phase if c.phase is not None else "",
         "matching_landmarks": c.aligned or "",
         "runner_up_landmarks": c.runner_up if c.aligned else "",
         "drift_ms_head_to_tail": c.drift_ms if c.drift_ms is not None else "",
@@ -2789,7 +2921,7 @@ def main(argv=None):
         if c.status == "placed" and not c.split:
             c.parts = [Part(0.0, c.duration, offset=c.offset, status="placed", confidence=c.confidence,
                             aligned=c.aligned, runner_up=c.runner_up, drift_ms=c.drift_ms, refine=c.refine,
-                            check=c.check, repeat_alt=c.repeat_alt)]
+                            check=c.check, phase=c.phase, repeat_alt=c.repeat_alt)]
     labels = assign_cameras(clips, args.group_by)
     placed = [c for c in clips if c.status == "placed"]
     seq_fps = args.fps or (collections.Counter(c.fps for c in placed if c.fps).most_common(1) or
@@ -3117,7 +3249,7 @@ def add_cards(args, state, restrict):
         if c.status == "placed" and not c.split:
             c.parts = [Part(0.0, c.duration, offset=c.offset, status="placed", confidence=c.confidence,
                             aligned=c.aligned, runner_up=c.runner_up, drift_ms=c.drift_ms, refine=c.refine,
-                            check=c.check, repeat_alt=c.repeat_alt)]
+                            check=c.check, phase=c.phase, repeat_alt=c.repeat_alt)]
         for p in c.parts:          # rolling longer before the song than the project allows: trim the head
             if p.status == "placed" and p.offset + p.src_in * c.speed < -preroll:
                 p.src_in = (-preroll - p.offset) / c.speed + 1.0 / seq_fps
