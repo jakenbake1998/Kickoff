@@ -1165,14 +1165,17 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
     # ch3 is blown out while ch4 has clean scratch audio), every other channel that matched the song
     # at all gets the same full search, and the first one that places the clip is kept. Every
     # placement still has to clear the same checks, whichever channel it came from.
-    others = sorted((c for c in tried if c is not best and c[5] is not None), key=lambda c: c[0], reverse=True)
+    # (only channels whose landmarks really hit the song: a full search on every noisy channel of every
+    # clip that doesn't place was most of run 6/7's extra time)
+    others = sorted((c for c in tried if c is not best and c[5] is not None and c[5]["A"] >= st.min_hashes),
+                    key=lambda c: c[0], reverse=True)[:RETRY_CHANNELS]
     if not others:
         return place_on(clip, master, st, best, len(chans) > 1)
     snap = copy.deepcopy(clip)
     first = None
-    for cand in [best] + others[:3]:
+    for cand in [best] + others:
         work = copy.deepcopy(snap)
-        place_on(work, master, st, cand, True)
+        place_on(work, master, st, cand, True, speeds=cand is best)
         if work.status == "placed":
             if cand is not best:
                 work.notes.append("placed on %s: %s didn't match" % (cand[1], best[1]))
@@ -1183,7 +1186,10 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
     clip.__dict__.update(first.__dict__)
 
 
-def place_on(clip, master, st, cand, multi):
+RETRY_CHANNELS = 2        # other channels given the full search when the likeliest one doesn't place the clip
+
+
+def place_on(clip, master, st, cand, multi, speeds=True):
     """Sync the clip on one audio channel (cand from sync_clip: score, label, samples, landmarks, match)."""
     _, label, x, h, t, ev = cand
     if multi:
@@ -1202,7 +1208,7 @@ def place_on(clip, master, st, cand, multi):
         # Try common speeds two ways: varispeed (pitch went up with it) and time-stretched
         # (pitch kept). Keep a speed only if it clears a stricter bar than a normal-speed match.
         best_alt = None
-        for k in candidate_speeds(clip):
+        for k in (candidate_speeds(clip) if speeds else []):   # slow motion: tried on the likeliest channel
             frac = fractions.Fraction(k).limit_denominator(20)
             xr = signal.resample_poly(x, frac.numerator, frac.denominator).astype(np.float32)
             alt = [("varispeed", xr, landmarks(*find_peaks(xr)))]
