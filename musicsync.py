@@ -1880,6 +1880,7 @@ GAP_SHORT_S, GAP_SHORT_MIN_S = 20.0, 12.0
 
 
 RUN_WINS = 3
+PAIR_STRONG = 2.0          # ...or just 2 in a row when both are this clear (Day 2/3 negatives top out at 1.23)
 
 
 def phase_run(xs, master, st, h, t, lo, hi, known):
@@ -1887,7 +1888,7 @@ def phase_run(xs, master, st, h, t, lo, hi, known):
     peaks against the whole song all land on one position within a frame, each PHASE_AGREE clear, at
     no known pass. Shaped like phase_gap's result, or None."""
     starts = list(np.arange(lo, hi - PHASE_WIN_S + 1e-6, PHASE_HOP_S))
-    if len(starts) < RUN_WINS:
+    if len(starts) < 2:
         return None
     res = [(a,) + phase_search(xs, master, a, a + PHASE_WIN_S) for a in starts]
     best, i = None, 0
@@ -1899,7 +1900,8 @@ def phase_run(xs, master, st, h, t, lo, hi, known):
                     and abs(res[j + 1][1] - o) < PHASE_FRAME_S:
                 j += 1
             n = j - i + 1
-            if n >= RUN_WINS and (best is None or n > best[0]):
+            ok = n >= RUN_WINS or (n == 2 and min(res[i][2], res[j][2]) >= PAIR_STRONG)
+            if ok and (best is None or n > best[0]):
                 best = (n, float(np.median([x[1] for x in res[i:j + 1]])), res[i][0],
                         res[j][0] + PHASE_WIN_S, min(x[2] for x in res[i:j + 1]))
         i = j + 1
