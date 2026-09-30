@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.34"
+VERSION = "0.5.35"
 
 # ---------------------------------------------------------------- constants
 
@@ -56,7 +56,7 @@ PAIR_DF = 63               # max bin distance anchor -> target
 MEDIA_EXT = {".mov", ".mp4", ".mxf", ".m4v", ".mts", ".m2ts", ".avi", ".mkv",
              ".r3d", ".braw", ".insv", ".360", ".wmv", ".webm"}
 AUDIO_EXT = {".wav", ".aif", ".aiff", ".bwf", ".mp3", ".m4a", ".flac", ".aac", ".caf"}
-UNREADABLE_EXT = {".r3d", ".braw"}   # ffmpeg cannot decode these containers
+UNREADABLE_EXT = {".r3d"}   # ffmpeg cannot open RED files (BRAW opens: its sound and timecode read fine)
 OUT_DIR = "Kickoff Exports"            # what Kickoff writes, inside the shoot folder
 OLD_OUT_DIRS = ("Premiere Sync",)      # its name before 0.5.3: earlier projects are still found there
 SKIP_DIRS = {"SUB", "THMBNL", "GENERAL", "AVF_INFO", "CACHE", "THMB"}
