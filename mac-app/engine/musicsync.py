@@ -39,7 +39,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.37"
+VERSION = "0.5.38"
 
 # ---------------------------------------------------------------- constants
 
@@ -1986,6 +1986,87 @@ def phase_run(xs, master, st, h, t, lo, hi, known):
                 rescued="found by waveform: %d windows in a row at one spot" % n)
 
 
+SCATTER_RATIO = 1.15       # a 10 s window counts toward a scattered play when its phase peak is this clear...
+SCATTER_MIN = 3            # ...and this many windows that don't overlap peak on one spot (2 when both PAIR_STRONG)
+SCATTER_AGREE_S = 0.08     # "one spot": within 2 frames
+
+
+def scattered_plays(xs, master, lo, hi):
+    """Song positions that 10 s windows scattered through clip stretch [lo, hi] keep landing on, each
+    window's phase peak against the whole song taken on its own: a faint play under a loud band (B Cam
+    through a whole take at ratios 1.16-1.32) never lines windows up in a row, but chance doesn't put
+    three separate windows on one spot out of the whole song. [(offset, window starts)], most first."""
+    starts = list(np.arange(lo, hi - PHASE_WIN_S + 1e-6, PHASE_HOP_S))
+    res = []
+    for a in starts:
+        o, r = phase_search(xs, master, a, a + PHASE_WIN_S)
+        if o is not None and r >= SCATTER_RATIO:
+            res.append((o, a, r))
+    res.sort()
+    out, i = [], 0
+    while i < len(res):
+        j = i
+        while j + 1 < len(res) and res[j + 1][0] - res[i][0] < SCATTER_AGREE_S:
+            j += 1
+        grp = sorted(res[i:j + 1], key=lambda x: x[1])
+        apart, last = [], None                  # windows that don't overlap each other
+        for o, a, r in grp:
+            if last is None or a - last >= PHASE_WIN_S:
+                apart.append((o, a, r))
+                last = a
+        strong = [x for x in apart if x[2] >= PAIR_STRONG]
+        if len(apart) >= SCATTER_MIN or len(strong) >= 2:
+            out.append((float(np.median([x[0] for x in grp])), [x[1] for x in grp]))
+        i = j + 1
+    out.sort(key=lambda c: -len(c[1]))
+    return out
+
+
+def fill_plays(xs, master, st, h, t, passes, xs_len):
+    """Two passes at one song position are one play (the song kept time between them): merge them.
+    Then search every stretch outside the passes for scattered windows (scattered_plays): windows on
+    a neighbouring pass's position grow that pass over them; windows on a new position, which the
+    landmarks there don't contradict, become a pass of their own (a play the other searches missed)."""
+    passes.sort(key=lambda p: p["first"])
+    i = 0
+    while i + 1 < len(passes):
+        a, b = passes[i], passes[i + 1]
+        if abs(a["off"] - b["off"]) < SCATTER_AGREE_S:
+            a["last"], a["good"] = max(a["last"], b["last"]), a["good"] or b["good"]
+            a.setdefault("rescued", "one play: its passes line up at one song position")
+            del passes[i + 1]
+        else:
+            i += 1
+    bounds = [0.0] + [v for p in passes for v in (p["first"], p["last"])] + [xs_len]
+    new = []
+    for gi, (lo, hi) in enumerate(zip(bounds[::2], bounds[1::2])):
+        if hi - lo < 2 * PHASE_WIN_S:
+            continue
+        before = passes[gi - 1] if gi > 0 else None
+        after = passes[gi] if gi < len(passes) else None
+        for off, wins in scattered_plays(xs, master, lo, hi):
+            first, last = min(wins), min(hi, max(wins) + PHASE_WIN_S)
+            if before is not None and abs(off - before["off"]) < SCATTER_AGREE_S:
+                before["last"] = max(before["last"], last)
+                before["grown"] = True
+            elif after is not None and abs(off - after["off"]) < SCATTER_AGREE_S:
+                after["first"] = min(after["first"], first)
+                after["grown"] = True
+            elif all(abs(off - p["off"]) >= SCATTER_AGREE_S for p in passes + new) and \
+                    all(n["last"] <= first or n["first"] >= last for n in new):
+                sel = (t >= first / FRAME_S) & (t < last / FRAME_S)
+                e = evaluate(master, h[sel], t[sel]) if sel.any() else None
+                if e is not None and accepted(e, st) and abs(e["offset"] - off) > 0.1:
+                    continue                    # the landmarks here are sure of somewhere else
+                if e is None:
+                    e = dict(A=0, R=0, N=0.0, offset=off, runner_up_offset=off, conf=0.0, strength=0.0)
+                new.append(dict(off=off, first=first, last=last, ev=dict(e, offset=off), good=True,
+                                stray=False, rescued="found by waveform: %d windows through the take "
+                                                     "land on one spot" % len(wins)))
+    passes += new
+    passes.sort(key=lambda p: p["first"])
+
+
 def gap_rescue(xs, master, st, h, t, lo, hi, known):
     """A whole performance in clip stretch [lo, hi] that neither the stretch's landmarks nor one phase
     correlation of the whole stretch found (a DJI rolling through a dozen plays with the band louder
@@ -2323,8 +2404,8 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                 edge = sp["last"]
             if found:
                 gaps.append((edge, hi))
-        passes.sort(key=lambda p: p["first"])
-    if len(passes) < 2:
+        fill_plays(xs, master, st, h, t, passes, xs_len)
+    if len(passes) < 2 and not (passes and passes[0].get("rescued") and passes[0]["good"]):
         return False
 
     # cut where the next pass's song starts: in a gap, half a second ahead of it; in a straight
@@ -2383,6 +2464,18 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                                                          span=ov[1] - ov[0]))
                         part.phase = phase_check(xs, master, o, *ov)
                         part.notes.append("moved by waveform check (landmarks pointed %.1f s away)" % (p["off"] - o))
+                    elif k == 0 and (sc := scattered_plays(xs, master, hlo, hhi)) and \
+                            abs(sc[0][0] - o) >= SCATTER_AGREE_S:
+                        # the landmarks' position is wrong for this pass (a second play of the same
+                        # section splits their vote): its own windows agree on where it belongs
+                        o3, wins = sc[0]
+                        o, part.drift_ms, part.refine, ov = refine_offset(xs, master, o3, hlo, hhi)
+                        part.offset = o - aoff
+                        part.check = check_string(wave_q(xs, master, o, *ov, drift=part.drift_ms,
+                                                         span=ov[1] - ov[0]))
+                        part.phase = phase_check(xs, master, o, *ov)
+                        part.notes.append("moved by waveform: %d windows of this pass land on song %.1fs"
+                                          % (len(wins), o + p["first"]))
                     elif k == 0:
                         part.status, part.offset = "not placed", None
                         part.reason = REASON_LOW_CONF
