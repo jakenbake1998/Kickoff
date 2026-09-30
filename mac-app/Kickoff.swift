@@ -156,10 +156,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         alert.addButton(withTitle: "Quit")
         if alert.runModal() == .alertSecondButtonReturn {
             stopped = true
+            setPaused(false)
             proc?.terminate()
             return .terminateNow
         }
         return .terminateCancel
+    }
+
+    /// Pause: stop the engine and the ffmpeg it runs where they are (SIGSTOP); resume: carry on (SIGCONT).
+    func setPaused(_ on: Bool) {
+        guard let p = proc, p.isRunning else { return }
+        let sig = on ? SIGSTOP : SIGCONT
+        kill(p.processIdentifier, sig)
+        let k = Process()
+        k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        k.arguments = [on ? "-STOP" : "-CONT", "-P", String(p.processIdentifier)]
+        try? k.run()
+        k.waitUntilExit()
     }
 
     // MARK: web page <-> app
@@ -213,7 +226,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             js("Kickoff.history([])")
         case "stop":
             stopped = true
+            setPaused(false)            // a stopped (paused) process doesn't act on the terminate until it runs again
             proc?.terminate()
+        case "pause": setPaused(true)
+        case "resume": setPaused(false)
         case "title": window.title = body["text"] as? String ?? "Kickoff"
         case "premiere": if let p = path { openInPremiere(p, projectDir: body["projectDir"] as? String) }
         case "report": if let p = path { openReport(p) }
@@ -291,7 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         panel.prompt = target == "export" ? "Export Here" : target == "prproj" ? "Save Here" : "Add"
         panel.message = target == "song" ? "Choose the song"
             : target == "footage" ? "Choose the footage: the shoot folder, a day, cards or clips"
-            : target == "export" ? "Choose the folder the Premiere XML goes in"
+            : target == "export" ? "Choose the folder the XML goes in"
             : target == "prproj" ? "Choose the folder the Premiere project goes in"
             : "Choose the shoot folder or cards (and the song if it isn't in the folder)"
         panel.beginSheetModal(for: window) { [weak self] result in

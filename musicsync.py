@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.32"
+VERSION = "0.5.33"
 
 # ---------------------------------------------------------------- constants
 
@@ -3416,9 +3416,11 @@ def clip_lists(clips, master):
         if c.status != "placed":
             aside[c.reasons[0] if c.reasons else REASON_NO_MATCH].append(item(c))
     chorus = [item(c, p) for c in clips for p in c.parts if p.repeat_alt is not None]
-    return dict(worth_a_look=look, restarted=[dict(item(c), passes=len(c.parts),
-                                                                  placed=sum(p.status == "placed" for p in c.parts))
-                                                             for c in clips if c.split], check_chorus=chorus,
+    def plays(c):                      # passes of the song; the stretches between them aren't plays
+        return [p for p in c.parts if p.reason != REASON_BETWEEN]
+    return dict(worth_a_look=look, restarted=[dict(item(c), passes=len(plays(c)),
+                                                   placed=sum(p.status == "placed" for p in plays(c)))
+                                              for c in clips if c.split], check_chorus=chorus,
                 aside=dict(aside))
 
 
@@ -3473,7 +3475,7 @@ def match_all(clips, master, args):
                 res = "-- " + "; ".join(c.reasons)
             log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, res))
             event("clip", done=done, total=len(clips), file=c.rel, status=c.status,
-                  passes=len(c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "",
+                  passes=sum(p.reason != REASON_BETWEEN for p in c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "",
                   cam=clip_cam(c), spans=song_spans(c))
             placed += c.status == "placed"
             tried += c.status == "placed" or (c.reasons[:1] in ([REASON_NO_MATCH], [REASON_LOW_CONF]))

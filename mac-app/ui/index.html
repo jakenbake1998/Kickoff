@@ -234,6 +234,12 @@ button.newrun svg{margin-right:7px}
 button.stop{margin-left:auto;display:flex;align-items:center;padding:10px 22px;font-size:14.5px;border-radius:11px;
   color:var(--bad);border:1.5px solid var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
 button.stop svg{margin-right:8px}
+/* Pause sits just left of Stop, in the accent orange */
+button.pause{margin-left:auto;display:flex;align-items:center;padding:10px 22px;font-size:14.5px;border-radius:11px;
+  color:var(--accent);border:1.5px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+button.pause svg{margin-right:8px}
+button.pause:hover{background:color-mix(in srgb,var(--accent) 22%,transparent)}
+button.pause + button.stop{margin-left:10px}
 button.stop:hover{background:color-mix(in srgb,var(--bad) 22%,transparent);border-color:var(--bad)}
 button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
 .builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;display:grid;gap:10px}
@@ -340,6 +346,17 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .export .v{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .export button{padding:5px 11px;font-size:12.5px}
 .export button.quiet{margin-left:0}
+/* where things save: two choices side by side, the picked one lit; a picked folder shows its path under them */
+.dest{display:grid;gap:7px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.dest .k{font-size:13px;color:var(--muted);font-weight:600}
+.dest .seg{display:flex;gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden;width:max-content;max-width:100%}
+.dest .seg button{margin:0;border:0;border-radius:0;background:transparent;color:var(--muted);padding:7px 14px;font-size:13px;
+  font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
+.dest .seg button+button{border-left:1px solid var(--line)}
+.dest .seg button.on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.dest .seg button:disabled{opacity:.5;cursor:default}
+#destPr .dest{margin-top:8px}
+.dest .path{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .tabs button{padding:5px 12px;font-size:12.5px}
 
@@ -555,14 +572,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <div class="modes" id="modes">
     <p id="modeNote"></p>
     <details class="opts" id="opts"><summary>Options <span id="optSum"></span></summary>
-    <div class="export">
-      <span class="k">Export XML to</span><span class="v" id="exportPath"></span>
-      <button id="bExport">Choose…</button><button class="quiet" id="bExportReset" hidden>Use the drive</button>
-    </div>
-    <div class="export">
-      <span class="k">Premiere project saves to</span><span class="v" id="prPath"></span>
-      <button id="bPr">Choose…</button><button class="quiet" id="bPrReset" hidden>Next to the XML</button>
-    </div>
+    <div id="destXml"></div>
+    <div id="destPr"></div>
     <input type="checkbox" id="rebuild" hidden>
     </details>
   </div>
@@ -650,6 +661,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <button class="newrun" id="bNew"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New run</button>
   </div>
   <div class="btns" id="btnsRun" hidden>
+    <button class="pause" id="bPause"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1.2" fill="currentColor"/></svg><span>Pause</span></button>
     <button class="stop" id="bCancel"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor"/></svg>Stop</button>
   </div>
   <div class="askwrap" id="askCams" hidden>
@@ -681,7 +693,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     Violet: "--violet", Purple: "--purple", Blue: "--blue", Teal: "--teal", Green: "--green", Brown: "--brown" };
   // why a clip was set aside, in plain words, and where it ends up
   var REASONS = [
-    [/^no audio/, "no audio (slow motion?)", "After the song"],
+    [/^no audio/, "no audio", "After the song"],
     [/^slow motion/, "slow motion", "After the song"],
     [/^high frame rate/, "high frame rate", "After the song"],
     [/^no match to any audio/, "no match to any audio file (B-roll?)", "Footage bins"],
@@ -723,9 +735,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function setXmlDir(d) {
     xmlDir = d || "";
     try { localStorage.setItem("kickoff-xml-dir", xmlDir); } catch (e) {}
-    $("exportPath").textContent = xmlDir || "The top of the drive the footage is on";
-    $("exportPath").title = xmlDir || "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the Kickoff Exports folder inside it";
-    $("bExportReset").hidden = !xmlDir;
+    renderDests();
     optSummary();
   }
   var prDir = "";                  // "" = next to the XML (a Premiere folder beside a folder named XML)
@@ -733,10 +743,35 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function setPrDir(d) {
     prDir = d || "";
     try { localStorage.setItem("kickoff-prproj-dir", prDir); } catch (e) {}
-    $("prPath").textContent = prDir || "Next to the XML";
-    $("prPath").title = prDir || "When the XML folder is called XML, a Premiere folder beside it";
-    $("bPrReset").hidden = !prDir;
+    renderDests();
     optSummary();
+  }
+  // "Export XML to" / "Premiere project saves to": the default or a folder, both always showing
+  function destControl(which) {
+    var xml = which === "export", dir = xml ? xmlDir : prDir;
+    var box = el("div", { class: "dest" });
+    box.appendChild(el("span", { class: "k" }, xml ? "Export XML to" : "Premiere project saves to"));
+    var seg = el("div", { class: "seg", role: "group" });
+    var def = el("button", { type: "button", class: dir ? "" : "on" }, xml ? "Top of the footage drive" : "Next to the XML");
+    def.title = xml ? "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the Kickoff Exports folder inside it"
+      : "When the XML folder is called XML, a Premiere folder beside it";
+    var pick = el("button", { type: "button", class: dir ? "on" : "" }, dir ? esc(base(dir)) : "Choose a folder…");
+    pick.title = dir ? "Click to pick a different folder" : "Pick a folder";
+    [def, pick].forEach(function (b) {
+      if (running()) { b.disabled = true; b.title = "Available when the run finishes"; }
+    });
+    def.addEventListener("click", function () { if (!running()) (xml ? setXmlDir : setPrDir)(""); });
+    pick.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: which }); });
+    seg.appendChild(def); seg.appendChild(pick); box.appendChild(seg);
+    if (dir) { var pth = el("span", { class: "path" }, esc(dir)); pth.title = dir; box.appendChild(pth); }
+    return box;
+  }
+  function renderDests() {
+    [["destXml", "export"], ["destPr", "prproj"]].forEach(function (d) {
+      var h = $(d[0]); if (!h) return;
+      h.innerHTML = ""; h.appendChild(destControl(d[1]));
+    });
+    if ($("vSet") && !$("vSet").hidden && pane === "files") renderSettings();
   }
   function projectDirFor(xml) {     // where Open in Premiere makes the project for this XML
     if (prDir) return prDir;
@@ -1158,6 +1193,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     liveReset();
     clearInterval(tick); tick = setInterval(timing, 1000);
     show("run", true); show("btnsRun", true); show("details", true);
+    setPaused(false); renderDests();
     document.querySelector("#vRun > .vtop").style.marginTop = ""; pinned = null;   // the run screen centres as before
   }
 
@@ -1282,7 +1318,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     liveLaneCount(L);
     var m = REASONS.find(function (x) { return x[0].test(e.reason || ""); });
     var what = !placed ? "set aside: " + (m ? m[1] : e.reason || "didn\u2019t sync")
-      : e.passes > 1 ? "song restarted, " + e.passes + " passes"
+      : e.passes > 1 ? "song restarted, " + e.passes + " plays"
       : e.audio ? "with " + e.audio + (e.by ? " by " + e.by : "")
       : e.spans && e.spans.length ? "at " + clock(e.spans[0][0]) + " in the song" : "synced";
     var row = document.createElement("div");
@@ -1349,7 +1385,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("bar").style.width = (100 * e.done / e.total).toFixed(1) + "%";
       $("count").textContent = e.done + " / " + e.total;
       $("stage").textContent = base(e.file) + (e.status === "placed"
-        ? (e.passes > 1 ? " · song restarted, " + e.passes + " passes" : " · synced")
+        ? (e.passes > 1 ? " · song restarted, " + e.passes + " plays" : " · synced")
         : " · " + e.reason);
     } else if (e.event === "done") {
       state.result = e;
@@ -1368,7 +1404,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       .map(function (l) { return "<div>" + l + "</div>"; }).join("");
     $("tipList").innerHTML =
       "<li><b>Proxies:</b> select the " + esc(binName("footage", "Footage")) + " bin, right-click, <b>Proxy &gt; Create Proxies</b>.</li>" +
-      "<li><b>Adding to a project you already have?</b> Import the XML, then drag the contents of the bin Premiere makes to the top.</li>";
+      "<li><b>Adding to a project you already have?</b> Import the XML. Premiere puts its sequences and clips straight into the Project panel, not in a bin, so move them into your bins from there.</li>";
     show("todo", true);
   }
   function hero(tone, title, sub, chips) {
@@ -1548,7 +1584,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       r.querySelector(".f").title = it.file;
       r.querySelector(".c").textContent = it.cam ? camName(it.cam) : "";
       r.querySelector(".t").textContent = it.passes != null
-        ? plural(it.passes, "pass", "passes") + (it.placed === 0 ? ", not synced" : it.placed < it.passes ? ", " + it.placed + " synced" : "")
+        ? (it.placed >= it.passes ? plural(it.passes, "play") + ", all synced"
+          : it.placed === 0 ? plural(it.passes, "play") + ", none synced"
+          : it.placed + " of " + it.passes + " plays synced")
         : it.guess != null ? "song " + clock(it.guess) + "?" : it.at != null ? "at " + clock(it.at) : "";
       pl.appendChild(r);
     });
@@ -1693,7 +1731,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     }
     if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); optSummary(); }
     if (batch.runs.length > 1 && !stoppedByUser) showBatch();   // stopped: Try again carries on from that video
-    if (!$("vSet").hidden && pane === "files") renderSettings();   // Choose… works again
+    renderDests();                    // the folder choices work again
   }
   var nextTimer = null;            // the pause between one music video and the next
 
@@ -1933,6 +1971,17 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (atEnd) log.scrollTop = log.scrollHeight;
   }
 
+  var paused = false, pausedStage = "";
+  function setPaused(p) {           // Pause freezes the engine where it is; Resume carries on from there
+    if (p === paused) return;
+    paused = p;
+    var b = $("bPause");
+    b.querySelector("span").textContent = p ? "Resume" : "Pause";
+    b.querySelector("svg").innerHTML = p ? '<path d="M7 5l12 7-12 7z" fill="currentColor"/>'
+      : '<rect x="6" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1.2" fill="currentColor"/>';
+    if (p) { pausedStage = $("stage").textContent; $("stage").textContent = "Paused. Press Resume to carry on."; }
+    else if (pausedStage) { $("stage").textContent = pausedStage; pausedStage = ""; }
+  }
   function running() { return !$("btnsRun").hidden || !!nextTimer; }   // the pause between music videos too
   $("drop").addEventListener("click", function () { if (!running() && $("btnsDone").hidden) post({ cmd: "pick", target: "any" }); });
   $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick", target: "any" }); });
@@ -1997,13 +2046,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     batch = { runs: [r0 || { paths: state.paths, mode: mode }], i: 0, ids: [], rebuild: true };
     runNext();
   });
-  $("bExport").addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
-  $("bExportReset").addEventListener("click", function () { setXmlDir(""); });
-  $("bPr").addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "prproj" }); });
-  $("bPrReset").addEventListener("click", function () { setPrDir(""); });
   $("bAddJob").addEventListener("click", function () { if (!running()) { jobs.push({ song: null, footage: [] }); renderStage(); } });
   $("bClear").addEventListener("click", function () { queue = []; setupName = ""; $("qName").innerHTML = ""; renderStage(); });
-  $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
+  $("bCancel").addEventListener("click", function () { setPaused(false); post({ cmd: "stop" }); });
+  $("bPause").addEventListener("click", function () {
+    var p = !paused;
+    post({ cmd: p ? "pause" : "resume" });
+    setPaused(p);
+  });
 
 
   // ---- Settings: saved on this Mac (the app writes settings.json, which the engine reads)
@@ -2182,20 +2232,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         onChange: function () { saveSettings(); } });
     } else if (pane === "files") {
       g = group("Where it saves", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
-      var v = el("span", { class: "hint" }, esc(xmlDir || "The top of the drive the footage is on"));
-      var b = el("button", {}, "Choose…");
-      if (running()) { b.disabled = true; b.title = "Available when the run finishes"; }
-      b.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
-      var wrap = el("span", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }); wrap.appendChild(v); wrap.appendChild(b);
-      if (xmlDir) { var r0 = el("button", { class: "quiet", style: "margin-left:0" }, "Use the drive"); r0.addEventListener("click", function () { setXmlDir(""); renderSettings(); }); wrap.appendChild(r0); }
-      row(g, "Export XML to", wrap);
-      var v2 = el("span", { class: "hint" }, esc(prDir || "Next to the XML"));
-      var b2 = el("button", {}, "Choose…");
-      if (running()) { b2.disabled = true; b2.title = "Available when the run finishes"; }
-      b2.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "prproj" }); });
-      var wrap2 = el("span", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }); wrap2.appendChild(v2); wrap2.appendChild(b2);
-      if (prDir) { var r2 = el("button", { class: "quiet", style: "margin-left:0" }, "Next to the XML"); r2.addEventListener("click", function () { setPrDir(""); renderSettings(); }); wrap2.appendChild(r2); }
-      row(g, "Premiere project saves to", wrap2);
+      g.appendChild(destControl("export"));
+      g.appendChild(destControl("prproj"));
       P.appendChild(g);
       g = group("Folders Kickoff skips", "Proxies, previews, renders, Generations and Exports are always skipped. Add any other folder names to leave out, separated by commas.");
       row(g, "Also skip", text(settings.skip_folders.join(", "), function (v) {
@@ -2460,8 +2498,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     add: function (paths) { add(paths); },
     drop: drop,
     picked: function (paths, target, row) {
-      if (target === "export") { setXmlDir(paths[0]); if (!$("vSet").hidden) renderSettings(); }
-      else if (target === "prproj") { setPrDir(paths[0]); if (!$("vSet").hidden) renderSettings(); }
+      if (target === "export") setXmlDir(paths[0]);
+      else if (target === "prproj") setPrDir(paths[0]);
       else add(paths, target, row);
     },
     settings: function (obj) { adopt(obj); renderTree(); if (!$("vSet").hidden) renderSettings(); },
