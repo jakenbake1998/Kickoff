@@ -67,6 +67,45 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .axis{display:grid;grid-template-columns:minmax(90px,150px) 1fr 64px;gap:12px;font-size:11px;color:var(--muted);margin-top:-4px}
 .axis div{display:flex;justify-content:space-between;font-variant-numeric:tabular-nums}
 
+/* the syncing screen: a big count, where the takes land in the song as they sync, and the last few clips */
+.rhead{display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap}
+.rbig{font:700 52px/1 var(--display);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.rbig small{font:500 20px var(--body);color:var(--muted);letter-spacing:0;margin-left:4px}
+.rnums{display:flex;gap:28px;margin-left:auto;text-align:right;font-size:13px;color:var(--muted)}
+.rnums b{display:block;font:700 26px/1.1 var(--display);color:var(--ink);font-variant-numeric:tabular-nums}
+.rnums .g b{color:var(--good)}.rnums .w b{color:var(--warn)}
+#run.live #count{display:none}
+.livebox{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 20px}
+.livebox h3{margin:0 0 12px;font:600 13.5px var(--body);color:var(--muted)}
+.lanes{display:grid;gap:8px}
+.llane{display:grid;grid-template-columns:minmax(80px,130px) 1fr 70px;gap:12px;align-items:center;font-size:13.5px}
+.llane .n{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llane em{font-style:normal;color:var(--muted);text-align:right;font-size:13px;font-variant-numeric:tabular-nums}
+.ltrack{position:relative;height:22px;border-radius:5px;background:var(--bg);border:1px solid var(--line);overflow:hidden}
+.ltrack i{position:absolute;top:3px;bottom:3px;border-radius:3px;min-width:2px;filter:brightness(1.55)}
+.ltrack i.new{animation:landed 1.6s ease-out}
+@keyframes landed{0%{box-shadow:0 0 0 2px var(--accent);filter:brightness(2.2)}100%{box-shadow:0 0 0 2px transparent}}
+.laxis{display:grid;grid-template-columns:minmax(80px,130px) 1fr 70px;gap:12px;font-size:11px;color:var(--muted);margin-top:6px}
+.laxis div{position:relative;height:14px;font-variant-numeric:tabular-nums}
+.laxis div span{position:absolute;transform:translateX(-50%)}
+.laxis div span:first-child{transform:none}.laxis div span:last-child{transform:translateX(-100%)}
+.feed{display:grid}
+.frow{display:grid;grid-template-columns:16px minmax(70px,110px) minmax(0,1fr) auto;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:13.5px}
+.frow:first-child{border-top:0;padding-top:0}
+.frow .f{font-family:var(--mono);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow .r{color:var(--muted);font-size:13px;text-align:right}
+.frow .ok{color:var(--good);font-weight:700}.frow .no{color:var(--warn);font-weight:700}
+.frow .c{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow.new{animation:rowin .35s ease-out}
+@keyframes rowin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.feed .none{color:var(--muted);font-size:13px}
+.livebox .chip{filter:brightness(1.55)}
+@media (prefers-reduced-motion:reduce){.ltrack i.new,.frow.new{animation:none}}
+/* shorter screens: fewer recent clips, then none, so the run screen still fits without scrolling */
+@media (max-height:1000px){.frow:nth-child(n+4){display:none}.rbig{font-size:44px}}
+@media (max-height:930px){#feedBox{display:none}}
+@media (max-height:820px){.rbig{font-size:36px}.lanes{gap:4px}.ltrack{height:17px}.ltrack i{top:2px;bottom:2px}.livebox{padding:12px 18px}}
+
 .modes{display:grid;gap:8px}
 .seg{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:3px;width:max-content;max-width:100%}
 .seg button{border:0;background:none;padding:6px 14px;border-radius:7px;color:var(--muted);font-weight:600}
@@ -76,17 +115,57 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .opts summary span{font-weight:400;color:var(--muted);margin-left:8px}
 .opts[open]{gap:10px}
 .todo{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;display:grid;gap:5px}
-.todo .h{font-weight:600}
+.todo .h{font-weight:600;display:flex;align-items:center;gap:8px}
+.tip{position:relative;display:inline-flex}
+.tipi{width:18px;height:18px;padding:0;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--muted);
+  font:italic 700 11px/1 Georgia,serif;display:grid;place-items:center;cursor:help}
+.tip:hover .tipi,.tipi:focus-visible{color:var(--accent);border-color:var(--accent)}
+.tipbox{position:absolute;left:-12px;bottom:calc(100% + 10px);width:320px;background:#262a31;border:1px solid var(--line);border-radius:10px;
+  padding:12px 14px;box-shadow:0 12px 30px rgba(0,0,0,.45);font-weight:400;color:var(--muted);font-size:12.5px;line-height:1.45;
+  opacity:0;visibility:hidden;transform:translateY(4px);transition:opacity .14s,transform .14s,visibility .14s;z-index:30}
+.tipbox::after{content:"";position:absolute;left:16px;top:100%;border:7px solid transparent;border-top-color:#262a31}
+.tip:hover .tipbox,.tip:focus-within .tipbox{opacity:1;visibility:visible;transform:none}
+.tipbox .th{display:block;color:var(--accent);font-weight:600;font-size:12px;margin-bottom:6px}
+.tipbox ul{margin:0;padding-left:16px;display:grid;gap:6px}
+.tipbox b{color:var(--ink)}
 .todo #todoList{display:grid;gap:5px;color:var(--muted)}
 .todo b{color:var(--ink);font-weight:600}
 .modes p{margin:0;color:var(--muted);font-size:12.5px}
 .check{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12.5px;cursor:pointer;width:max-content;max-width:100%}
 .check input{accent-color:var(--accent);margin:0}
 .moves .mv span:first-child{font-weight:600}
-.list{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;display:grid;gap:5px}
-.list div{display:flex;justify-content:space-between;gap:12px}
-.list span:last-child{color:var(--muted);text-align:right}
+.list{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 6px;font-size:13px;display:grid}
 .list .h{font-size:13px;color:var(--muted);font-weight:600}
+/* the summary: one row per kind of clip, its count big, what it means, and where those clips are */
+.sumrow{display:grid;grid-template-columns:44px minmax(0,1fr) auto 14px;gap:12px;align-items:center;width:100%;text-align:left;
+  background:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:10px 8px;color:var(--ink);font:inherit;cursor:pointer}
+.sumrow:first-child{border-top:0}
+.sumrow:hover,.sumrow[aria-expanded="true"]{background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.sumrow .n{font:700 20px/1 var(--display);text-align:right;font-variant-numeric:tabular-nums}
+.sumrow .d{font-size:13.5px;line-height:1.3}
+.sumrow .tag{font-size:11.5px;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 9px;white-space:nowrap}
+.sumrow.look .n,.sumrow.look .tag{color:var(--warn)}.sumrow.look .tag{border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+.sumrow svg{color:var(--muted);transition:transform .15s}
+.sumrow[aria-expanded="true"] svg{transform:rotate(90deg)}
+/* "worth a look" in the headline: opens the list of those clips */
+.lookl{display:inline;background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--warn);cursor:pointer;
+  text-decoration:underline dotted;text-underline-offset:3px}
+.lookl:hover{text-decoration-style:solid}
+/* the clips behind a line, with a button to copy their file names */
+.clippop{position:fixed;z-index:50;width:min(460px,calc(100vw - 32px));max-height:min(420px,70vh);display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 40px rgba(0,0,0,.45);overflow:hidden}
+.clippop .ph{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px 8px;font-weight:600;font-size:13.5px}
+.clippop .ph button{border:0;background:none;color:var(--muted);font-size:18px;line-height:1;padding:2px 6px;border-radius:6px}
+.clippop .ph button:hover{color:var(--ink);background:var(--line)}
+.clippop .pl{overflow-y:auto;padding:0 14px}
+.clippop .pi{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:6px 0;border-top:1px solid var(--line);font-size:12.5px}
+.clippop .pi:first-child{border-top:0}
+.clippop .pi .f{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.clippop .pi .c,.clippop .pi .t{color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.clippop .pf{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line)}
+.clippop .pf span{color:var(--muted);font-size:12px}
+.clippop .pf button{margin-left:auto}
+.todo .note{color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:7px;margin-top:2px}
 
 .xname{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);margin:-2px 40px 0 2px}
 .xname span:first-child{font-size:13px;font-weight:600;flex:none}
@@ -97,7 +176,7 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .top{align-items:flex-start}
 .histbtn{display:flex;align-items:center;gap:7px;padding:7px 13px;font-size:12.5px;color:var(--muted);border-radius:10px;margin-left:auto}
 .histbtn svg{margin-right:0}
-.modeswitch{display:grid;grid-template-columns:1fr 1fr;width:100%;padding:4px;border-radius:12px}
+.modeswitch{display:grid;grid-template-columns:1fr 1fr 1fr;width:100%;padding:4px;border-radius:12px}
 .modeswitch button{padding:10px 14px;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;border-radius:9px}
 .modeswitch button svg{margin:0}
 /* a run going while Settings or History is open: the tabs fade into a small progress bar in the same spot,
@@ -155,6 +234,12 @@ button.newrun svg{margin-right:7px}
 button.stop{margin-left:auto;display:flex;align-items:center;padding:10px 22px;font-size:14.5px;border-radius:11px;
   color:var(--bad);border:1.5px solid var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
 button.stop svg{margin-right:8px}
+/* Pause sits just left of Stop, in the accent orange */
+button.pause{margin-left:auto;display:flex;align-items:center;padding:10px 22px;font-size:14.5px;border-radius:11px;
+  color:var(--accent);border:1.5px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+button.pause svg{margin-right:8px}
+button.pause:hover{background:color-mix(in srgb,var(--accent) 22%,transparent)}
+button.pause + button.stop{margin-left:10px}
 button.stop:hover{background:color-mix(in srgb,var(--bad) 22%,transparent);border-color:var(--bad)}
 button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
 .builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;display:grid;gap:10px}
@@ -180,6 +265,16 @@ button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);
 .error p{margin:0;font-family:var(--mono);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
 
 .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:auto;padding-top:4px}
+#btnsStart{flex-direction:column;align-items:center;gap:6px}
+.linkbtn{background:none;border:0;padding:2px 6px;color:var(--muted);font:500 13px var(--body);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.linkbtn:hover{color:var(--ink)}
+.finder{position:relative}
+#bFinder .chev{margin-left:2px;opacity:.7}
+.fmenu{position:absolute;left:0;bottom:calc(100% + 6px);min-width:100%;background:#262a31;border:1px solid var(--line);border-radius:10px;
+  padding:5px;display:grid;box-shadow:0 12px 30px rgba(0,0,0,.45);z-index:30}
+.fmenu[hidden]{display:none}
+.fmenu button{background:none;border:0;text-align:left;padding:8px 12px;border-radius:7px;white-space:nowrap}
+.fmenu button:hover,.fmenu button:focus-visible{background:color-mix(in srgb,var(--ink) 8%,transparent)}
 button{font:600 13.5px var(--body);padding:9px 16px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
 button:hover{border-color:var(--muted)}
 button.pri{background:var(--accent);color:var(--on-accent);border-color:transparent}
@@ -251,6 +346,17 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .export .v{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .export button{padding:5px 11px;font-size:12.5px}
 .export button.quiet{margin-left:0}
+/* where things save: two choices side by side, the picked one lit; a picked folder shows its path under them */
+.dest{display:grid;gap:7px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.dest .k{font-size:13px;color:var(--muted);font-weight:600}
+.dest .seg{display:flex;gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden;width:max-content;max-width:100%}
+.dest .seg button{margin:0;border:0;border-radius:0;background:transparent;color:var(--muted);padding:7px 14px;font-size:13px;
+  font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
+.dest .seg button+button{border-left:1px solid var(--line)}
+.dest .seg button.on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.dest .seg button:disabled{opacity:.5;cursor:default}
+#destPr .dest{margin-top:8px}
+.dest .path{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .tabs button{padding:5px 12px;font-size:12.5px}
 
@@ -285,7 +391,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 #vHist[hidden],#vSet[hidden]{display:none!important}
 #histList{flex:1;min-height:0;overflow-y:auto;align-content:start}
 .resgrid{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
-.resgrid>#camsWrap{flex:1.3 1 420px;min-width:0}
+.resgrid>.resmain{flex:1.3 1 420px;min-width:0;display:grid;gap:18px}
+.resmain:not(:has(> :not([hidden]))){display:none}
 .resside{flex:1 1 300px;min-width:0;display:grid;gap:12px}
 .resside:not(:has(> :not([hidden]))){display:none}
 .hbtns{display:flex;gap:8px;margin-left:auto}
@@ -388,6 +495,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 @keyframes flash{0%{opacity:0}20%{opacity:1}100%{opacity:0}}
 @keyframes introSlide{from{transform:translateX(0)}to{transform:translateX(105%)}}
 @media (prefers-reduced-motion:reduce){#intro{display:none}}
+  .askwrap{position:fixed;inset:0;background:rgba(10,11,13,.62);display:flex;align-items:center;justify-content:center;z-index:60;padding:16px}
+  .askwrap[hidden]{display:none}
+  .ask{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px 26px;max-width:460px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .ask h3{margin:0 0 10px;font-family:var(--display);font-size:22px}
+  .ask p{margin:0 0 10px;line-height:1.45}
+  .ask .hint{color:var(--muted);font-size:14px}
+  .askbtns{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 </style>
 </head>
 <body>
@@ -407,6 +521,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <div class="tabswrap" id="tabsWrap">
   <div class="seg tabs modeswitch" role="tablist" aria-label="Kind of project">
     <button data-view="music" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Music video</button>
+    <button data-view="narrative" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>Narrative</button>
     <button data-view="setup" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>Other projects</button>
   </div>
   <button class="minirun" id="miniRun" inert><span class="mlabel" id="miniLabel">Back to syncing</span><span class="mtrack" id="miniTrack"><i id="miniBar"></i></span><span class="mcount" id="miniCount"></span></button>
@@ -457,11 +572,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <div class="modes" id="modes">
     <p id="modeNote"></p>
     <details class="opts" id="opts"><summary>Options <span id="optSum"></span></summary>
-    <div class="export">
-      <span class="k">Export XML to</span><span class="v" id="exportPath"></span>
-      <button id="bExport">Choose…</button><button class="quiet" id="bExportReset" hidden>Use the drive</button>
-    </div>
-    <label class="check"><input type="checkbox" id="rebuild"> Start over: rebuild the whole project, even if this folder was run before</label>
+    <div id="destXml"></div>
+    <div id="destPr"></div>
+    <input type="checkbox" id="rebuild" hidden>
     </details>
   </div>
 
@@ -485,8 +598,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <div id="run" hidden>
     <div style="display:grid;gap:18px">
+      <div class="rhead" id="rhead" hidden>
+        <div class="rbig"><span id="rDone">0</span><small>of <span id="rTotal">0</span> clips</small></div>
+        <div class="rnums"><div class="g"><b id="rSynced">0</b>synced</div><div class="w"><b id="rAside">0</b>set aside</div><div><b id="rLeft">&ndash;</b>left</div></div>
+      </div>
       <div class="prog" id="prog"><i id="bar"></i></div>
       <div class="status"><span id="stage">Starting</span><span><span id="count"></span><span id="eta"></span></span></div>
+      <div class="livebox" id="mapBox" hidden><h3 id="mapHead">Where the takes land in the song</h3><div class="lanes" id="lanes"></div><div class="laxis"><span></span><div id="laxis"></div><span></span></div></div>
+      <div class="livebox" id="feedBox" hidden><h3>Just now</h3><div class="feed" id="feed"></div></div>
     </div>
   </div>
 
@@ -502,14 +621,21 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <p class="stats" id="stats" hidden><b id="sSynced">0</b> synced so far, <b id="sAside">0</b> set aside<span hidden><b id="sCams"></b><span id="sCamsL"></span></span></p>
 
   <div class="resgrid">
+  <div class="resmain">
   <div id="camsWrap" hidden>
-    <div class="camsHead"><span></span><span>Where each camera has footage in the song</span><span>Synced</span></div>
+    <div class="camsHead"><span></span><span id="camsHead">Where each camera has footage in the song</span><span>Synced</span></div>
     <div class="cams" id="cams"></div>
+  </div>
+  <div class="todo" id="todo" hidden>
+    <div class="h">Left for you to do in Premiere
+      <span class="tip"><button type="button" class="tipi" aria-label="Tips" aria-describedby="tipBox">i</button>
+        <span class="tipbox" id="tipBox" role="tooltip"><span class="th">Tips</span><ul id="tipList"></ul></span></span></div>
+    <div id="todoList"></div>
+  </div>
   </div>
 
   <div class="resside">
   <div class="list" id="aside" hidden></div>
-  <div class="todo" id="todo" hidden><div class="h">Left for you to do in Premiere</div><div id="todoList"></div></div>
   </div>
   </div>
   <div class="error" id="error" hidden><b id="errTitle">Kickoff hit an error</b><p id="errText"></p></div>
@@ -520,15 +646,31 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <div class="btns" id="btnsStart">
     <button class="pri" id="bStart" disabled>Start</button>
+    <button class="linkbtn" id="bRebuild" hidden>or rebuild from scratch</button>
   </div>
   <div class="btns" id="btnsDone" hidden>
     <button class="pri" id="bOpen">Open in Premiere</button>
-    <button id="bReveal"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Open XML folder</button>
-    <button id="bReport">Show report</button>
+    <div class="finder">
+      <button id="bFinder" aria-haspopup="menu" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Show in Finder<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div class="fmenu" id="fMenu" role="menu" hidden>
+        <button role="menuitem" id="bRevealProject">Premiere project</button>
+        <button role="menuitem" id="bReveal">XML</button>
+        <button role="menuitem" id="bReport">Sync report</button>
+      </div>
+    </div>
     <button class="newrun" id="bNew"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New run</button>
   </div>
   <div class="btns" id="btnsRun" hidden>
+    <button class="pause" id="bPause"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1.2" fill="currentColor"/></svg><span>Pause</span></button>
     <button class="stop" id="bCancel"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor"/></svg>Stop</button>
+  </div>
+  <div class="askwrap" id="askCams" hidden>
+    <div class="ask" role="dialog" aria-modal="true" aria-labelledby="askTitle">
+      <h3 id="askTitle">No sound files</h3>
+      <p>There are no sound recordist's files in what you added. Sync the cameras to each other instead?</p>
+      <p class="hint">By timecode when the cameras have it, otherwise by their scratch audio. A Cam goes on V1, B Cam on V2, and nothing is trimmed.</p>
+      <div class="askbtns"><button class="quiet" id="bAskCancel">Cancel</button><button class="pri" id="bAskCams">Sync cameras together</button></div>
+    </div>
   </div>
   <div class="btns" id="btnsErr" hidden>
     <button class="pri" id="bRetry">Try again</button>
@@ -551,21 +693,27 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     Violet: "--violet", Purple: "--purple", Blue: "--blue", Teal: "--teal", Green: "--green", Brown: "--brown" };
   // why a clip was set aside, in plain words, and where it ends up
   var REASONS = [
-    [/^no audio/, "no audio (slow motion?)", "Footage bins"],
-    [/^slow motion/, "slow motion", "Footage bins"],
-    [/^high frame rate/, "high frame rate", "Footage bins"],
-    [/^no match/, "no match to the song (B-roll?)", "Footage bins"],
-    [/^audio track is silent/, "silent audio", "Footage bins"],
-    [/^ambiguous/, "fits two places in the song", "check report"],
-    [/^confidence/, "unsure match", "check report"],
-    [/^short burst/, "only a false start", "check report"],
+    [/^no audio/, "no audio", "After the song"],
+    [/^slow motion/, "slow motion", "After the song"],
+    [/^high frame rate/, "high frame rate", "After the song"],
+    [/^no match to any audio/, "no match to any audio file (B-roll?)", "Footage bins"],
+    [/^lines up with no audio/, "lines up between audio files", "check report"],
+    [/^timecode outside/, "timecode outside every audio file", "Footage bins"],
+    [/^no timecode/, "no timecode", "Footage bins"],
+    [/^no match/, "no match to the song (B-roll?)", "After the song"],
+    [/^audio track is silent/, "silent audio", "After the song"],
+    [/^ambiguous/, "fits two places in the song", "After the song"],
+    [/^confidence/, "unsure match", "After the song"],
+    [/^short burst/, "only a false start", "After the song"],
     [/^between plays/, "stretches between plays of the song", "Breakup only"],
-    [/^unreadable/, "can't be read (RED/BRAW?)", "check report"]
+    [/^unreadable/, "can't be read (RED?)", "check report"]
   ];
   var MODE_NOTES = {
     music: "Each song syncs only to the footage beside it. Add a row for every music video; they run one after another.",
-    setup: "Commercials and other jobs: bins, Breakups and an Edit sequence, no syncing. Drop the shoot folder, or cards."
+    setup: "Commercials and other jobs: bins, Breakups and an Edit sequence, no syncing. Drop the shoot folder, or cards.",
+    narrative: "Dialogue scenes: drop the footage and the sound recordist's audio files (or their folder). Each clip lines up with its audio by timecode, or by the camera's scratch audio."
   };
+  function listMode() { return mode === "setup" || mode === "narrative"; }   // one drop box and a list
   // the screen picks the kind of job: Music video (song -> footage rows) or Other projects (set up only)
   var mode = "music";
   try { mode = localStorage.getItem("kickoff-screen") || "music"; } catch (e) {}
@@ -587,15 +735,60 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function setXmlDir(d) {
     xmlDir = d || "";
     try { localStorage.setItem("kickoff-xml-dir", xmlDir); } catch (e) {}
-    $("exportPath").textContent = xmlDir || "The top of the drive the footage is on";
-    $("exportPath").title = xmlDir || "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the Kickoff Exports folder inside it";
-    $("bExportReset").hidden = !xmlDir;
+    renderDests();
     optSummary();
+  }
+  var prDir = "";                  // "" = next to the XML (a Premiere folder beside a folder named XML)
+  try { prDir = localStorage.getItem("kickoff-prproj-dir") || ""; } catch (e) {}
+  function setPrDir(d) {
+    prDir = d || "";
+    try { localStorage.setItem("kickoff-prproj-dir", prDir); } catch (e) {}
+    renderDests();
+    optSummary();
+  }
+  // "Export XML to" / "Premiere project saves to": the default or a folder, both always showing
+  function destControl(which) {
+    var xml = which === "export", dir = xml ? xmlDir : prDir;
+    var box = el("div", { class: "dest" });
+    box.appendChild(el("span", { class: "k" }, xml ? "Export XML to" : "Premiere project saves to"));
+    var seg = el("div", { class: "seg", role: "group" });
+    var def = el("button", { type: "button", class: dir ? "" : "on" }, xml ? "Top of the footage drive" : "Next to the XML");
+    def.title = xml ? "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the Kickoff Exports folder inside it"
+      : "When the XML folder is called XML, a Premiere folder beside it";
+    var pick = el("button", { type: "button", class: dir ? "on" : "" }, dir ? esc(base(dir)) : "Choose a folder…");
+    pick.title = dir ? "Click to pick a different folder" : "Pick a folder";
+    [def, pick].forEach(function (b) {
+      if (running()) { b.disabled = true; b.title = "Available when the run finishes"; }
+    });
+    def.addEventListener("click", function () { if (!running()) (xml ? setXmlDir : setPrDir)(""); });
+    pick.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: which }); });
+    seg.appendChild(def); seg.appendChild(pick); box.appendChild(seg);
+    if (dir) { var pth = el("span", { class: "path" }, esc(dir)); pth.title = dir; box.appendChild(pth); }
+    return box;
+  }
+  function renderDests() {
+    [["destXml", "export"], ["destPr", "prproj"]].forEach(function (d) {
+      var h = $(d[0]); if (!h) return;
+      h.innerHTML = ""; h.appendChild(destControl(d[1]));
+    });
+    if ($("vSet") && !$("vSet").hidden && pane === "files") renderSettings();
+  }
+  function projectDirFor(xml) {     // where Open in Premiere makes the project for this XML
+    if (prDir) return prDir;
+    var d = parent(xml);
+    return base(d).toLowerCase() === "xml" ? parent(d) + "/Premiere" : d;
+  }
+  function makeProject(e) {          // the Premiere project is made as soon as the run ends (an add goes into the one they have)
+    if (e && e.xml && !e.add) post({ cmd: "makeProject", path: e.xml, projectDir: projectDirFor(e.xml) });
+  }
+  function openPremiere(xml, isAdd) {  // an add goes into the project they already have, so no new project
+    post(isAdd ? { cmd: "premiere", path: xml } : { cmd: "premiere", path: xml, projectDir: projectDirFor(xml) });
   }
   function optSummary() {           // the closed Options line says what they are set to
     // the chosen folder with the one above it ("Project Files > XML"): a folder named XML alone read as "XML goes to XML"
     var shown = xmlDir ? [base(parent(xmlDir)), base(xmlDir)].filter(Boolean).join(" > ") : "";
     $("optSum").textContent = (xmlDir ? "XML saves to " + shown : "XML saves to the top of the footage drive") +
+      (prDir ? ", project to " + [base(parent(prDir)), base(prDir)].filter(Boolean).join(" > ") : "") +
       ($("rebuild").checked ? ", starting over" : "");
   }
   var batch = null;                // the runs Start began: { runs: [{paths, mode, name}], i, ids }
@@ -651,7 +844,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function add(paths, target, row) {
     if (!ready()) return;
     paths = paths || [];
-    if (mode === "setup") {
+    if (listMode()) {
       paths.forEach(function (p) { if (queue.indexOf(p) < 0) queue.push(p); });
       return renderStage();
     }
@@ -826,10 +1019,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function runsToStart() {                // [{paths, mode, name}], or a reason Start is off
-    if (mode === "setup") {
+    if (listMode()) {
       var folders = queue.filter(function (p) { return !isSong(p); });
-      return folders.length ? [{ paths: queue.slice(), mode: "setup", name: label(queue), xml: setupName.trim(), queue: true }]
-        : "Add the shoot folder or cards.";
+      return folders.length ? [{ paths: queue.slice(), mode: mode, name: label(queue), xml: setupName.trim(), queue: true }]
+        : mode === "narrative" ? "Add the footage and the audio files." : "Add the shoot folder or cards.";
     }
     var used = jobs.filter(function (j) { return j.song || j.footage.length; });
     if (!used.length) return "Add a song and the footage to sync to it.";
@@ -844,6 +1037,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     });
   }
 
+  function ranBefore(run) {          // this footage has a finished run in History
+    var foot = run.paths.filter(function (p) { return !isSong(p); });
+    return history.some(function (h) {
+      return (h.outcome === "done" || h.outcome === "nothing") && (h.paths || []).some(function (p) { return foot.indexOf(p) >= 0; });
+    });
+  }
   function renderStage() {
     var music = mode === "music";
     show("jobsWrap", music);
@@ -861,6 +1060,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       : music ? "Start " + runs.length + " music videos"
       : runs[0].paths.filter(function (p) { return !isSong(p); }).length > 1 ? "Start with " + runs[0].paths.length + " folders" : "Start";
     $("bStart").title = typeof runs === "string" ? runs : "";
+    // run before: Start adds only what's new, and the one way to start over sits right under it
+    var again = typeof runs !== "string" && runs.some(ranBefore);
+    if (again && runs.length === 1) $("bStart").textContent = "Update project";
+    $("bStart").title = again ? "Adds only the clips that aren't in the project yet" : $("bStart").title;
+    show("bRebuild", again);
+    $("bRebuild").textContent = runs.length > 1 ? "or rebuild them from scratch" : "or rebuild from scratch";
     if (music) $("qNote").textContent = "";
     var note = typeof runs === "string" && (music ? jobs.some(function (j) { return j.song || j.footage.length; }) : false) ? runs : "";
     $("modeNote").textContent = note || MODE_NOTES[mode];
@@ -900,7 +1105,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       txt.style.minWidth = "0";
       var nm = document.createElement("div"), pt = document.createElement("div");
       nm.className = "nm"; pt.className = "pt";
-      nm.textContent = base(p) + (isSong(p) ? "  (song)" : "");
+      nm.textContent = base(p) + (isSong(p) ? (mode === "narrative" ? "  (audio)" : "  (song)") : "");
       pt.textContent = parent(p);
       pt.title = p;
       txt.append(nm, pt);
@@ -932,6 +1137,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function reset() {
+    closePop();
     state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
     show("modes", true);
     ["run", "hero", "stats", "camsWrap", "aside", "todo", "error", "details", "btnsDone", "btnsRun", "btnsErr", "batch"].forEach(function (id) { show(id, false); });
@@ -974,15 +1180,20 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     var name = folders.length ? projectName(folders) : label(paths);     // the card has a folder icon: the footage is its title
     var of = batch && batch.runs.length > 1 ? "Music video " + (batch.i + 1) + " of " + batch.runs.length + " · " : "";
     $("dropTitle").textContent = name;
-    $("dropSub").textContent = of + (song ? "song: " + base(song) : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
+    var nAudio = paths.filter(isSong).length;
+    var camsRun = batch && batch.runs[batch.i] && batch.runs[batch.i].mode === "cameras";
+    $("dropSub").textContent = of + (mode === "narrative" ? (camsRun ? "the cameras synced to each other" : nAudio ? "with " + plural(nAudio, "audio file") : "audio from the folder")
+      : song ? "song: " + base(song) : paths.length === 1 ? paths[0] : paths.map(base).join(", "));
     setTitle("Kickoff — " + name);
     $("prog").className = "prog busy";
     $("bar").style.width = "";
     $("stage").textContent = "Checking for updates";
     $("count").textContent = "";
     $("eta").textContent = "";
+    liveReset();
     clearInterval(tick); tick = setInterval(timing, 1000);
     show("run", true); show("btnsRun", true); show("details", true);
+    setPaused(false); renderDests();
     document.querySelector("#vRun > .vtop").style.marginTop = ""; pinned = null;   // the run screen centres as before
   }
 
@@ -996,13 +1207,20 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function timing() {
     if (!running() || !state.t0) { clearInterval(tick); tick = null; $("eta").textContent = ""; return; }
     var left = timeLeft();
+    if (live) {
+      $("rLeft").textContent = left ? left.replace(/^about /, "").replace(/ left$/, "").replace("less than a minute", "<1 min") : "\u2013";
+      left = "";
+    }
     $("eta").textContent = clock((Date.now() - state.t0) / 1000) + " elapsed" + (left ? " · " + left : "");
     updateMini();
   }
   function songOf(e) { var sg = state.paths.filter(isSong)[0]; return sg ? base(sg) : e.song || ""; }
   var miniEnd = null;              // a run ended while Settings or History was open: "done", "stopped" or "error"
   function updateMini() {
-    var wrap = $("tabsWrap"), live = running(), on = $("vRun").hidden && (live || !!miniEnd);
+    // the results stay one click away from Settings and History until New run
+    var shown = !running() && resultShowing() ? (!$("btnsDone").hidden || !$("batch").hidden ? "done" : "error") : null;
+    var end = miniEnd || shown;
+    var wrap = $("tabsWrap"), live = running(), on = $("vRun").hidden && (live || !!end);
     if (!$("vRun").hidden) miniEnd = null;
     if (on !== wrap.classList.contains("busy")) {
       wrap.classList.toggle("busy", on);
@@ -1016,9 +1234,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     }
     if (!on) return;
     var pct = state.total && state.done ? Math.min(100, 100 * state.done / state.total) : 0;
-    $("miniRun").className = "minirun" + (live ? "" : miniEnd === "done" ? " done" : " fail");
-    $("miniLabel").textContent = live ? "Back to syncing" : miniEnd === "done" ? "Done: see results"
-      : miniEnd === "stopped" ? "Stopped: see why" : "Kickoff hit an error: see why";
+    $("miniRun").className = "minirun" + (live ? "" : end === "done" ? " done" : " fail");
+    $("miniLabel").textContent = live ? "Back to syncing"
+      : end === "done" ? (mode === "setup" ? "Project ready: back to results" : "Sync complete: back to results")
+      : end === "stopped" ? "Stopped: see why" : "Kickoff hit an error: see why";
     $("miniTrack").className = "mtrack" + (live && !pct ? " busy" : "");
     $("miniBar").style.width = live ? (pct ? pct.toFixed(1) + "%" : "") : "100%";
     var left = live ? timeLeft() : "";
@@ -1026,6 +1245,96 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       ? state.done + " of " + state.total + (left ? " · " + left : "") : "";
   }
   $("miniRun").addEventListener("click", function () { showView(mode); });
+  // the syncing screen: one lane per camera in its label color, filled in where each clip lands in the
+  // song as it syncs, and the last few clips with where they went or why they were set aside
+  var live = null;
+  function camName(k) { return /^[A-Z]$/.test(k) ? k + " Cam" : k || "Other"; }
+  function camColor(k) { return /^[A-Z]$/.test(k) ? "var(" + (CAM_COLORS[labelFor(k)] || "--muted") + ")" : "var(--muted)"; }
+  function liveReset() {
+    live = null;
+    ["rhead", "mapBox", "feedBox"].forEach(function (id) { show(id, false); });
+    $("run").classList.remove("live");
+    $("rLeft").textContent = "\u2013";
+  }
+  function liveLane(k, n) {
+    var row = document.createElement("div");
+    row.className = "llane";
+    row.innerHTML = '<span class="n"><span class="chip"></span></span><div class="ltrack"></div><em></em>';
+    row.querySelector(".chip").style.background = camColor(k);
+    row.firstChild.title = camName(k);
+    row.firstChild.appendChild(document.createTextNode(camName(k)));
+    $("lanes").appendChild(row);
+    var L = live.lanes[k] = { track: row.querySelector(".ltrack"), em: row.querySelector("em"), n: n, seen: 0, synced: 0 };
+    liveLaneCount(L);
+    return L;
+  }
+  function liveLaneCount(L) { L.em.textContent = L.synced + " of " + Math.max(L.n, L.seen); }
+  function liveStart(e) {
+    var cams = e.cams || {}, keys = Object.keys(cams).sort(), d = e.song_duration || 0;
+    live = { dur: d, lanes: {} };
+    $("lanes").innerHTML = "";
+    keys.forEach(function (k) { liveLane(k, cams[k]); });
+    var ax = $("laxis"), step = d > 600 ? 120 : d > 90 ? 60 : 30, marks = [0];
+    for (var t = step; t < d - step * 0.4; t += step) marks.push(t);
+    ax.innerHTML = "";
+    if (d) marks.concat([d]).forEach(function (t) {
+      var sp = document.createElement("span");
+      sp.style.left = (100 * t / d).toFixed(2) + "%";
+      sp.textContent = clock(t);
+      ax.appendChild(sp);
+    });
+    $("feed").innerHTML = '<div class="none">Clips show up here as they sync.</div>';
+    $("mapHead").textContent = e.mode === "narrative" ? "Where the takes land in the audio" : "Where the takes land in the song";
+    show("rhead", true); show("mapBox", d > 0 && keys.length > 0); show("feedBox", true);
+    show("stats", false);                        // the big count carries the numbers
+    $("run").classList.add("live");
+    liveCounts();
+  }
+  function liveCounts() {
+    $("rDone").textContent = state.done || 0;
+    $("rTotal").textContent = state.total || 0;
+    $("rSynced").textContent = state.synced;
+    $("rAside").textContent = state.aside;
+  }
+  function liveClip(e) {
+    liveCounts();
+    if (!live) return;
+    var k = e.cam || "", L = live.lanes[k] || liveLane(k, 0), placed = e.status === "placed";
+    L.seen++;
+    if (placed) {
+      L.synced++;
+      if (live.dur) (e.spans || []).forEach(function (sp) {
+        var a = Math.max(0, sp[0]) / live.dur, b = Math.min(live.dur, sp[1]) / live.dur;
+        if (b <= a) return;
+        var i = document.createElement("i");
+        i.className = "new";
+        i.style.left = (100 * a).toFixed(2) + "%";
+        i.style.width = (100 * (b - a)).toFixed(2) + "%";
+        i.style.background = camColor(k);
+        i.title = base(e.file) + ": " + clock(sp[0]) + " to " + clock(sp[1]) + " in the song";
+        L.track.appendChild(i);
+      });
+    }
+    liveLaneCount(L);
+    var m = REASONS.find(function (x) { return x[0].test(e.reason || ""); });
+    var what = !placed ? "set aside: " + (m ? m[1] : e.reason || "didn\u2019t sync")
+      : e.passes > 1 ? "song restarted, " + e.passes + " plays"
+      : e.audio ? "with " + e.audio + (e.by ? " by " + e.by : "")
+      : e.spans && e.spans.length ? "at " + clock(e.spans[0][0]) + " in the song" : "synced";
+    var row = document.createElement("div");
+    row.className = "frow new";
+    row.innerHTML = '<span class="' + (placed ? "ok" : "no") + '">' + (placed ? "\u2713" : "\u2013") + '</span>'
+      + '<span class="c"><span class="chip"></span></span><span class="f"></span><span class="r"></span>';
+    row.querySelector(".chip").style.background = camColor(k);
+    row.querySelector(".c").appendChild(document.createTextNode(camName(k)));
+    row.querySelector(".f").textContent = base(e.file);
+    row.querySelector(".f").title = e.file;
+    row.querySelector(".r").textContent = what;
+    var feed = $("feed"), none = feed.querySelector(".none");
+    if (none) none.remove();
+    feed.insertBefore(row, feed.firstChild);
+    while (feed.children.length > 5) feed.lastChild.remove();
+  }
   function setCounts() {
     $("sSynced").textContent = state.synced;
     $("sAside").textContent = state.aside;
@@ -1043,6 +1352,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("bar").style.width = "0%";
       $("sCams").textContent = "–";
       show("stats", e.mode !== "setup");
+      if (e.mode !== "setup" && e.clips) liveStart(e); else liveReset();
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start" && e.mode === "setup") {
       var fellBack = state.total > 0;              // it tried the song first and nothing lined up
@@ -1052,10 +1362,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         : "Setting up " + plural(e.clips, "clip") + " (no song to sync to)";
       $("prog").className = "prog busy";
       show("stats", false);
+      liveReset();
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "start") {
       state.total = e.clips; state.tClips = Date.now(); state.done = 0;
-      $("dropSub").textContent = runOf() + "song: " + songOf(e);
+      $("dropSub").textContent = runOf() + (e.mode === "narrative" ? "synced to " + e.song : "song: " + songOf(e));
       $("stage").textContent = "Syncing " + plural(e.clips, "clip") + " to " + e.song;
       $("count").textContent = "0 / " + e.clips;
       $("prog").className = "prog";
@@ -1063,16 +1374,18 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("sCams").textContent = "–";
       $("sCamsL").textContent = "cameras";
       show("stats", true);
+      liveStart(e);
       $("ver").textContent = "Engine " + e.version;
     } else if (e.event === "clip") {
       if (e.status === "placed") state.synced++; else state.aside++;
       state.done = e.done; state.total = e.total;
       setCounts();
+      liveClip(e);
       updateMini();
       $("bar").style.width = (100 * e.done / e.total).toFixed(1) + "%";
       $("count").textContent = e.done + " / " + e.total;
       $("stage").textContent = base(e.file) + (e.status === "placed"
-        ? (e.passes > 1 ? " · song restarted, " + e.passes + " passes" : " · synced")
+        ? (e.passes > 1 ? " · song restarted, " + e.passes + " plays" : " · synced")
         : " · " + e.reason);
     } else if (e.event === "done") {
       state.result = e;
@@ -1086,10 +1399,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   var ICON_SAME = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>';
   // what the XML can't do, so Jake finishes it in Premiere (html: fixed text plus escaped names)
   function todo(extra) {
-    var lines = ["Drag the imported bin&rsquo;s contents to the top of the project."].concat(extra.filter(Boolean),
-      ["Add a <b>Temp Color</b> adjustment layer to the " + esc(binName("adjustment", "Adjustment Layers")) + " bin.",
-       "Select the " + esc(binName("footage", "Footage")) + " bin, right-click, <b>Proxy &gt; Create Proxies</b>."]);
-    $("todoList").innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
+    var lines = extra.filter(Boolean);
+    $("todoList").innerHTML = (lines.length ? lines : ["Nothing. It&rsquo;s ready to cut."])
+      .map(function (l) { return "<div>" + l + "</div>"; }).join("");
+    $("tipList").innerHTML =
+      "<li><b>Proxies:</b> select the " + esc(binName("footage", "Footage")) + " bin, right-click, <b>Proxy &gt; Create Proxies</b>.</li>" +
+      "<li><b>Adding to a project you already have?</b> Import the XML. Premiere puts its sequences and clips straight into the Project panel, not in a bin, so move them into your bins from there.</li>";
     show("todo", true);
   }
   function hero(tone, title, sub, chips) {
@@ -1119,7 +1434,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function finishSetup(e) {
     $("prog").className = "prog";
     $("bar").style.width = "100%";
-    $("stage").textContent = "Done. In Premiere the project imports into a bin; drag its contents to the top.";
+    $("stage").textContent = "Done.";
     $("count").textContent = "";
     $("sSynced").textContent = e.clips;
     $("sCams").textContent = e.cameras.length;
@@ -1164,7 +1479,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         : plural(e.clips, "clip") + " from " + plural(e.cameras.length, "camera") + ". " + whereTook(e),
       [[plural(e.cameras.length, "Breakup sequence"), ""], e.audio ? [plural(e.audio, "audio file"), ""] : null,
        e.unreadable ? [plural(e.unreadable, "unreadable clip"), "warn"] : null]);
-    $("bReport").textContent = "Show clip list";
+    $("bReport").textContent = "Clip list";
+    makeProject(e);
     show("btnsRun", false);
     show("btnsDone", true);
     $("bOpen").focus();
@@ -1235,11 +1551,76 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     finishMusic(e);
   }
 
+  var TAGS = { "Footage bins": "In Footage bins", "check report": "In the report", "own tracks": "On their own tracks",
+    "check chorus": "Check the chorus", "worth a look": "Worth a look", "Breakup only": "In Breakups only" };
+  // the clips behind a results line: name, camera, where it sits in the song; Copy file names
+  var pop = null, popAnchor = null, popPinned = false, popHover = false;
+  function closePop() {
+    if (pop) pop.remove();
+    if (popAnchor) popAnchor.setAttribute("aria-expanded", "false");
+    pop = popAnchor = null; popPinned = false; popHover = false;
+  }
+  function clipPop(anchor, title, items, pinned) {
+    if (pop && popAnchor === anchor) {
+      if (pinned && !popPinned) { popPinned = true; return; }
+      if (pinned) { closePop(); return; }
+      return;
+    }
+    closePop();
+    popAnchor = anchor; popPinned = pinned;
+    anchor.setAttribute("aria-expanded", "true");
+    pop = document.createElement("div");
+    pop.className = "clippop";
+    pop.setAttribute("role", "dialog");
+    pop.innerHTML = '<div class="ph"><span></span><button type="button" aria-label="Close">&times;</button></div><div class="pl"></div>'
+      + '<div class="pf"><span></span><button type="button" class="quiet">Copy file names</button></div>';
+    pop.querySelector(".ph span").textContent = title + " (" + items.length + ")";
+    var pl = pop.querySelector(".pl");
+    items.forEach(function (it) {
+      var r = document.createElement("div");
+      r.className = "pi";
+      r.innerHTML = '<span class="f"></span><span class="c"></span><span class="t"></span>';
+      r.querySelector(".f").textContent = it.file;
+      r.querySelector(".f").title = it.file;
+      r.querySelector(".c").textContent = it.cam ? camName(it.cam) : "";
+      r.querySelector(".t").textContent = it.passes != null
+        ? (it.placed >= it.passes ? plural(it.passes, "play") + ", all synced"
+          : it.placed === 0 ? plural(it.passes, "play") + ", none synced"
+          : it.placed + " of " + it.passes + " plays synced")
+        : it.guess != null ? "song " + clock(it.guess) + "?" : it.at != null ? "at " + clock(it.at) : "";
+      pl.appendChild(r);
+    });
+    var note = pop.querySelector(".pf span"), cb = pop.querySelector(".pf button");
+    note.textContent = "One name per line, for Premiere's search box";
+    cb.addEventListener("click", function () {
+      copyText(items.map(function (it) { return it.file; }).join("\n"));
+      cb.textContent = "Copied"; note.textContent = plural(items.length, "file name") + " on the clipboard";
+      setTimeout(function () { if (cb.isConnected) cb.textContent = "Copy file names"; }, 1600);
+    });
+    pop.querySelector(".ph button").addEventListener("click", closePop);
+    pop.addEventListener("mouseenter", function () { popHover = true; });
+    pop.addEventListener("mouseleave", function () { popHover = false; if (!popPinned) setTimeout(function () { if (!popPinned && !popHover) closePop(); }, 200); });
+    document.body.appendChild(pop);
+    var r = anchor.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    var x = Math.max(16, Math.min(innerWidth - w - 16, r.right - w > 16 && anchor.classList.contains("sumrow") ? r.right - w : r.left));
+    var y = r.bottom + 6 + h > innerHeight - 12 ? Math.max(12, r.top - 6 - h) : r.bottom + 6;
+    pop.style.left = x + "px"; pop.style.top = y + "px";
+  }
+  function copyText(t) {
+    post({ cmd: "copy", text: t });                  // the app puts it on the Mac's clipboard
+    try { if (navigator.clipboard) navigator.clipboard.writeText(t).catch(function () {}); } catch (err) {}
+  }
+  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape" && pop) closePop(); });
+  document.addEventListener("mousedown", function (ev) {
+    if (pop && !pop.contains(ev.target) && !(popAnchor && popAnchor.contains(ev.target))) closePop();
+  });
+  document.addEventListener("scroll", function (ev) { if (pop && !pop.contains(ev.target)) closePop(); }, true);
+
   function finishMusic(e) {
-    $("bReport").textContent = "Show report";
+    $("bReport").textContent = "Sync report";
     $("prog").className = "prog";
     $("bar").style.width = "100%";
-    $("stage").textContent = "Done. In Premiere the project imports into a bin; drag its contents to the top.";
+    $("stage").textContent = "Done.";
     $("count").textContent = e.clips + " / " + e.clips;
     $("sSynced").textContent = e.synced;
     $("sAside").textContent = e.clips - e.synced;
@@ -1251,7 +1632,25 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     hero(e.synced && !look ? "good" : "warn",
       e.synced ? e.synced + " of " + plural(e.clips, "clip") + " synced" : "Done, but no clip lined up with the song",
       (look ? "Check the " + plural(look, "clip") + " marked worth a look before you cut. " : "") + whereTook(e), []);
-    todo([e.synced ? "In <b>" + esc(e.edit_name || e.project + "_Edit") + "</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : ""]);
+    if (look) {
+      var hs = $("heroS"), lk = document.createElement("button"), rest = hs.textContent.replace(/^Check the .*? before you cut\. /, "");
+      lk.type = "button"; lk.className = "lookl"; lk.textContent = "worth a look";
+      hs.textContent = "Check the " + plural(look, "clip") + " marked ";
+      hs.append(lk, document.createTextNode(" before you cut. " + rest));
+      var items = (e.lists || {}).worth_a_look || [];
+      if (items.length) {
+        var hov = null;
+        lk.addEventListener("click", function () { clipPop(lk, "Worth a look", items, true); });
+        lk.addEventListener("mouseenter", function () { hov = setTimeout(function () { if (!popPinned) clipPop(lk, "Worth a look", items, false); }, 180); });
+        lk.addEventListener("mouseleave", function () { clearTimeout(hov); setTimeout(function () { if (!popPinned && !popHover) closePop(); }, 200); });
+      }
+    }
+    makeProject(e);
+    todo([e.synced && e.mode !== "narrative" ? "In <b>" + esc(e.edit_name || e.project + "_Edit") + "</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : "",
+          e.synced && e.mode !== "narrative" && e.clips > e.synced ? "Clips that didn&rsquo;t sync are on V1 of each camera&rsquo;s Synced sequences, a minute after the song, under the <b>Unsure</b> and <b>No match</b> markers." : "",
+          e.mode === "narrative" && e.synced ? "Everything is in <b>" + esc(e.sync_name || e.project + "_Sync") + "</b>: " +
+            (e.cams_together ? "each take with A Cam on V1 and the other cameras above." : "each audio file with its clips over it.") : ""]);
+    $("camsHead").textContent = e.mode === "narrative" ? (e.cams_together ? "Where each camera has footage, take by take" : "Where each camera has footage, audio file by audio file") : "Where each camera has footage in the song";
 
     var dur = e.song_duration || 1, cams = $("cams");
     cams.innerHTML = "";
@@ -1284,26 +1683,32 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     });
     var axis = document.createElement("div");
     axis.className = "axis";
-    axis.innerHTML = "<span></span><div><span>0:00</span><span>song " + clock(dur / 2) + "</span><span>" + clock(dur) + "</span></div><span></span>";
+    axis.innerHTML = "<span></span><div><span>0:00</span><span>" + (e.mode === "narrative" ? "" : "song ") + clock(dur / 2) + "</span><span>" + clock(dur) + "</span></div><span></span>";
     cams.appendChild(axis);
     show("camsWrap", e.cameras.length > 0);
 
     var list = $("aside");
     list.innerHTML = "";
-    var rows = [];
+    var rows = [], L = e.lists || {};
     e.set_aside.forEach(function (r) {
       var m = REASONS.find(function (x) { return x[0].test(r.reason); });
-      rows.push([r.count + " " + (m ? m[1] : r.reason), m ? m[2] : "check report"]);
+      rows.push([r.count, m ? m[1] : r.reason, m ? m[2] : "check report", (L.aside || {})[r.reason], "Set aside: " + (m ? m[1] : r.reason)]);
     });
-    if (e.restarted) rows.push([plural(e.restarted, "take") + " where the song restarted, split into passes", "own tracks"]);
-    if (e.check_chorus) rows.push([plural(e.check_chorus, "clip") + " only covering the chorus, placed at the first", "check chorus"]);
-    if (e.worth_a_look) rows.push([plural(e.worth_a_look, "clip") + " placed, but the waveform only partly lines up", "worth a look"]);
+    if (e.restarted) rows.push([e.restarted, (e.restarted === 1 ? "take" : "takes") + " where the song restarted, split into passes", "own tracks", L.restarted, "Takes split into passes"]);
+    if (e.check_chorus) rows.push([e.check_chorus, (e.check_chorus === 1 ? "clip" : "clips") + " only covering the chorus, placed at the first", "check chorus", L.check_chorus, "Placed at the first chorus"]);
+    if (e.worth_a_look) rows.push([e.worth_a_look, "placed, but the waveform only partly lines up", "worth a look", L.worth_a_look, "Worth a look"]);
     rows.forEach(function (r) {
-      var d = document.createElement("div");
-      var a = document.createElement("span"), b = document.createElement("span");
-      a.textContent = r[0]; b.textContent = r[1];
-      d.append(a, b);
-      list.appendChild(d);
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "sumrow" + (r[2] === "worth a look" ? " look" : "");
+      b.innerHTML = '<b class="n"></b><span class="d"></span><span class="tag"></span>'
+        + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+      b.querySelector(".n").textContent = r[0];
+      b.querySelector(".d").textContent = r[1];
+      b.querySelector(".tag").textContent = TAGS[r[2]] || r[2];
+      if (r[3] && r[3].length) b.addEventListener("click", function () { clipPop(b, r[4], r[3], true); });
+      else { b.disabled = true; b.style.cursor = "default"; b.querySelector("svg").style.visibility = "hidden"; }
+      list.appendChild(b);
     });
     show("aside", rows.length > 0);
     show("btnsRun", false);
@@ -1326,7 +1731,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     }
     if ($("rebuild").checked) { $("rebuild").checked = false; post({ cmd: "rebuild", on: false }); optSummary(); }
     if (batch.runs.length > 1 && !stoppedByUser) showBatch();   // stopped: Try again carries on from that video
-    if (!$("vSet").hidden && pane === "files") renderSettings();   // Choose… works again
+    renderDests();                    // the folder choices work again
   }
   var nextTimer = null;            // the pause between one music video and the next
 
@@ -1353,6 +1758,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function failed(code, stoppedByUser) {
+    var run = batch && batch.runs[batch.i];
+    if (!stoppedByUser && run && run.mode === "narrative" &&
+        state.logLines.some(function (l) { return /sound recordist's audio files/.test(l); })) {
+      show("btnsRun", false);                   // nothing to sync to: ask before anything shows as an error
+      $("askCams").hidden = false;
+      $("bAskCams").focus();
+      return;
+    }
     show("btnsRun", false);
     $("prog").className = "prog";
     if (code === -15 || code === 15) {        // stopped by the user
@@ -1485,14 +1898,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       bt.addEventListener("click", fn);
       acts.appendChild(bt);
     }
-    if (h.xml) act(h.add ? "Import into Premiere" : "Open in Premiere", function () { post({ cmd: "premiere", path: h.xml }); });
+    if (h.xml) act(h.add ? "Import into Premiere" : "Open in Premiere", function () { openPremiere(h.xml, h.add); });
     if (h.report) act(h.mode === "setup" ? "Clip list" : "Report", function () { post({ cmd: "report", path: h.report }); });
     if (h.xml || (h.paths && h.paths.length)) act("Show in Finder", function () { post({ cmd: "reveal", path: h.xml || h.paths[0] }); });
     if (h.paths && h.paths.length) act("Put back", function () {   // into the boxes, next to what's there
       if (running()) return;
       clearTimeout(nextTimer); nextTimer = null;
       if (resultShowing()) leaveResult();
-      var m = h.mode === "setup" ? "setup" : "music";
+      var m = h.mode === "setup" || h.mode === "narrative" ? h.mode : "music";
       showView(m);
       var stem = h.xml ? base(h.xml).replace(/\.xml$/i, "") : "";
       var name = typeof h.name === "string" ? h.name : stem !== h.project ? stem : "";
@@ -1558,18 +1971,45 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (atEnd) log.scrollTop = log.scrollHeight;
   }
 
+  var paused = false, pausedStage = "";
+  function setPaused(p) {           // Pause freezes the engine where it is; Resume carries on from there
+    if (p === paused) return;
+    paused = p;
+    var b = $("bPause");
+    b.querySelector("span").textContent = p ? "Resume" : "Pause";
+    b.querySelector("svg").innerHTML = p ? '<path d="M7 5l12 7-12 7z" fill="currentColor"/>'
+      : '<rect x="6" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1.2" fill="currentColor"/>';
+    if (p) { pausedStage = $("stage").textContent; $("stage").textContent = "Paused. Press Resume to carry on."; }
+    else if (pausedStage) { $("stage").textContent = pausedStage; pausedStage = ""; }
+  }
   function running() { return !$("btnsRun").hidden || !!nextTimer; }   // the pause between music videos too
   $("drop").addEventListener("click", function () { if (!running() && $("btnsDone").hidden) post({ cmd: "pick", target: "any" }); });
   $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick", target: "any" }); });
-  $("bOpen").addEventListener("click", function () { post({ cmd: "premiere", path: state.result.xml }); });
-  $("bReport").addEventListener("click", function () { post({ cmd: "report", path: state.result.report }); });
+  $("bOpen").addEventListener("click", function () { openPremiere(state.result.xml, state.result.add); });
+  function finderMenu(on) { $("fMenu").hidden = !on; $("bFinder").setAttribute("aria-expanded", String(on)); }
+  $("bFinder").addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    $("bRevealProject").hidden = !!state.result.add;     // an add went into a project they already have
+    finderMenu($("fMenu").hidden);
+  });
+  document.addEventListener("click", function () { finderMenu(false); });
+  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") finderMenu(false); });
+  $("bReport").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.report }); });
   $("bReveal").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.xml }); });
+  $("bRevealProject").addEventListener("click", function () {
+    post({ cmd: "revealProject", path: state.result.xml, projectDir: projectDirFor(state.result.xml) });
+  });
   function fresh() {
     clearTimeout(nextTimer); nextTimer = null;
     queue = []; jobs = [{ song: null, footage: [] }]; setupName = ""; queueDone = false; $("qName").innerHTML = "";
     batch = null; reset();                  // reset saves the empty boxes
   }
   $("bNew").addEventListener("click", fresh);
+  $("bRebuild").addEventListener("click", function () {
+    if (running()) return;
+    $("rebuild").checked = true; post({ cmd: "rebuild", on: true });
+    start();
+  });
   $("bNew2").addEventListener("click", fresh);
   $("bRetry").addEventListener("click", function () {      // the run that failed, then the rest of the batch
     if (!state.paths.length || running()) return;
@@ -1584,6 +2024,20 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     batch = null; reset();
   });
   $("bStart").addEventListener("click", start);
+  $("bAskCams").addEventListener("click", function () {
+    $("askCams").hidden = true;
+    var run = batch && batch.runs[batch.i];
+    if (!run) return;
+    run.mode = "cameras";
+    runNext();
+  });
+  $("bAskCancel").addEventListener("click", function () {
+    $("askCams").hidden = true;
+    $("bBackBoxes").click();
+  });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && !$("askCams").hidden) $("bAskCancel").click();
+  });
   $("bStartOver").addEventListener("click", function () {   // "Nothing new": rebuild the same run from scratch
     if (!state.paths.length || running()) return;
     $("rebuild").checked = true;
@@ -1592,11 +2046,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     batch = { runs: [r0 || { paths: state.paths, mode: mode }], i: 0, ids: [], rebuild: true };
     runNext();
   });
-  $("bExport").addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
-  $("bExportReset").addEventListener("click", function () { setXmlDir(""); });
   $("bAddJob").addEventListener("click", function () { if (!running()) { jobs.push({ song: null, footage: [] }); renderStage(); } });
   $("bClear").addEventListener("click", function () { queue = []; setupName = ""; $("qName").innerHTML = ""; renderStage(); });
-  $("bCancel").addEventListener("click", function () { post({ cmd: "stop" }); });
+  $("bCancel").addEventListener("click", function () { setPaused(false); post({ cmd: "stop" }); });
+  $("bPause").addEventListener("click", function () {
+    var p = !paused;
+    post({ cmd: p ? "pause" : "resume" });
+    setPaused(p);
+  });
 
 
   // ---- Settings: saved on this Mac (the app writes settings.json, which the engine reads)
@@ -1613,7 +2070,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     sync_size: "3840x2160", start_hour: 1, track_order: "name", labels: {}, bins: DEFAULT_BINS,
     names: { breakup: "{cam}_Breakup", synced: "{cam}_Synced", condensed: "{cam}_Synced_Condensed",
              nested: "{project}_CamsNested", edit: "{project}_Edit" },
-    unsynced: true, unsynced_gap_s: 60, place_repeats: true, skip_folders: []
+    unsynced: true, unsynced_gap_s: 60, place_repeats: true, skip_folders: [],
+    timecode_narrative: true, timecode_music: false
   };
   // bins Kickoff fills: they can be renamed and moved, not removed
   var REQUIRED = { footage: 1, breakup: 1, sync: 1, synced: 1, condensed: 1, edit: 1, music: 1 };
@@ -1773,14 +2231,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       BinTree(holder, { bins: settings.bins, required: REQUIRED, notes: ROLE_NOTE, scroller: P,
         onChange: function () { saveSettings(); } });
     } else if (pane === "files") {
-      g = group("Project XML", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
-      var v = el("span", { class: "hint" }, esc(xmlDir || "The top of the drive the footage is on"));
-      var b = el("button", {}, "Choose…");
-      if (running()) { b.disabled = true; b.title = "Available when the run finishes"; }
-      b.addEventListener("click", function () { if (!running()) post({ cmd: "pick", target: "export" }); });
-      var wrap = el("span", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }); wrap.appendChild(v); wrap.appendChild(b);
-      if (xmlDir) { var r0 = el("button", { class: "quiet", style: "margin-left:0" }, "Use the drive"); r0.addEventListener("click", function () { setXmlDir(""); renderSettings(); }); wrap.appendChild(r0); }
-      row(g, "Export XML to", wrap);
+      g = group("Where it saves", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
+      g.appendChild(destControl("export"));
+      g.appendChild(destControl("prproj"));
       P.appendChild(g);
       g = group("Folders Kickoff skips", "Proxies, previews, renders, Generations and Exports are always skipped. Add any other folder names to leave out, separated by commas.");
       row(g, "Also skip", text(settings.skip_folders.join(", "), function (v) {
@@ -1800,6 +2253,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       g = group("A take that fits two identical choruses", "When a section of the song repeats exactly, a take can line up with both copies.");
       row(g, "Put it", select([["1", "At the first copy, named (check chorus)"], ["0", "Set it aside"]], settings.place_repeats ? "1" : "0",
         function (v) { settings.place_repeats = v === "1"; }));
+      P.appendChild(g);
+      g = group("Timecode", "Timecode only works when the camera and the audio were jammed to the same clock.");
+      row(g, "Narrative", select([["1", "Timecode first, else the camera's scratch audio"], ["0", "Scratch audio only"]],
+        settings.timecode_narrative ? "1" : "0", function (v) { settings.timecode_narrative = v === "1"; }));
+      row(g, "Music video", select([["0", "By the song's sound"], ["1", "By timecode, when the song file carries it"]],
+        settings.timecode_music ? "1" : "0", function (v) { settings.timecode_music = v === "1"; }));
       P.appendChild(g);
     }
   }
@@ -2039,7 +2498,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     add: function (paths) { add(paths); },
     drop: drop,
     picked: function (paths, target, row) {
-      if (target === "export") { setXmlDir(paths[0]); if (!$("vSet").hidden) renderSettings(); } else add(paths, target, row);
+      if (target === "export") setXmlDir(paths[0]);
+      else if (target === "prproj") setPrDir(paths[0]);
+      else add(paths, target, row);
     },
     settings: function (obj) { adopt(obj); renderTree(); if (!$("vSet").hidden) renderSettings(); },
     history: function (list) { history = Array.isArray(list) ? list : []; renderHistory(); },
@@ -2049,7 +2510,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       document.querySelectorAll(".box.over").forEach(function (b) { b.classList.remove("over"); });
       var el = on && x != null ? document.elementFromPoint(x, y) : null, box = el && el.closest ? el.closest(".box") : null;
       if (box) box.classList.add("over");
-      $("drop").classList.toggle("over", !!on && mode === "setup");
+      $("drop").classList.toggle("over", !!on && listMode());
     },
     info: function (i) {
       if (i.version) $("ver").textContent = "Engine " + i.version;
@@ -2060,6 +2521,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   loadBoxes();
   setMode(mode);
   setXmlDir(xmlDir);
+  setPrDir(prDir);
   showView(mode);
   renderHistory();
   post({ cmd: "ready" });

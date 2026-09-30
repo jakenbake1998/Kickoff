@@ -19,6 +19,7 @@ import concurrent.futures as cf
 import csv
 import datetime
 import fractions
+import hashlib
 import json
 import math
 import os
@@ -38,7 +39,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.23"
+VERSION = "0.5.37"
 
 # ---------------------------------------------------------------- constants
 
@@ -59,7 +60,11 @@ PAIR_DF = 63               # max bin distance anchor -> target
 MEDIA_EXT = {".mov", ".mp4", ".mxf", ".m4v", ".mts", ".m2ts", ".avi", ".mkv",
              ".r3d", ".braw", ".insv", ".360", ".wmv", ".webm"}
 AUDIO_EXT = {".wav", ".aif", ".aiff", ".bwf", ".mp3", ".m4a", ".flac", ".aac", ".caf"}
-UNREADABLE_EXT = {".r3d", ".braw"}   # ffmpeg cannot decode these containers
+UNREADABLE_EXT = {".r3d"}   # ffmpeg cannot open RED files (BRAW opens: its sound and timecode read fine)
+# RED: kickoff_r3d (built on the Mac against RED's free R3D SDK) writes a clip's sound to a WAV and prints
+# its frame rate, size, length and timecode as one JSON line
+R3D_HELPER = os.environ.get("KICKOFF_R3D") or os.path.expanduser("~/Library/Application Support/Kickoff/kickoff_r3d")
+R3D_SPAN = re.compile(r"^(.*)_(\d{3})\.r3d$", re.I)    # A001_C001_0101AB_001.R3D, _002... one clip
 OUT_DIR = "Kickoff Exports"            # what Kickoff writes, inside the shoot folder
 OLD_OUT_DIRS = ("Premiere Sync",)      # its name before 0.5.3: earlier projects are still found there
 SKIP_DIRS = {"SUB", "THMBNL", "GENERAL", "AVF_INFO", "CACHE", "THMB"}
@@ -104,6 +109,8 @@ DEFAULT_SETTINGS = {
     "unsynced_gap_s": 60,
     "place_repeats": True,          # a take that fits two identical choruses: first copy, marked
     "skip_folders": [],             # extra folder names never scanned (on top of proxies, renders...)
+    "timecode_narrative": True,     # Narrative: sync by timecode when the clip and the audio file carry it
+    "timecode_music": False,        # Music video: sync by timecode (the song file must carry it)
 }
 SETTINGS = json.loads(json.dumps(DEFAULT_SETTINGS))
 
@@ -141,6 +148,9 @@ def load_settings(path):
         s["start_hour"] = user["start_hour"]
     if user.get("track_order") in ("name", "offset"):
         s["track_order"] = user["track_order"]
+    for k in ("timecode_narrative", "timecode_music"):
+        if isinstance(user.get(k), bool):
+            s[k] = user[k]
     if isinstance(user.get("labels"), dict):
         s["labels"] = {k.upper(): v for k, v in user["labels"].items()
                        if isinstance(k, str) and len(k) == 1 and k.isalpha() and v in PREMIERE_LABELS}
@@ -229,6 +239,8 @@ REASON_NO_MATCH = "no match to song"
 REASON_LOW_CONF = "confidence below threshold"
 REASON_AMBIGUOUS = "ambiguous match (repeated section of song)"
 REASON_NO_PICTURE = "no picture (blank or no-signal screen)"
+UNSURE_MIN_A = 6           # a clip too weak to place is still "unsure" (not "no match") when its best guess
+UNSURE_OVER_CHANCE = 2.0   # has this many landmarks and this many times what chance gives
 
 
 # ---------------------------------------------------------------- helpers
@@ -288,6 +300,12 @@ def rate_xml(fps):
     return int(round(fps)), False
 
 
+def fmt_song(seconds):
+    """Song time as m:ss."""
+    t = int(max(0.0, seconds))
+    return "%d:%02d" % (t // 60, t % 60)
+
+
 def fmt_tc(seconds, fps):
     """Signed HH:MM:SS:FF (non-drop) for a duration in seconds."""
     frames = int(round(seconds * fps))
@@ -334,6 +352,7 @@ class Clip:
     par: float = 1.0                     # pixel aspect (anamorphic 2x: 2.0)
     rotation: int = 0                    # degrees the player turns the picture (phones shot upright: 90)
     vcodec: str = ""
+    audio_src: str = ""                  # where the sound is read from, when not the clip itself (RED: a WAV)
     has_audio: bool = False
     audio_channels: int = 0
     audio_layout: list = field(default_factory=list)    # channels in each audio stream, in order
@@ -365,6 +384,7 @@ class Clip:
     split: bool = False                  # the song restarts / jumps inside this take (see parts)
     parts: list = field(default_factory=list)   # Part per pass of the song; one Part when not split
     seq_start_frame: Optional[int] = None
+    guess: Optional[float] = None        # unsure: song time at the best guess (shown in the stringout name)
     notes: list = field(default_factory=list)
     repeat_alt: Optional[float] = None   # placed at the first of two identical sections; the other
 
@@ -388,6 +408,7 @@ class Part:
     track: Optional[int] = None
     notes: list = field(default_factory=list)
     repeat_alt: Optional[float] = None
+    guess: Optional[float] = None        # unsure: song time the song first plays in this pass, at the best guess
 
 
 BRANDS = [("gopro", "GoPro"), ("dji", "DJI"), ("arri", "ARRI"), ("alexa", "ARRI"),
@@ -424,8 +445,44 @@ def sony_sidecar(path):
     return {}
 
 
+def probe_r3d(clip: Clip):
+    """A RED clip through kickoff_r3d: its sound to a WAV that everything else reads, the picture's
+    facts from the helper's JSON. False when the helper isn't there or fails (the clip is then unreadable)."""
+    if not os.path.isfile(R3D_HELPER):
+        clip.probe_error = ".R3D needs RED's free R3D SDK: install it and relaunch Kickoff"
+        return False
+    wav = os.path.join(tempfile.gettempdir(), "kickoff-r3d",
+                       hashlib.md5(clip.path.encode()).hexdigest()[:12] + ".wav")
+    os.makedirs(os.path.dirname(wav), exist_ok=True)
+    r = run([R3D_HELPER, clip.path, wav])
+    try:
+        info = json.loads((r.stdout or b"").decode(errors="replace").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        info = None
+    if r.returncode != 0 or not info:
+        clip.probe_error = "RED reader failed: " + ((r.stderr or b"").decode(errors="replace").strip()[-200:] or "no output")
+        return False
+    clip.fps = snap_fps(float(info.get("fps") or 0)) or None
+    clip.width, clip.height = int(info.get("width") or 0), int(info.get("height") or 0)
+    clip.duration = float(info.get("duration") or 0)
+    clip.timecode = info.get("timecode") or ""
+    clip.vcodec = "r3d"
+    clip.model, clip.make = clip.model or "RED", clip.make or "RED"
+    ch = int(info.get("channels") or 0)
+    if ch:
+        clip.audio_src = wav
+        clip.has_audio = True
+        clip.audio_channels, clip.audio_layout = ch, [ch]
+        clip.audio_rate = int(info.get("rate") or 48000)
+    return True
+
+
 def probe(clip: Clip):
     ext = os.path.splitext(clip.path)[1].lower()
+    if ext == ".r3d":
+        if not probe_r3d(clip):
+            clip.readable = False
+        return
     r = run(["ffprobe", "-v", "error", "-print_format", "json",
              "-show_format", "-show_streams", clip.path])
     if r.returncode != 0:
@@ -611,7 +668,7 @@ def vote_song(songs, clips):
         if not (c.readable and c.has_audio):
             continue
         try:
-            chans = load_channels(c.path, c.audio_layout, limit=VOTE_SECONDS)
+            chans = load_channels(c.audio_src or c.path, c.audio_layout, limit=VOTE_SECONDS)
         except RuntimeError:
             continue
         best = None
@@ -721,6 +778,10 @@ def find_clips(clips_dir, master_path, skip_dirs=()):
             if f.startswith("."):
                 continue
             if os.path.splitext(f)[1].lower() not in MEDIA_EXT:
+                continue
+            sp = R3D_SPAN.match(f)          # a RED clip spans _001, _002... files: it's one clip, the _001
+            if sp and sp.group(2) != "001" and any(R3D_SPAN.match(g) and R3D_SPAN.match(g).group(1) == sp.group(1)
+                                                  and R3D_SPAN.match(g).group(2) == "001" for g in files):
                 continue
             p = os.path.join(root, f)
             if os.path.abspath(p) == master_abs:
@@ -1127,7 +1188,7 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         return
 
     try:
-        chans = load_channels(clip.path, clip.audio_layout)
+        chans = load_channels(clip.audio_src or clip.path, clip.audio_layout)
     except RuntimeError as e:
         clip.reasons.append(REASON_UNREADABLE)
         clip.notes.append("audio decode failed: %s" % e)
@@ -1250,8 +1311,14 @@ def place_on(clip, master, st, cand, multi, speeds=True):
                           ("placed by waveform: %d of %d windows line up (landmarks %d vs %d by chance)"
                            % (n_ok, n, A, N)))
     elif A < st.min_hashes or ev["strength"] < 0.25:
-        clip.reasons.append(REASON_NO_MATCH)
-        clip.notes.append("best alignment %d landmarks vs %d by chance" % (A, N))
+        # too little to place, but a guess well clear of chance (drums, where only the song's opening
+        # reads clearly) is worth the editor's look: unsure, with that guess, rather than no match
+        unsure = A >= UNSURE_MIN_A and A >= UNSURE_OVER_CHANCE * N and speed == 1.0
+        clip.reasons.append(REASON_LOW_CONF if unsure else REASON_NO_MATCH)
+        if unsure:
+            clip.guess = max(0.0, coarse - aoff)
+        clip.notes.append("best alignment %d landmarks vs %d by chance%s"
+                          % (A, N, ", best guess song %.2fs" % (coarse - aoff) if unsure else ""))
         return
     if conf < st.threshold and rescued is None:
         # Landmarks alone aren't decisive (usually because part of the clip is a repeated chorus).
@@ -1275,6 +1342,7 @@ def place_on(clip, master, st, cand, multi, speeds=True):
                               % (REPEAT_NOTE, other - aoff))
         else:
             clip.reasons.append(REASON_LOW_CONF)
+            clip.guess = max(0.0, coarse - aoff)
             clip.notes.append("best guess song %.2fs" % (coarse - aoff))
             return
 
@@ -2345,6 +2413,7 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                                   % (p["off"] + p["first"], e["runner_up_offset"] + p["first"]))
             else:
                 part.reason = REASON_LOW_CONF
+                part.guess = p["off"] + p["first"]
                 part.notes.append("this pass likely starts at song %.1fs" % (p["off"] + p["first"]))
         clip.parts.append(part)
     join_parts(clip)
@@ -2359,6 +2428,7 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
         heard = [p for p in clip.parts if p.reason != REASON_BETWEEN] or clip.parts
         clip.reasons.append(heard[0].reason or REASON_LOW_CONF)
         clip.confidence = heard[0].confidence
+        clip.guess = next((p.guess for p in heard if p.guess is not None), None)
     return True
 
 
@@ -2749,8 +2819,10 @@ class Xmeml:
                 sub(ln, "trackindex", track_of[id(other)])
                 sub(ln, "clipindex", index_of[id(other)])
 
-    def sequence(self, parent, name, fps, width, height, start_tc_frame, entries, label=None, fit="fill"):
-        """entries: dicts with media, start, vtrack (or None), atrack (or None), aenabled."""
+    def sequence(self, parent, name, fps, width, height, start_tc_frame, entries, label=None, fit="fill",
+                 markers=()):
+        """entries: dicts with media, start, vtrack (or None), atrack (or None), aenabled.
+        markers: dicts with name, comment, start and end frames (a marker spanning that stretch)."""
         seq = sub(parent, "sequence", id=self.uid("sequence"))
         sub(seq, "uuid", "musicsync-%s-%s" % (datetime.datetime.now().strftime("%Y%m%d%H%M%S"), self.n))
         sub(seq, "name", name)
@@ -2834,6 +2906,12 @@ class Xmeml:
             sub(t, "enabled", "FALSE" if i - len(vtracks) + 1 in muted else "TRUE")
             sub(t, "locked", "FALSE")
         add_labels(seq, label)
+        for mk in markers:                 # sequence markers, after the tracks as Premiere writes them
+            m = sub(seq, "marker")
+            sub(m, "comment", mk.get("comment", ""))
+            sub(m, "name", mk["name"])
+            sub(m, "in", mk["start"])
+            sub(m, "out", mk["end"])
         return seq
 
 
@@ -2971,13 +3049,15 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song
     return entries, start_tc
 
 
+GRIDS = (4, 9, 16)             # Premiere's Multi-Camera monitor: 2x2, 3x3, 4x4, then pages of 16
+
+
 def condense(entries, fps):
-    """The same clips on fewer video tracks (fewer feeds in multicam), within the smallest of
-    2, 4, 8, 16... tracks that fits every overlap. Clips go in clip order, each on the highest
-    track that's free for its whole length, so clip 1 sits on V1 and the rest follow it down;
-    only if that order can't fit the budget are they packed in timeline order instead. Either way
-    the tracks are then ordered by their first clip. Nothing is
-    cut or moved in time; its scratch audio follows it to the matching audio track."""
+    """The same clips on fewer video tracks (fewer feeds in multicam): the smallest of Premiere's
+    multicam grids (4, 9, 16 angles, then pages of 16) that every overlap fits, and then every track of
+    that grid used. Clips are dealt out in clip order, clip 1 on V1, clip 2 on V2... and round again
+    from V1; a clip moves on to the next free track only when its own is taken at that moment.
+    Nothing is cut or moved in time; its scratch audio follows it to the matching audio track."""
     vids = [e for e in entries if e.get("vtrack") and not e.get("tail")]
     spans = {id(e): (e["start"], e["start"] + entry_span(e, fps)[1]) for e in vids}
     edges = sorted([(a, 1) for a, b in spans.values()] + [(b, -1) for a, b in spans.values()],
@@ -2986,31 +3066,18 @@ def condense(entries, fps):
     for _, d in edges:
         cur += d
         need = max(need, cur)
-    tracks = 2
-    while tracks < need:
-        tracks *= 2
-    def pack(order):                                     # each clip on the highest free track
-        busy, place = [], {}
-        for e in order:
-            a, b = spans[id(e)]
-            k = next((k for k, t in enumerate(busy) if all(b <= x or a >= y for x, y in t)), None)
-            if k is None:
-                k = len(busy)
-                busy.append([])
-            busy[k].append((a, b))
-            place[id(e)] = k + 1
-        return place
-    # clip order first (clip 1 on V1, later clips below it in order); if that needs more tracks
-    # than the budget, timeline order, which always fits in the fewest
-    place = pack(sorted(vids, key=lambda e: e["vtrack"]))
-    if max(place.values(), default=0) > tracks:
-        place = pack(sorted(vids, key=lambda e: (e["start"], e["vtrack"])))
-    # tracks top to bottom by their first clip, so V1 always holds clip 1
-    first = {}
-    for e in vids:
-        first[place[id(e)]] = min(first.get(place[id(e)], e["vtrack"]), e["vtrack"])
-    renum = {k: i + 1 for i, k in enumerate(sorted(first, key=first.get))}
-    place = {i: renum[k] for i, k in place.items()}
+    tracks = next((g for g in GRIDS if need <= g), -(-need // 16) * 16)
+    # clip n's own track is n (mod the grid): clip 1 on V1, clip 2 on V2... Going through the clips
+    # by start time, each takes its own track if that's free by then, else the next free one after
+    # it; there's always one, since no more than `tracks` clips ever play at once
+    rank = {id(e): n for n, e in enumerate(sorted(vids, key=lambda e: e["vtrack"]))}
+    ends, place = [None] * tracks, {}
+    for e in sorted(vids, key=lambda e: (spans[id(e)][0], e["vtrack"])):
+        a, b = spans[id(e)]
+        own = rank[id(e)] % tracks
+        k = next(k % tracks for k in range(own, own + tracks) if ends[k % tracks] is None or ends[k % tracks] <= a)
+        ends[k] = b
+        place[id(e)] = k + 1
     out = []
     for e in entries:
         if e.get("tail"):                                  # clips that didn't sync stay on V1 after the song
@@ -3069,6 +3136,7 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
     sub(proj, "name", name)
     top = sub(proj, "children")
     setup_only = getattr(args, "mode", "music") == "setup"          # no song: no Sync sequences
+    narr = getattr(args, "narrative", None)          # narrative: one Sync sequence, no Synced/Condensed
 
     def maybe_empty(parent, path, has_items):
         if not has_items and args.placeholders:
@@ -3080,6 +3148,8 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
     def make(parent, bins, path):
         for b in bins:
             if setup_only and b.get("role") in ("sync", "synced", "condensed"):
+                continue
+            if narr and b.get("role") in ("synced", "condensed"):
                 continue
             ch = bin_(parent, b["name"])
             here = path + [b["name"]]
@@ -3103,8 +3173,8 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
     syncb = where["sync"][0] if not setup_only else None
     # every take on its own track in Sync > Synced; the same packed onto as few tracks as can hold
     # them in Sync > Synced Condensed, which is what CamsNested and Edit nest (fewer multicam feeds)
-    syncedb = where["synced"][0] if syncb is not None else None
-    condb = where["condensed"][0] if syncb is not None else None
+    syncedb = where["synced"][0] if syncb is not None and not narr else None
+    condb = where["condensed"][0] if syncb is not None and not narr else None
     nests = []
     for letter, cl in cams:
         label = camera_label(letter)
@@ -3113,20 +3183,30 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             (w, h), fps = first_format(usable, seq_fps)
             entries, tc = stringout_entries(usable, fps, label)
             xw.sequence(breakup, seq_name("breakup", letter), fps, w, h, tc, entries, label)
-        placed = placements_of(cl)
+        placed = placements_of(cl) if not narr else []
         if placed and syncb is not None:
             (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label)
-            tail = unsynced_entries(cl, entries, seq_fps, preroll, master_media) if SETTINGS["unsynced"] else []
+            tail, marks = unsynced_entries(cl, entries, seq_fps, preroll, master_media) \
+                if SETTINGS["unsynced"] else ([], [])
             for e in tail:
                 e["label"] = label
             entries += tail
-            xw.sequence(syncedb, seq_name("synced", letter), seq_fps, w, h, tc, entries, label)
+            # every clip of the camera is on a track or in the stringout: say which ones can't be
+            gone = [os.path.basename(c.path) for c in left_out(cl) if not (c.readable and c.duration)]
+            if gone and SETTINGS["unsynced"]:
+                log("Not in %s (ffmpeg can't read them): %s" % (seq_name("synced", letter), ", ".join(gone)))
+            marks = unsure_markers(placed, entries, seq_fps) + marks
+            xw.sequence(syncedb, seq_name("synced", letter), seq_fps, w, h, tc, entries, label, markers=marks)
             seq = xw.sequence(condb, seq_name("condensed", letter), seq_fps, w, h, tc,
-                              condense(entries, seq_fps), label)
+                              condense(entries, seq_fps), label, markers=marks)
             nests.append((letter, seq, (w, h), tc))
     maybe_empty(breakup, bpath, bool(len(breakup)))
-    if syncb is not None:
+    if narr and syncb is not None:
+        (w, h) = args.sync_size or (first_format([c for c in clips if c.readable and c.fps and c.width], seq_fps)[0]
+                                    if any(c.width for c in clips) else (3840, 2160))
+        xw.sequence(syncb, narr["name"], seq_fps, w, h, start_frames(seq_fps), narr["entries"])
+    elif syncb is not None:
         maybe_empty(syncedb, where["synced"][1], bool(nests))
         maybe_empty(condb, where["condensed"][1], bool(nests))
 
@@ -3145,9 +3225,10 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             if master_media and not args.no_master_audio:
                 entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1, tall=True))
             return entries
-        xw.sequence(syncb, seq_name("nested", project=name), seq_fps, w, h, tc, all_cams())
+        xw.sequence(condb if condb is not None else syncb, seq_name("nested", project=name), seq_fps, w, h, tc,
+                    all_cams())
         xw.sequence(edit, seq_name("edit", project=name), seq_fps, w, h, tc, all_cams())
-    elif setup_only:
+    elif setup_only or narr:
         # an empty sequence to cut in, at the delivery size, starting at 01:00:00:00
         usable = [c for c in clips if c.readable and c.fps and c.width]
         (w, h) = args.sync_size or (first_format(usable, seq_fps)[0] if usable else (3840, 2160))
@@ -3207,21 +3288,73 @@ def clip_name(c, p):
 UNSYNCED_GAP_S = 60     # clips that didn't sync start this long after the song (or the last take) ends
 
 
+UNSURE_REASONS = (REASON_LOW_CONF, REASON_AMBIGUOUS, REASON_SHORT)
+
+
+def is_unsure(c):
+    return bool(c.reasons) and c.reasons[0] in UNSURE_REASONS
+
+
+def left_out(clips):
+    """Clips of a camera with no pass on a Synced track: every one of them goes in the stringout."""
+    return [c for c in clips if not (c.status == "placed" and any(p.status == "placed" for p in c.parts))]
+
+
 def unsynced_entries(clips, entries, seq_fps, preroll_s, master_media):
-    """Clips of a camera that didn't line up with the song, back to back on V1 in file order, a
-    minute after the song and every synced take have ended, each with all its camera audio on
-    A2, A3... (the song is on A1), named with why it wasn't synced."""
-    left = [c for c in clips if c.readable and c.fps and c.width and c.status != "placed"]
-    if not left:
-        return []
+    """Footage of a camera that isn't on a Synced track, back to back on V1 a minute after the song
+    and every synced take have ended: whole clips that didn't line up, and the passes of a restarted
+    take that weren't placed (between plays too: no footage is ever dropped). The unsure ones first,
+    then the rest, each group in file order, each with all its camera audio on A2, A3... (the song is
+    on A1), named with why it wasn't synced. Returns (entries, markers), one marker spanning each group."""
+    items = []                          # (clip, part or None for the whole clip, unsure?)
+    for c in clips:
+        if not (c.readable and c.duration):
+            continue
+        if left_out([c]):
+            items.append((c, None, is_unsure(c)))
+        elif c.split:
+            items += [(c, p, p.reason in UNSURE_REASONS) for p in c.parts
+                      if p.status != "placed" and p.src_out - p.src_in >= 1.0]
+    if not items:
+        return [], []
     ends = [int(round(preroll_s * seq_fps)) + int(round((master_media.duration if master_media else 0) * seq_fps))]
     ends += [e["start"] + entry_span(e, seq_fps)[1] for e in entries if e.get("media") is not None]
-    pos, out = max(ends) + int(round(UNSYNCED_GAP_S * seq_fps)), []
-    for c in left:
-        why = re.split(r"\s*[(;]", (c.reasons or ["not synced"])[0])[0].strip()
-        out.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=2, all_audio="raw",
-                        label=None, tail=True, name="%s (%s)" % (os.path.basename(c.path), why)))
-        pos += int(round(c.duration * seq_fps))
+    pos, out, markers = max(ends) + int(round(UNSYNCED_GAP_S * seq_fps)), [], []
+    for title, group in (("Unsure", [it for it in items if it[2]]), ("No match", [it for it in items if not it[2]])):
+        if not group:
+            continue
+        if markers:                     # a minute between the Unsure clips and the No match ones too
+            pos += int(round(UNSYNCED_GAP_S * seq_fps))
+        first = pos
+        for c, p, _ in group:
+            reason = p.reason if p is not None else (c.reasons or ["not synced"])[0]
+            why = re.split(r"\s*[(;]", reason or "not synced")[0].strip()
+            if p is None and c.status == "placed":      # placed, but no pass of it made it onto a track
+                why = "not synced"
+            guess = p.guess if p is not None else c.guess
+            if guess is not None and title == "Unsure":
+                why += ", song %s?" % fmt_song(guess)
+            if p is not None:
+                why = "pass %d of %d, %s" % (c.parts.index(p) + 1, len(c.parts), why)
+            src = (p.src_in, p.src_out) if p is not None else None
+            out.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=2, all_audio="raw",
+                            label=None, tail=True, src=src, name="%s (%s)" % (os.path.basename(c.path), why)))
+            pos += max(1, entry_span(out[-1], seq_fps)[1])
+        n = len(group)
+        markers.append(dict(name=title, comment="%d clip%s or passes that didn't sync" % (n, "s"[n == 1:]),
+                            start=first, end=pos))
+    return out, markers
+
+
+def unsure_markers(placed, entries, fps):
+    """An "Unsure" marker spanning each placed pass the waveform doesn't back up (worth a look)."""
+    weak = {id(p) for c, _, p in doubtful([c for c, _ in placed])}
+    out = []
+    for (c, p), e in zip(placed, [e for e in entries if e.get("vtrack") and not e.get("tail")]):
+        if id(p) in weak:
+            out.append(dict(name="Unsure", comment="%s: the waveform only partly lines up here"
+                            % (clip_name(c, p) or os.path.basename(c.path)),
+                            start=e["start"], end=e["start"] + entry_span(e, fps)[1]))
     return out
 
 
@@ -3503,10 +3636,15 @@ def main(argv=None):
                     help="keep placed stretches whose picture is a flat color (see drop_blank)")
     ap.add_argument("--no-cache", action="store_true",
                     help="don't keep decoded camera audio for the next run (see audio_cache_dir)")
-    ap.add_argument("--mode", choices=["auto", "music", "setup"], default="auto",
-                    help="music: sync to the song (music video); setup: bins, Breakups and an empty Edit "
-                         "sequence only (commercials); auto (default): music when a song is found and "
-                         "clips line up with it")
+    ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras"], default="auto",
+                    help="music: sync to the song (music video); narrative: sync each clip to the sound "
+                         "recordist's audio files (timecode, else scratch audio) in one Sync sequence; cameras: "
+                         "narrative with no sound files, the cameras synced to each other; setup: "
+                         "bins, Breakups and an empty Edit sequence only (commercials); auto (default): music "
+                         "when a song is found and clips line up with it")
+    ap.add_argument("--sync-by", choices=["auto", "timecode", "audio"], default=None,
+                    help="auto (default): timecode when the clip and the audio both carry it, else the "
+                         "sound; audio: ignore timecode; timecode: only timecode")
     ap.add_argument("--rebuild", action="store_true",
                     help="build the whole project again even if this folder was run before (by default a "
                          "second run only adds the cards that are new since then)")
@@ -3519,6 +3657,12 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.no_cache:
         os.environ["KICKOFF_NO_CACHE"] = "1"
+    args.cams_together = args.mode == "cameras"
+    if args.cams_together:
+        args.mode = "narrative"
+    if args.sync_by is None:          # the Settings page's choice for this kind of project
+        args.sync_by = ("auto" if SETTINGS["timecode_narrative"] else "audio") if args.mode == "narrative" \
+            else ("timecode" if SETTINGS["timecode_music"] else "audio")
     global EVENTS
     EVENTS = args.events
     if args.sync_size == "first":
@@ -3531,13 +3675,16 @@ def main(argv=None):
     # folders, and loose files dropped with them: footage and audio are taken, anything else
     # (XMLs, text, stills, project files) is left out
     folders, files, other = [os.path.abspath(p) for p in args.paths if os.path.isdir(p)], [], []
+    narr_audio = []                                    # narrative: every loose audio file is recorded sound
     for p in args.paths:
         if os.path.isdir(p):
             continue
         if not os.path.isfile(p):
             sys.exit("error: %s is not a folder or a file" % p)
         ext = os.path.splitext(p)[1].lower()
-        if ext in AUDIO_EXT and not args.master:
+        if ext in AUDIO_EXT and args.mode == "narrative":
+            narr_audio.append(os.path.abspath(p))
+        elif ext in AUDIO_EXT and not args.master:
             args.master = p                            # the first audio file is the song
         elif ext in AUDIO_EXT or ext in MEDIA_EXT:
             if os.path.abspath(p) != os.path.abspath(args.master or ""):
@@ -3565,7 +3712,7 @@ def main(argv=None):
                                                + (" ..." if len(args.only) > 12 else "")))
     out_given = bool(args.out)
     args.out = os.path.abspath(args.out or os.path.join(args.clips, OUT_DIR))
-    state, restrict = (None, None) if args.rebuild else load_state(args, out_given)
+    state, restrict = (None, None) if args.rebuild or args.mode == "narrative" else load_state(args, out_given)
     args.xml_out = xml_folder(args)
     project_name = args.name or (state or {}).get("project") or os.path.basename(args.clips.rstrip("/\\")) or "Sync"
 
@@ -3584,6 +3731,13 @@ def main(argv=None):
 
     all_audio = find_audio(args.clips, [args.out])
     audio_files = [p for p in all_audio if inside(p, args.only)]
+    if args.mode == "narrative":
+        # the recorded sound: loose files dropped, and audio in the folders (not Music or SFX)
+        def not_music(p):
+            return not any(x.lower() in MUSIC_DIRS or x.lower() in ("sfx", "sound effects", "sound fx")
+                           for x in os.path.relpath(p, args.clips).replace("\\", "/").split("/")[:-1])
+        os.makedirs(args.out, exist_ok=True)
+        return narrative(args, project_name, sorted(set(narr_audio + [p for p in audio_files if not_music(p)])))
     if args.mode != "setup" and not args.master:
         # the song can sit outside the cards dropped (Audio/Music next to them): look everywhere
         ties = []
@@ -3668,6 +3822,19 @@ def main(argv=None):
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         list(ex.map(probe, clips))
 
+    if master is not None and args.sync_by in ("timecode", "auto"):
+        # the song file's timecode start, and each clip's: a clip whose timecode falls in the song
+        # goes there without listening (only when asked: a song's timecode is often meaningless)
+        song_tc = audio_timecode(args.master)[0]
+        if song_tc is None:
+            log("The song file carries no timecode, so every clip syncs by its sound")
+        else:
+            for c in clips:
+                ts = tc_seconds(c.timecode, c.fps)
+                if ts is not None and ts + (c.duration or 0) > song_tc and ts < song_tc + master.duration:
+                    c.offset, c.status, c.how, c.confidence = ts - song_tc, "placed", "timecode", 100.0
+                    c.notes.append("by timecode %s (song starts at %s)" % (c.timecode, "%02d:%02d:%02d" % (song_tc // 3600, song_tc // 60 % 60, song_tc % 60)))
+            log("%d clips placed by timecode" % sum(getattr(c, "how", "") == "timecode" for c in clips))
     if master is not None:
         event("start", project=project_name, folder=args.clips, song=os.path.basename(args.master),
               song_duration=round(master.duration, 2), clips=len(clips), version=VERSION, mode="music",
@@ -3778,7 +3945,8 @@ def main(argv=None):
           restarted=sum(1 for c in clips if c.split),
           check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None),
           worth_a_look=len({id(c) for c, _, _ in doubtful(clips)}),   # clips, not parts
-          song_note=song_note)
+          song_note=song_note,
+          lists=clip_lists(clips, master))
 
 
 def move_to_song(clips, shift):
@@ -3788,6 +3956,39 @@ def move_to_song(clips, shift):
             for k in ("offset", "repeat_alt", "runner_up_offset"):
                 if getattr(obj, k, None) is not None:
                     setattr(obj, k, getattr(obj, k) - shift)
+
+
+def clip_lists(clips, master):
+    """For the window's results: which clips each summary line counts ({file, cam, at}, `at` the song
+    second the clip lands at), so Jake can see them and copy their names."""
+    def item(c, p=None):
+        at = None
+        if p is not None and p.status == "placed":
+            at = round(p.offset + p.src_in * c.speed, 1)
+        elif song_spans(c):
+            at = round(min(sp[0] for sp in song_spans(c)), 1)
+        d = dict(file=os.path.basename(c.path), cam=clip_cam(c), at=at)
+        if c.status != "placed" and c.guess is not None:
+            d["guess"] = round(c.guess, 1)
+        return d
+    if master is None:
+        return {}
+    look, seen = [], set()
+    for c, _, p in doubtful(clips):
+        if id(c) not in seen:
+            seen.add(id(c))
+            look.append(item(c, p))
+    aside = collections.defaultdict(list)
+    for c in clips:
+        if c.status != "placed":
+            aside[c.reasons[0] if c.reasons else REASON_NO_MATCH].append(item(c))
+    chorus = [item(c, p) for c in clips for p in c.parts if p.repeat_alt is not None]
+    def plays(c):                      # passes of the song; the stretches between them aren't plays
+        return [p for p in c.parts if p.reason != REASON_BETWEEN]
+    return dict(worth_a_look=look, restarted=[dict(item(c), passes=len(plays(c)),
+                                                   placed=sum(p.status == "placed" for p in plays(c)))
+                                              for c in clips if c.split], check_chorus=chorus,
+                aside=dict(aside))
 
 
 def clip_cam(c):
@@ -3816,6 +4017,8 @@ def match_all(clips, master, args):
     def work(c):
         if give_up:                      # auto mode, and nothing lines up with the "song": stop early
             return c
+        if getattr(c, "how", "") == "timecode":      # already placed by timecode
+            return c
         try:
             sync_clip(c, master, st)
             if not getattr(args, "keep_blank", False):
@@ -3841,7 +4044,7 @@ def match_all(clips, master, args):
                 res = "-- " + "; ".join(c.reasons)
             log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, res))
             event("clip", done=done, total=len(clips), file=c.rel, status=c.status,
-                  passes=len(c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "",
+                  passes=sum(p.reason != REASON_BETWEEN for p in c.parts) if c.split else 1, reason=c.reasons[0] if c.reasons else "",
                   cam=clip_cam(c), spans=song_spans(c))
             placed += c.status == "placed"
             tried += c.status == "placed" or (c.reasons[:1] in ([REASON_NO_MATCH], [REASON_LOW_CONF]))
@@ -3849,6 +4052,464 @@ def match_all(clips, master, args):
                     and tried >= 12 and not give_up:
                 log("12 clips with sound and none lines up with the song: not a music video shoot")
                 give_up.append(True)
+
+
+NARR_NO_MATCH = "no match to any audio file"
+NARR_GAP_S = 2.0        # silence between audio files while listening, and between them on the timeline
+
+
+def tc_seconds(tc, fps):
+    """A timecode label ("01:02:03:04", drop frame ';' too) as seconds of labels: frames count at the
+    nominal rate (23.976 counts 24), which is how a recorder's timecode reads too."""
+    m = re.match(r"^(\d+)[:;.](\d+)[:;.](\d+)[:;.](\d+)$", (tc or "").strip())
+    if not m or not fps:
+        return None
+    h, mi, s, f = (int(x) for x in m.groups())
+    return h * 3600 + mi * 60 + s + f / max(1, round(fps))
+
+
+def audio_timecode(path):
+    """(start in seconds of timecode labels, duration, channels, rate) of an audio file. A BWF
+    recorder file carries its start as time_reference (samples since midnight); some files carry a
+    timecode tag instead. None when there's neither."""
+    r = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path])
+    info = json.loads(r.stdout or b"{}") if r.returncode == 0 else {}
+    a = next((s for s in info.get("streams", []) if s.get("codec_type") == "audio"), {})
+    rate = int(a.get("sample_rate") or 48000)
+    tags = {k.lower(): v for k, v in ((info.get("format") or {}).get("tags") or {}).items()}
+    tags.update({k.lower(): v for k, v in (a.get("tags") or {}).items()})
+    start = None
+    if str(tags.get("time_reference", "")).strip().isdigit():
+        start = int(tags["time_reference"]) / rate
+    elif tags.get("timecode"):
+        start = tc_seconds(tags["timecode"], 30)
+    return start, float((info.get("format") or {}).get("duration") or 0), int(a.get("channels") or 2), rate
+
+
+def narrative(args, project_name, audio_paths):
+    """Narrative: every clip synced to the recorder's audio file it was shot with, by timecode when
+    both have it, else by the camera's scratch audio. One Sync sequence: the audio files end to end in
+    order on A1, each clip over its sound (A Cam on the lowest video tracks, other cameras above), and
+    nothing trimmed or moved over another file's sound. Breakups hold the camera clips as shot."""
+    cams_only = getattr(args, "cams_together", False) and not audio_paths
+    if not audio_paths and not cams_only:
+        sys.exit("error: add the sound recordist's audio files (or their folder) to sync the footage to")
+    clips = [c for c in find_clips(args.clips, None, [args.out]) if inside(c.path, args.only)]
+    if not clips:
+        sys.exit("error: no video files found in %s" % ", ".join(args.only or [args.clips]))
+    event("stage", text="Reading %d clips and %d audio files" % (len(clips), len(audio_paths)))
+    with cf.ThreadPoolExecutor(args.jobs) as ex:
+        list(ex.map(probe, clips))
+        info = list(ex.map(audio_timecode, audio_paths))
+    files = [dict(path=p, tc=i[0], dur=i[1], ch=i[2], rate=i[3]) for p, i in zip(audio_paths, info) if i[1] > 0]
+    if cams_only:
+        return narrative_cameras(args, project_name, clips)
+    # in the order they were recorded: by timecode when every file has it, else by name
+    if files and all(f["tc"] is not None for f in files):
+        files.sort(key=lambda f: (f["tc"], f["path"]))
+    else:
+        files.sort(key=lambda f: os.path.basename(f["path"]).lower())
+    log("Audio files, in order: %s" % ", ".join(os.path.basename(f["path"]) for f in files))
+
+    # listening: every file mixed to mono, end to end with a little silence between, indexed once
+    event("stage", text="Listening to the audio files")
+    chunks, pos = [], 0.0
+    for f in files:
+        try:
+            x = load_audio(f["path"])
+        except RuntimeError as e:
+            log("  can't read %s: %s" % (os.path.basename(f["path"]), e))
+            x = np.zeros(int(f["dur"] * SR), np.float32)
+        f["at"] = pos                                  # where it starts in what the clips are matched to
+        chunks += [x, np.zeros(int(NARR_GAP_S * SR), np.float32)]
+        pos += len(x) / SR + NARR_GAP_S
+    master = MasterIndex(np.concatenate(chunks)) if chunks else None
+    total = pos
+
+    def file_at(a, b):                                 # the file a stretch [a, b] overlaps most
+        best = max(files, key=lambda f: min(b, f["at"] + f["dur"]) - max(a, f["at"]))
+        return best if min(b, best["at"] + best["dur"]) > max(a, best["at"]) else None
+
+    event("start", project=project_name, folder=args.clips, song="%d audio files" % len(files),
+          song_duration=round(total, 2), clips=len(clips), version=VERSION, mode="narrative",
+          cams=collections.Counter(clip_cam(c) for c in clips))
+    st = Settings(threshold=args.threshold, min_hashes=args.min_landmarks, max_fps=args.max_fps,
+                  place_repeats=False)
+
+    def work(c):
+        c.how = ""
+        # timecode first: the clip's start label inside one file's labels
+        ts = tc_seconds(c.timecode, c.fps) if args.sync_by != "audio" else None
+        if ts is not None:
+            # the file whose timecode span the clip's overlaps most
+            te = ts + (c.duration or 0) * c.speed
+            ov = [(min(te, f["tc"] + f["dur"]) - max(ts, f["tc"]), i) for i, f in enumerate(files) if f["tc"] is not None]
+            if ov and max(ov)[0] > 0:
+                f = files[max(ov)[1]]
+                c.offset, c.status, c.how = f["at"] + ts - f["tc"], "placed", "timecode"
+                c.confidence = 100.0
+                c.notes.append("by timecode %s in %s" % (c.timecode, os.path.basename(f["path"])))
+                return c
+        if not c.readable:
+            c.reasons.append(REASON_UNREADABLE)
+            return c
+        if args.sync_by == "timecode":
+            c.reasons.append("timecode outside every audio file" if ts is not None else "no timecode")
+            return c
+        try:
+            sync_clip(c, master, st)
+        except Exception as e:
+            c.reasons.append(REASON_UNREADABLE)
+            c.notes.append("error: %s" % e)
+            return c
+        if c.status == "placed" and c.split:
+            # a clip is never cut: the whole clip goes where its longest synced stretch puts it
+            p = max((p for p in c.parts if p.status == "placed"), key=lambda p: p.src_out - p.src_in)
+            c.offset, c.confidence = p.offset, p.confidence
+            c.notes.append("placed whole by its longest matching stretch (%d stretches heard)" % len(c.parts))
+            c.split, c.parts = False, []
+        if c.status == "placed":
+            c.how = "scratch audio"
+        return c
+
+    done = 0
+    with cf.ThreadPoolExecutor(args.jobs) as ex:
+        for c in ex.map(work, clips):
+            done += 1
+            if c.status == "placed" and file_at(c.offset, c.offset + c.duration * c.speed) is None:
+                c.status, c.reasons = "", ["lines up with no audio file"]
+            if c.status != "placed":
+                c.status = "not placed"
+                c.reasons = [NARR_NO_MATCH if r in (REASON_NO_MATCH, REASON_LOW_CONF) else r for r in c.reasons] \
+                    or [NARR_NO_MATCH]
+            log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, ("%.3fs by %s" % (c.offset, c.how))
+                                        if c.status == "placed" else "-- " + "; ".join(c.reasons)))
+            af = file_at(c.offset, c.offset + c.duration * c.speed) if c.status == "placed" else None
+            event("clip", done=done, total=len(clips), file=c.rel, status=c.status, passes=1,
+                  reason=c.reasons[0] if c.reasons else "", cam=clip_cam(c),
+                  audio=os.path.basename(af["path"]) if af else "", by=c.how if af else "",
+                  spans=[[round(c.offset, 2), round(c.offset + c.duration * c.speed, 2)]] if c.status == "placed" else [])
+
+    # the timeline: each file after the one before, with room for clips that roll before it starts
+    # or after it ends, so no clip reaches over another file's sound
+    placed = [c for c in clips if c.status == "placed"]
+    for c in placed:
+        c.afile = file_at(c.offset, c.offset + c.duration * c.speed)
+    seq_fps = args.fps or (collections.Counter(c.fps for c in placed if c.fps).most_common(1) or
+                           collections.Counter(c.fps for c in clips if c.fps).most_common(1) or [(24.0, 0)])[0][0]
+    t = 0.0
+    for f in files:
+        mine = [c for c in placed if c.afile is f]
+        head = max([0.0] + [f["at"] - c.offset for c in mine])
+        tail = max([0.0] + [c.offset + c.duration * c.speed - (f["at"] + f["dur"]) for c in mine])
+        f["pos"] = t + head
+        t = f["pos"] + f["dur"] + tail + NARR_GAP_S
+    for c in placed:
+        c.tl = c.afile["pos"] + (c.offset - c.afile["at"])      # timeline seconds of its first frame
+        c.in_file = c.offset - c.afile["at"]                     # ... and into its audio file
+
+    labels = assign_cameras(clips, args.group_by)
+    cams = []
+    for key, letter in sorted(labels.items(), key=lambda kv: kv[1]):
+        cams.append((letter, sorted([c for c in clips if c.camera_key == key], key=lambda c: c.rel)))
+    # video tracks: A Cam's clips on the fewest tracks from V1 up (by time), then B Cam's above...
+    fr = lambda s: int(round(s * seq_fps))
+    base, entries = 0, []
+    n_audio = 1
+    for f in files:
+        f["media"] = Media(f["path"], seq_fps, f["dur"], has_video=False, channels=f["ch"], rate=f["rate"])
+        entries.append(dict(media=f["media"], start=fr(f["pos"]), vtrack=None, atrack=1))
+    for letter, cl in cams:
+        label = camera_label(letter)
+        ends = []
+        for c in sorted([c for c in cl if c.status == "placed" and c.width], key=lambda c: (c.tl, c.rel)):
+            a, b = fr(c.tl), fr(c.tl) + fr(c.duration * c.speed)
+            k = next((k for k, e in enumerate(ends) if e <= a), None)
+            if k is None:
+                k = len(ends)
+                ends.append(b)
+            ends[k] = b
+            c.track = base + k + 1
+            entries.append(dict(media=Media.of_clip(c, seq_fps), start=a, vtrack=c.track, atrack=n_audio + c.track,
+                                aenabled=True, label=label, speed=c.speed))
+        base += len(ends)
+    # clips that didn't sync: back to back on V1 a minute after the last file, named with why
+    pos = fr(t + UNSYNCED_GAP_S)
+    for letter, cl in cams:
+        for c in cl:
+            if c.status == "placed" or not (c.readable and c.fps and c.width):
+                continue
+            why = re.split(r"\s*[(;]", (c.reasons or ["not synced"])[0])[0].strip()
+            entries.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=2, all_audio="raw",
+                                label=camera_label(letter), tail=True, name="%s (%s)" % (os.path.basename(c.path), why)))
+            pos += fr(c.duration)
+
+    audio_bins = collections.defaultdict(list)
+    for f in files:
+        audio_bins["Captured"].append(f["media"])
+    sync_name = "%s_Sync" % project_name
+    args.narrative = dict(name=sync_name, entries=entries)
+    event("stage", text="Writing the Premiere project")
+    proj_file = re.sub(r"[^\w .-]+", "_", project_name) + ".xml"
+    write_xml(build_project(project_name, clips, cams, seq_fps, 0.0, None, audio_bins, args),
+              os.path.join(args.xml_out, proj_file))
+    log("Wrote %s" % os.path.join(args.xml_out, proj_file))
+
+    # the report: which file each clip went with, how, and where
+    report = os.path.join(args.out, "narrative_report.csv")
+    with open(report, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["file", "camera", "status", "synced_by", "audio_file", "starts_into_audio_s",
+                    "timeline_timecode", "reason"])
+        for letter, cl in cams:
+            for c in cl:
+                ok = c.status == "placed"
+                w.writerow([c.rel, "%s Cam" % letter, c.status, c.how if ok else "",
+                            os.path.basename(c.afile["path"]) if ok else "", "%.3f" % c.in_file if ok else "",
+                            fmt_frames(start_frames(seq_fps) + fr(c.tl), seq_fps) if ok else "",
+                            "" if ok else "; ".join(c.reasons)])
+    log("Wrote %s. Synced %d of %d clips (%d by timecode)." % (
+        os.path.basename(report), len(placed), len(clips), sum(c.how == "timecode" for c in placed)))
+    aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH for c in clips if c.status != "placed")
+    lists = dict(aside={}, worth_a_look=[], restarted=[], check_chorus=[])
+    for c in clips:
+        if c.status != "placed":
+            lists["aside"].setdefault(c.reasons[0] if c.reasons else REASON_NO_MATCH, []).append(
+                dict(file=os.path.basename(c.path), cam=clip_cam(c), at=None))
+    event("done", project=project_name, edit_name=seq_name("edit", project=project_name), out=args.out,
+          xml=os.path.join(args.xml_out, proj_file), report=report, song_duration=round(t, 2), mode="narrative",
+          clips=len(clips), synced=len(placed), sync_name=sync_name, audio=len(files),
+          by_timecode=sum(c.how == "timecode" for c in placed),
+          cameras=[dict(letter=l, name=cam_bin_name(l, cl), label=camera_label(l), clips=len(cl),
+                        synced=sum(c.status == "placed" for c in cl),
+                        spans=sorted([round(c.tl, 2), round(c.tl + c.duration * c.speed, 2)]
+                                     for c in cl if c.status == "placed")) for l, cl in cams],
+          set_aside=[dict(reason=r, count=k) for r, k in aside.most_common()],
+          unreadable=sum(1 for c in clips if not c.readable), restarted=0, check_chorus=0, worth_a_look=0,
+          lists=lists)
+
+
+def narrative_cameras(args, project_name, clips):
+    """Narrative with no sound files: the cameras synced to each other. A Cam's clips are the takes;
+    every other camera's clip is lined up with the take it was shot with, by timecode when both carry
+    it, else by scratch audio. A clip that lines up with no A Cam take starts a take of its own (B Cam
+    leads when A didn't roll), and the next camera's clips are tried against those too. One Sync
+    sequence: the takes in shooting order, A Cam on V1, B Cam above, nothing trimmed; clips that can't
+    be read go back to back on V1 after everything, in file order."""
+    labels = assign_cameras(clips, args.group_by)
+    cams = []
+    for key, letter in sorted(labels.items(), key=lambda kv: kv[1]):
+        cams.append((letter, sorted([c for c in clips if c.camera_key == key], key=lambda c: c.rel)))
+    letter_of = {c.path: l for l, cl in cams for c in cl}
+    event("start", project=project_name, folder=args.clips, song="the cameras", song_duration=0,
+          clips=len(clips), version=VERSION, mode="narrative",
+          cams=collections.Counter(clip_cam(c) for c in clips))
+    st = Settings(threshold=args.threshold, min_hashes=args.min_landmarks, max_fps=args.max_fps,
+                  place_repeats=False)
+    usable = [c for c in clips if c.readable and c.width]
+    for c in clips:
+        c.how, c.afile = "", None
+        if c not in usable:
+            c.status, c.reasons = "not placed", c.reasons or [REASON_UNREADABLE]
+    files, chunks, pos = [], [], 0.0
+    master = None
+    done = 0
+
+    def report(c):
+        nonlocal done
+        done += 1
+        f = c.afile
+        event("clip", done=done, total=len(clips), file=c.rel, status=c.status, passes=1,
+              reason=c.reasons[0] if c.reasons else "", cam=clip_cam(c),
+              audio=(os.path.basename(f["clip"].path) if f and f["clip"] is not c else ""),
+              by=c.how if f and f["clip"] is not c else "", spans=[])
+
+    def file_at(a, b):
+        best = max(files, key=lambda f: min(b, f["at"] + f["dur"]) - max(a, f["at"]))
+        return best if min(b, best["at"] + best["dur"]) > max(a, best["at"]) else None
+
+    def take_of(c):
+        """The take a clip placed by its sound belongs to. A clip can hang over the take before or after
+        its own in what it was matched against, so of the takes it overlaps, the one whose sound it
+        really matches (normalised correlation over the overlap) wins."""
+        a, b = c.offset, c.offset + c.duration * c.speed
+        cand = [f for f in files if min(b, f["at"] + f["dur"]) - max(a, f["at"]) > 0.5]
+        if len(cand) < 2 or c.how != "scratch audio":
+            return file_at(a, b)
+        try:
+            y = load_audio(c.audio_src or c.path)
+        except RuntimeError:
+            return file_at(a, b)
+
+        def score(f):
+            lo, hi = max(a, f["at"]), min(b, f["at"] + f["dur"])
+            u = f["x"][int((lo - f["at"]) * SR):int((hi - f["at"]) * SR)]
+            v = y[int((lo - a) / c.speed * SR):][:len(u)]
+            n = min(len(u), len(v))
+            if n < SR // 2:
+                return 0.0
+            u, v = u[:n] - u[:n].mean(), v[:n] - v[:n].mean()
+            return float(abs(u @ v) / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-9))
+        return max(cand, key=score)
+
+    def work(c):
+        c.reasons, c.notes = [], [n for n in c.notes if not n.startswith("by timecode")]
+        ts = tc_seconds(c.timecode, c.fps) if args.sync_by != "audio" else None
+        if ts is not None:
+            te = ts + (c.duration or 0) * c.speed
+            ov = [(min(te, f["tc"] + f["dur"]) - max(ts, f["tc"]), i) for i, f in enumerate(files) if f["tc"] is not None]
+            if ov and max(ov)[0] > 0:
+                f = files[max(ov)[1]]
+                c.offset, c.status, c.how, c.confidence = f["at"] + ts - f["tc"], "placed", "timecode", 100.0
+                c.notes.append("by timecode %s with %s" % (c.timecode, os.path.basename(f["clip"].path)))
+                return c
+        if args.sync_by == "timecode" or not c.has_audio or master is None:
+            c.status = "not placed"
+            return c
+        c.status, c.split, c.parts = "", False, []
+        try:
+            sync_clip(c, master, st)
+        except Exception as e:
+            c.status = "not placed"
+            c.notes.append("error: %s" % e)
+            return c
+        if c.status == "placed" and c.split:
+            p = max((p for p in c.parts if p.status == "placed"), key=lambda p: p.src_out - p.src_in)
+            c.offset, c.confidence = p.offset, p.confidence
+            c.split, c.parts = False, []
+        if c.status == "placed":
+            c.how = "scratch audio"
+        else:
+            c.status = "not placed"
+        return c
+
+    pending = list(usable)
+    leads = []                   # reported last: they take no matching, so counting them first made the
+    while pending:               # clips-per-minute (and the time left) look far faster than it is
+        # the lowest camera still waiting leads: its clips become takes of their own
+        lead = min(letter_of[c.path] for c in pending)
+        new = [c for c in pending if letter_of[c.path] == lead]
+        pending = [c for c in pending if letter_of[c.path] != lead]
+        event("stage", text="Listening to %s Cam" % lead)
+        for c in new:
+            try:
+                x = load_audio(c.audio_src or c.path) if c.has_audio else np.zeros(int(c.duration * SR), np.float32)
+            except RuntimeError:
+                x = np.zeros(int(c.duration * SR), np.float32)
+            files.append(dict(clip=c, tc=tc_seconds(c.timecode, c.fps), dur=len(x) / SR, at=pos, x=x))
+            c.status, c.how, c.offset, c.confidence = "placed", "", pos, 100.0
+            chunks += [x, np.zeros(int(NARR_GAP_S * SR), np.float32)]
+            pos += len(x) / SR + NARR_GAP_S
+            c.afile = files[-1]
+            leads.append(c)
+        if not pending:
+            break
+        master = MasterIndex(np.concatenate(chunks))
+        event("stage", text="Lining up the other cameras with %s Cam" % lead)
+        left = []
+        with cf.ThreadPoolExecutor(args.jobs) as ex:             # each clip reported as soon as it's done
+            for fut in cf.as_completed([ex.submit(work, c) for c in pending]):
+                c = fut.result()
+                c.afile = take_of(c) if c.status == "placed" else None
+                if c.afile is None:
+                    c.status = "not placed"
+                    left.append(c)
+                else:
+                    report(c)
+                    log("  %-40s with %s by %s" % (c.rel, os.path.basename(c.afile["clip"].path), c.how))
+        pending = left
+    for c in leads:
+        report(c)
+    for c in clips:
+        if c.status != "placed" and c not in usable:
+            report(c)
+
+    # the takes in shooting order: by timecode when every take has it, else by when the file was written
+    def when(f):
+        try:
+            return os.path.getmtime(f["clip"].path)
+        except OSError:
+            return 0.0
+    order = sorted(files, key=(lambda f: (f["tc"], f["clip"].rel)) if files and all(f["tc"] is not None for f in files)
+                   else (lambda f: (when(f), f["clip"].rel)))
+    placed = [c for c in clips if c.status == "placed"]
+    seq_fps = args.fps or (collections.Counter(c.fps for c in placed if c.fps).most_common(1) or
+                           collections.Counter(c.fps for c in clips if c.fps).most_common(1) or [(24.0, 0)])[0][0]
+    t = 0.0
+    for f in order:
+        mine = [c for c in placed if c.afile is f]
+        head = max([0.0] + [f["at"] - c.offset for c in mine])
+        tail = max([0.0] + [c.offset + c.duration * c.speed - (f["at"] + f["dur"]) for c in mine])
+        f["pos"] = t + head
+        t = f["pos"] + f["dur"] + tail + NARR_GAP_S
+    for c in placed:
+        c.tl = c.afile["pos"] + (c.offset - c.afile["at"])
+        c.in_file = c.offset - c.afile["at"]
+    fr = lambda s: int(round(s * seq_fps))
+    base, entries = 0, []
+    for letter, cl in cams:
+        label = camera_label(letter)
+        ends = []
+        for c in sorted([c for c in cl if c.status == "placed"], key=lambda c: (c.tl, c.rel)):
+            a, b = fr(c.tl), fr(c.tl) + fr(c.duration * c.speed)
+            k = next((k for k, e in enumerate(ends) if e <= a), None)
+            if k is None:
+                k = len(ends)
+                ends.append(b)
+            ends[k] = b
+            c.track = base + k + 1
+            entries.append(dict(media=Media.of_clip(c, seq_fps), start=a, vtrack=c.track, atrack=c.track,
+                                aenabled=True, label=label, speed=c.speed))
+        base += len(ends)
+    pos_f = fr(t + UNSYNCED_GAP_S)
+    for letter, cl in cams:
+        for c in cl:
+            if c.status == "placed" or not (c.readable and c.fps and c.width):
+                continue
+            why = re.split(r"\s*[(;]", (c.reasons or ["not synced"])[0])[0].strip()
+            entries.append(dict(media=Media.of_clip(c, seq_fps), start=pos_f, vtrack=1, atrack=1, all_audio="raw",
+                                label=camera_label(letter), tail=True, name="%s (%s)" % (os.path.basename(c.path), why)))
+            pos_f += fr(c.duration)
+
+    sync_name = "%s_Sync" % project_name
+    args.narrative = dict(name=sync_name, entries=entries)
+    event("stage", text="Writing the Premiere project")
+    proj_file = re.sub(r"[^\w .-]+", "_", project_name) + ".xml"
+    write_xml(build_project(project_name, clips, cams, seq_fps, 0.0, None, collections.defaultdict(list), args),
+              os.path.join(args.xml_out, proj_file))
+    log("Wrote %s" % os.path.join(args.xml_out, proj_file))
+    report_path = os.path.join(args.out, "narrative_report.csv")
+    with open(report_path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["file", "camera", "status", "synced_by", "take", "starts_into_take_s", "timeline_timecode", "reason"])
+        for letter, cl in cams:
+            for c in cl:
+                ok = c.status == "placed"
+                lead = ok and c.afile["clip"] is c
+                w.writerow([c.rel, "%s Cam" % letter, c.status, ("leads its take" if lead else c.how) if ok else "",
+                            os.path.basename(c.afile["clip"].path) if ok else "", "%.3f" % c.in_file if ok else "",
+                            fmt_frames(start_frames(seq_fps) + fr(c.tl), seq_fps) if ok else "",
+                            "" if ok else "; ".join(c.reasons)])
+    synced = [c for c in placed if c.afile["clip"] is not c]
+    log("Wrote %s. %d takes; %d clips lined up with them (%d by timecode)." % (
+        os.path.basename(report_path), len(files), len(synced), sum(c.how == "timecode" for c in synced)))
+    aside = collections.Counter(c.reasons[0] if c.reasons else REASON_UNREADABLE for c in clips if c.status != "placed")
+    lists = dict(aside={}, worth_a_look=[], restarted=[], check_chorus=[])
+    for c in clips:
+        if c.status != "placed":
+            lists["aside"].setdefault(c.reasons[0] if c.reasons else REASON_UNREADABLE, []).append(
+                dict(file=os.path.basename(c.path), cam=clip_cam(c), at=None))
+    event("done", project=project_name, edit_name=seq_name("edit", project=project_name), out=args.out,
+          xml=os.path.join(args.xml_out, proj_file), report=report_path, song_duration=round(t, 2), mode="narrative",
+          clips=len(clips), synced=len(placed), sync_name=sync_name, audio=0, takes=len(files), cams_together=True,
+          by_timecode=sum(c.how == "timecode" for c in synced),
+          cameras=[dict(letter=l, name=cam_bin_name(l, cl), label=camera_label(l), clips=len(cl),
+                        synced=sum(c.status == "placed" for c in cl),
+                        spans=sorted([round(c.tl, 2), round(c.tl + c.duration * c.speed, 2)]
+                                     for c in cl if c.status == "placed")) for l, cl in cams],
+          set_aside=[dict(reason=r, count=k) for r, k in aside.most_common()],
+          unreadable=sum(1 for c in clips if not c.readable), restarted=0, check_chorus=0, worth_a_look=0,
+          lists=lists)
 
 
 CLIP_LIST_COLUMNS = ["file", "camera", "model", "resolution", "fps", "duration", "audio", "note"]
@@ -4131,7 +4792,7 @@ def add_cards(args, state, restrict):
           audio=len(audio_new), unreadable=sum(1 for c in clips if not c.readable),
           restarted=sum(1 for c in clips if c.split),
           check_chorus=sum(1 for c in clips for p in c.parts if p.repeat_alt is not None),
-          worth_a_look=len(doubtful(clips)),
+          worth_a_look=len({id(c) for c, _, _ in doubtful(clips)}), lists=clip_lists(clips, master),
           moves=moves)
 
 

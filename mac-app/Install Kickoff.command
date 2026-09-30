@@ -25,6 +25,7 @@ fi
 "$SUPPORT/venv/bin/python3" -m pip install --quiet --upgrade numpy scipy
 cp engine/musicsync.py "$SUPPORT/musicsync.py"
 cp kickoff-run.sh kickoff-gui-run.sh kickoff-update.sh Kickoff.swift "$SUPPORT/"
+cp Blank.prproj "$SUPPORT/Blank.prproj" 2>/dev/null || true   # the empty Premiere project Kickoff copies
 chmod +x "$SUPPORT/kickoff-run.sh" "$SUPPORT/kickoff-gui-run.sh" "$SUPPORT/kickoff-update.sh"
 mkdir -p "$SUPPORT/ui/fonts"
 cp ui/index.html "$SUPPORT/ui/"
