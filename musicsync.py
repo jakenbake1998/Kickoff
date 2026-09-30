@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.33"
+VERSION = "0.5.34"
 
 # ---------------------------------------------------------------- constants
 
@@ -2812,6 +2812,8 @@ def unsynced_entries(clips, entries, seq_fps, preroll_s, master_media):
     for title, group in (("Unsure", [it for it in items if it[2]]), ("No match", [it for it in items if not it[2]])):
         if not group:
             continue
+        if markers:                     # a minute between the Unsure clips and the No match ones too
+            pos += int(round(UNSYNCED_GAP_S * seq_fps))
         first = pos
         for c, p, _ in group:
             reason = p.reason if p is not None else (c.reasons or ["not synced"])[0]
