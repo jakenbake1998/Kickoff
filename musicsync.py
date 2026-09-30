@@ -39,7 +39,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.38"
+VERSION = "0.5.39"
 
 # ---------------------------------------------------------------- constants
 
@@ -2476,6 +2476,17 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                         part.phase = phase_check(xs, master, o, *ov)
                         part.notes.append("moved by waveform: %d windows of this pass land on song %.1fs"
                                           % (len(wins), o + p["first"]))
+                    if part.status == "placed" and abs(o - p["off"]) > 0.08:
+                        # a move must not pull the pass off a clear phase peak (A006C013: the refine
+                        # drifted both plays 2-4 frames early while the whole pass peaked 2-3x clear)
+                        po, pr = local_phase(xs, master, o, hlo, hhi, search=1.0)
+                        if po is not None and pr >= PHASE_AGREE and abs(po - o) >= PHASE_FRAME_S:
+                            part.notes.append("held at the phase peak (%.1fx clear), %.0f ms from the "
+                                              "waveform's pick" % (pr, (o - po) * 1000))
+                            o, part.drift_ms = po, 0.0
+                            part.offset = o - aoff
+                            part.check = check_string(wave_q(xs, master, o, *ov, span=ov[1] - ov[0]))
+                            part.phase = phase_check(xs, master, o, *ov)
                     elif k == 0:
                         part.status, part.offset = "not placed", None
                         part.reason = REASON_LOW_CONF
