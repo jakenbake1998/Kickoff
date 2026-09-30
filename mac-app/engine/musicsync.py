@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.31"
+VERSION = "0.5.32"
 
 # ---------------------------------------------------------------- constants
 
@@ -2685,6 +2685,7 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             gone = [os.path.basename(c.path) for c in left_out(cl) if not (c.readable and c.duration)]
             if gone and SETTINGS["unsynced"]:
                 log("Not in %s (ffmpeg can't read them): %s" % (seq_name("synced", letter), ", ".join(gone)))
+            marks = unsure_markers(placed, entries, seq_fps) + marks
             xw.sequence(syncedb, seq_name("synced", letter), seq_fps, w, h, tc, entries, label, markers=marks)
             seq = xw.sequence(condb, seq_name("condensed", letter), seq_fps, w, h, tc,
                               condense(entries, seq_fps), label, markers=marks)
@@ -2789,33 +2790,59 @@ def left_out(clips):
 
 
 def unsynced_entries(clips, entries, seq_fps, preroll_s, master_media):
-    """Clips of a camera that didn't line up with the song, back to back on V1 a minute after the
-    song and every synced take have ended: the unsure ones first, then the rest, each group in file
-    order, each clip with all its camera audio on A2, A3... (the song is on A1), named with why it
-    wasn't synced. Returns (entries, markers), one marker spanning each group."""
-    left = [c for c in left_out(clips) if c.readable and c.duration]
-    if not left:
+    """Footage of a camera that isn't on a Synced track, back to back on V1 a minute after the song
+    and every synced take have ended: whole clips that didn't line up, and the passes of a restarted
+    take that weren't placed (between plays too: no footage is ever dropped). The unsure ones first,
+    then the rest, each group in file order, each with all its camera audio on A2, A3... (the song is
+    on A1), named with why it wasn't synced. Returns (entries, markers), one marker spanning each group."""
+    items = []                          # (clip, part or None for the whole clip, unsure?)
+    for c in clips:
+        if not (c.readable and c.duration):
+            continue
+        if left_out([c]):
+            items.append((c, None, is_unsure(c)))
+        elif c.split:
+            items += [(c, p, p.reason in UNSURE_REASONS) for p in c.parts
+                      if p.status != "placed" and p.src_out - p.src_in >= 1.0]
+    if not items:
         return [], []
     ends = [int(round(preroll_s * seq_fps)) + int(round((master_media.duration if master_media else 0) * seq_fps))]
     ends += [e["start"] + entry_span(e, seq_fps)[1] for e in entries if e.get("media") is not None]
     pos, out, markers = max(ends) + int(round(UNSYNCED_GAP_S * seq_fps)), [], []
-    for title, group in (("Unsure", [c for c in left if is_unsure(c)]),
-                         ("No match", [c for c in left if not is_unsure(c)])):
+    for title, group in (("Unsure", [it for it in items if it[2]]), ("No match", [it for it in items if not it[2]])):
         if not group:
             continue
         first = pos
-        for c in group:
-            why = re.split(r"\s*[(;]", (c.reasons or ["not synced"])[0])[0].strip()
-            if c.status == "placed":        # placed, but no pass of it made it onto a track
+        for c, p, _ in group:
+            reason = p.reason if p is not None else (c.reasons or ["not synced"])[0]
+            why = re.split(r"\s*[(;]", reason or "not synced")[0].strip()
+            if p is None and c.status == "placed":      # placed, but no pass of it made it onto a track
                 why = "not synced"
-            if c.guess is not None and is_unsure(c):
-                why += ", song %s?" % fmt_song(c.guess)
+            guess = p.guess if p is not None else c.guess
+            if guess is not None and title == "Unsure":
+                why += ", song %s?" % fmt_song(guess)
+            if p is not None:
+                why = "pass %d of %d, %s" % (c.parts.index(p) + 1, len(c.parts), why)
+            src = (p.src_in, p.src_out) if p is not None else None
             out.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=2, all_audio="raw",
-                            label=None, tail=True, name="%s (%s)" % (os.path.basename(c.path), why)))
-            pos += max(1, int(round(c.duration * seq_fps)))
-        markers.append(dict(name=title, comment="%d clip%s that didn't sync" % (len(group), "s"[len(group) == 1:]),
+                            label=None, tail=True, src=src, name="%s (%s)" % (os.path.basename(c.path), why)))
+            pos += max(1, entry_span(out[-1], seq_fps)[1])
+        n = len(group)
+        markers.append(dict(name=title, comment="%d clip%s or passes that didn't sync" % (n, "s"[n == 1:]),
                             start=first, end=pos))
     return out, markers
+
+
+def unsure_markers(placed, entries, fps):
+    """An "Unsure" marker spanning each placed pass the waveform doesn't back up (worth a look)."""
+    weak = {id(p) for c, _, p in doubtful([c for c, _ in placed])}
+    out = []
+    for (c, p), e in zip(placed, [e for e in entries if e.get("vtrack") and not e.get("tail")]):
+        if id(p) in weak:
+            out.append(dict(name="Unsure", comment="%s: the waveform only partly lines up here"
+                            % (clip_name(c, p) or os.path.basename(c.path)),
+                            start=e["start"], end=e["start"] + entry_span(e, fps)[1]))
+    return out
 
 
 def placements_of(clips):
