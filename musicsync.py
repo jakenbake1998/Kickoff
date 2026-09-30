@@ -18,6 +18,7 @@ import concurrent.futures as cf
 import csv
 import datetime
 import fractions
+import hashlib
 import json
 import math
 import os
@@ -25,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 import warnings
 import xml.etree.ElementTree as ET
@@ -57,6 +59,10 @@ MEDIA_EXT = {".mov", ".mp4", ".mxf", ".m4v", ".mts", ".m2ts", ".avi", ".mkv",
              ".r3d", ".braw", ".insv", ".360", ".wmv", ".webm"}
 AUDIO_EXT = {".wav", ".aif", ".aiff", ".bwf", ".mp3", ".m4a", ".flac", ".aac", ".caf"}
 UNREADABLE_EXT = {".r3d"}   # ffmpeg cannot open RED files (BRAW opens: its sound and timecode read fine)
+# RED: kickoff_r3d (built on the Mac against RED's free R3D SDK) writes a clip's sound to a WAV and prints
+# its frame rate, size, length and timecode as one JSON line
+R3D_HELPER = os.environ.get("KICKOFF_R3D") or os.path.expanduser("~/Library/Application Support/Kickoff/kickoff_r3d")
+R3D_SPAN = re.compile(r"^(.*)_(\d{3})\.r3d$", re.I)    # A001_C001_0101AB_001.R3D, _002... one clip
 OUT_DIR = "Kickoff Exports"            # what Kickoff writes, inside the shoot folder
 OLD_OUT_DIRS = ("Premiere Sync",)      # its name before 0.5.3: earlier projects are still found there
 SKIP_DIRS = {"SUB", "THMBNL", "GENERAL", "AVF_INFO", "CACHE", "THMB"}
@@ -335,6 +341,7 @@ class Clip:
     par: float = 1.0                     # pixel aspect (anamorphic 2x: 2.0)
     rotation: int = 0                    # degrees the player turns the picture (phones shot upright: 90)
     vcodec: str = ""
+    audio_src: str = ""                  # where the sound is read from, when not the clip itself (RED: a WAV)
     has_audio: bool = False
     audio_channels: int = 0
     audio_layout: list = field(default_factory=list)    # channels in each audio stream, in order
@@ -427,8 +434,44 @@ def sony_sidecar(path):
     return {}
 
 
+def probe_r3d(clip: Clip):
+    """A RED clip through kickoff_r3d: its sound to a WAV that everything else reads, the picture's
+    facts from the helper's JSON. False when the helper isn't there or fails (the clip is then unreadable)."""
+    if not os.path.isfile(R3D_HELPER):
+        clip.probe_error = ".R3D needs RED's free R3D SDK: install it and relaunch Kickoff"
+        return False
+    wav = os.path.join(tempfile.gettempdir(), "kickoff-r3d",
+                       hashlib.md5(clip.path.encode()).hexdigest()[:12] + ".wav")
+    os.makedirs(os.path.dirname(wav), exist_ok=True)
+    r = run([R3D_HELPER, clip.path, wav])
+    try:
+        info = json.loads((r.stdout or b"").decode(errors="replace").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        info = None
+    if r.returncode != 0 or not info:
+        clip.probe_error = "RED reader failed: " + ((r.stderr or b"").decode(errors="replace").strip()[-200:] or "no output")
+        return False
+    clip.fps = snap_fps(float(info.get("fps") or 0)) or None
+    clip.width, clip.height = int(info.get("width") or 0), int(info.get("height") or 0)
+    clip.duration = float(info.get("duration") or 0)
+    clip.timecode = info.get("timecode") or ""
+    clip.vcodec = "r3d"
+    clip.model, clip.make = clip.model or "RED", clip.make or "RED"
+    ch = int(info.get("channels") or 0)
+    if ch:
+        clip.audio_src = wav
+        clip.has_audio = True
+        clip.audio_channels, clip.audio_layout = ch, [ch]
+        clip.audio_rate = int(info.get("rate") or 48000)
+    return True
+
+
 def probe(clip: Clip):
     ext = os.path.splitext(clip.path)[1].lower()
+    if ext == ".r3d":
+        if not probe_r3d(clip):
+            clip.readable = False
+        return
     r = run(["ffprobe", "-v", "error", "-print_format", "json",
              "-show_format", "-show_streams", clip.path])
     if r.returncode != 0:
@@ -614,7 +657,7 @@ def vote_song(songs, clips):
         if not (c.readable and c.has_audio):
             continue
         try:
-            chans = load_channels(c.path, c.audio_layout, limit=VOTE_SECONDS)
+            chans = load_channels(c.audio_src or c.path, c.audio_layout, limit=VOTE_SECONDS)
         except RuntimeError:
             continue
         best = None
@@ -680,6 +723,10 @@ def find_clips(clips_dir, master_path, skip_dirs=()):
             if f.startswith("."):
                 continue
             if os.path.splitext(f)[1].lower() not in MEDIA_EXT:
+                continue
+            sp = R3D_SPAN.match(f)          # a RED clip spans _001, _002... files: it's one clip, the _001
+            if sp and sp.group(2) != "001" and any(R3D_SPAN.match(g) and R3D_SPAN.match(g).group(1) == sp.group(1)
+                                                  and R3D_SPAN.match(g).group(2) == "001" for g in files):
                 continue
             p = os.path.join(root, f)
             if os.path.abspath(p) == master_abs:
@@ -976,7 +1023,7 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         return
 
     try:
-        chans = load_channels(clip.path, clip.audio_layout)
+        chans = load_channels(clip.audio_src or clip.path, clip.audio_layout)
     except RuntimeError as e:
         clip.reasons.append(REASON_UNREADABLE)
         clip.notes.append("audio decode failed: %s" % e)
@@ -3770,7 +3817,7 @@ def narrative_cameras(args, project_name, clips):
         if len(cand) < 2 or c.how != "scratch audio":
             return file_at(a, b)
         try:
-            y = load_audio(c.path)
+            y = load_audio(c.audio_src or c.path)
         except RuntimeError:
             return file_at(a, b)
 
@@ -3826,7 +3873,7 @@ def narrative_cameras(args, project_name, clips):
         event("stage", text="Listening to %s Cam" % lead)
         for c in new:
             try:
-                x = load_audio(c.path) if c.has_audio else np.zeros(int(c.duration * SR), np.float32)
+                x = load_audio(c.audio_src or c.path) if c.has_audio else np.zeros(int(c.duration * SR), np.float32)
             except RuntimeError:
                 x = np.zeros(int(c.duration * SR), np.float32)
             files.append(dict(clip=c, tc=tc_seconds(c.timecode, c.fps), dur=len(x) / SR, at=pos, x=x))

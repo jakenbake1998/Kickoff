@@ -52,6 +52,21 @@ if [ -n "$APP" ] && [ -d "$APP/Contents/MacOS" ] && get mac-app/Kickoff.swift \
     changed="${changed:+$changed, }app"
   fi
 fi
+# RED: build the sound reader against RED's free R3D SDK when it's on this Mac (Downloads or Documents);
+# rebuilt when its source changes or the SDK moves. Without the SDK, RED clips are set aside as before.
+SDK="$(ls -d "$HOME"/Downloads/R3DSDK* "$HOME"/Documents/R3DSDK* "$HOME"/Applications/R3DSDK* 2>/dev/null \
+       | while read -r d; do [ -f "$d/Include/R3DSDK.h" ] && echo "$d"; done | sort | tail -1)"
+if [ -n "$SDK" ] && get mac-app/r3d/kickoff_r3d.cpp \
+   && { ! cmp -s "$TMP/kickoff_r3d.cpp" "$SUPPORT/kickoff_r3d.cpp" || [ ! -x "$SUPPORT/kickoff_r3d" ] \
+        || [ "$(cat "$SUPPORT/kickoff_r3d.sdk" 2>/dev/null)" != "$SDK" ]; }; then
+  if xcrun clang++ -O2 -std=c++17 -I"$SDK/Include" "$TMP/kickoff_r3d.cpp" "$SDK/Lib/mac64/libR3DSDK-libcpp.a" \
+       -DKICKOFF_DEFAULT_LIBS="\"$SDK/Redistributable/mac\"" -ldl -o "$TMP/kickoff_r3d" >/dev/null 2>&1; then
+    cp "$TMP/kickoff_r3d" "$SUPPORT/kickoff_r3d.upd" && mv "$SUPPORT/kickoff_r3d.upd" "$SUPPORT/kickoff_r3d"
+    cp "$TMP/kickoff_r3d.cpp" "$SUPPORT/kickoff_r3d.cpp"
+    echo "$SDK" > "$SUPPORT/kickoff_r3d.sdk"
+    changed="${changed:+$changed, }RED reader"
+  fi
+fi
 case "$changed" in
   *window*|*app*|*icon*) echo "Updated: $changed. The new window shows next time you open Kickoff." ;;
   ?*) echo "Updated: $changed" ;;
