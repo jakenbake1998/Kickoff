@@ -218,6 +218,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "premiere": if let p = path { openInPremiere(p, projectDir: body["projectDir"] as? String) }
         case "report": if let p = path { openReport(p) }
         case "reveal": if let p = path { NSWorkspace.shared.activateFileViewerSelecting([p]) }
+        case "makeProject": if let p = path { _ = makeProject(p, projectDir: body["projectDir"] as? String) }
+        case "revealProject":
+            if let p = path {
+                NSWorkspace.shared.activateFileViewerSelecting([makeProject(p, projectDir: body["projectDir"] as? String) ?? p])
+            }
         case "copy":                                    // file names from the results, for Premiere's search
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(body["text"] as? String ?? "", forType: .string)
@@ -404,6 +409,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     // With a folder picked and the blank project installed: copy the blank there as "<XML name>.prproj",
     // open it in Premiere, then hand Premiere the XML once the project is open, so everything lands in it.
     // Without them: hand Premiere the XML (it asks where to save the project).
+    // "<XML name>.prproj" in projectDir, a copy of the blank project, made when the run ends. It's reused
+    // while it's newer than the XML or still blank; a rerun that rewrote the XML gets "<name> 2.prproj".
+    func makeProject(_ xml: URL, projectDir: String?) -> URL? {
+        let fm = FileManager.default
+        let blank = support.appendingPathComponent("Blank.prproj")
+        guard let dirPath = projectDir, !dirPath.isEmpty, fm.fileExists(atPath: blank.path) else { return nil }
+        let dir = URL(fileURLWithPath: dirPath)
+        let name = xml.deletingPathExtension().lastPathComponent
+        let xmlDate = (try? xml.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        var project = dir.appendingPathComponent(name + ".prproj")
+        var n = 2
+        while fm.fileExists(atPath: project.path) {
+            let projDate = (try? project.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let p = projDate, let x = xmlDate, p >= x { return project }
+            if fm.contentsEqual(atPath: project.path, andPath: blank.path) { return project }
+            project = dir.appendingPathComponent("\(name) \(n).prproj")
+            n += 1
+        }
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try fm.copyItem(at: blank, to: project)
+        } catch {
+            return nil
+        }
+        return project
+    }
+
     func openInPremiere(_ xml: URL, projectDir: String? = nil) {
         guard let app = premiereApp() else {
             NSWorkspace.shared.activateFileViewerSelecting([xml])
@@ -413,35 +445,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             alert.beginSheetModal(for: window, completionHandler: nil)
             return
         }
-        let fm = FileManager.default
-        let blank = support.appendingPathComponent("Blank.prproj")
-        guard let dirPath = projectDir, !dirPath.isEmpty, fm.fileExists(atPath: blank.path) else {
+        guard let project = makeProject(xml, projectDir: projectDir) else {
             NSWorkspace.shared.activateFileViewerSelecting([xml])
             NSWorkspace.shared.open([xml], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(),
                                     completionHandler: nil)
             return
         }
-        let dir = URL(fileURLWithPath: dirPath)
-        let name = xml.deletingPathExtension().lastPathComponent
-        var project = dir.appendingPathComponent(name + ".prproj")
-        // opened before from this XML: open that project again instead of making another
-        let xmlDate = (try? xml.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        let projDate = (try? project.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        if let p = projDate, let x = xmlDate, p >= x {
+        // the XML is already in it (it was saved since it was made): just open it
+        if !FileManager.default.contentsEqual(atPath: project.path, andPath: support.appendingPathComponent("Blank.prproj").path) {
             NSWorkspace.shared.open([project], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(),
-                                    completionHandler: nil)
-            return
-        }
-        var n = 2
-        while fm.fileExists(atPath: project.path) {
-            project = dir.appendingPathComponent("\(name) \(n).prproj")
-            n += 1
-        }
-        do {
-            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            try fm.copyItem(at: blank, to: project)
-        } catch {
-            NSWorkspace.shared.open([xml], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(),
                                     completionHandler: nil)
             return
         }

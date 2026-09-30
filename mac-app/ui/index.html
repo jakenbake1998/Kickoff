@@ -115,7 +115,19 @@ kbd{font:12px var(--body);border:1px solid var(--line);border-radius:4px;padding
 .opts summary span{font-weight:400;color:var(--muted);margin-left:8px}
 .opts[open]{gap:10px}
 .todo{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;display:grid;gap:5px}
-.todo .h{font-weight:600}
+.todo .h{font-weight:600;display:flex;align-items:center;gap:8px}
+.tip{position:relative;display:inline-flex}
+.tipi{width:18px;height:18px;padding:0;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--muted);
+  font:italic 700 11px/1 Georgia,serif;display:grid;place-items:center;cursor:help}
+.tip:hover .tipi,.tipi:focus-visible{color:var(--accent);border-color:var(--accent)}
+.tipbox{position:absolute;left:-12px;bottom:calc(100% + 10px);width:320px;background:#262a31;border:1px solid var(--line);border-radius:10px;
+  padding:12px 14px;box-shadow:0 12px 30px rgba(0,0,0,.45);font-weight:400;color:var(--muted);font-size:12.5px;line-height:1.45;
+  opacity:0;visibility:hidden;transform:translateY(4px);transition:opacity .14s,transform .14s,visibility .14s;z-index:30}
+.tipbox::after{content:"";position:absolute;left:16px;top:100%;border:7px solid transparent;border-top-color:#262a31}
+.tip:hover .tipbox,.tip:focus-within .tipbox{opacity:1;visibility:visible;transform:none}
+.tipbox .th{display:block;color:var(--accent);font-weight:600;font-size:12px;margin-bottom:6px}
+.tipbox ul{margin:0;padding-left:16px;display:grid;gap:6px}
+.tipbox b{color:var(--ink)}
 .todo #todoList{display:grid;gap:5px;color:var(--muted)}
 .todo b{color:var(--ink);font-weight:600}
 .modes p{margin:0;color:var(--muted);font-size:12.5px}
@@ -247,6 +259,16 @@ button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);
 .error p{margin:0;font-family:var(--mono);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
 
 .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:auto;padding-top:4px}
+#btnsStart{flex-direction:column;align-items:center;gap:6px}
+.linkbtn{background:none;border:0;padding:2px 6px;color:var(--muted);font:500 13px var(--body);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.linkbtn:hover{color:var(--ink)}
+.finder{position:relative}
+#bFinder .chev{margin-left:2px;opacity:.7}
+.fmenu{position:absolute;left:0;bottom:calc(100% + 6px);min-width:100%;background:#262a31;border:1px solid var(--line);border-radius:10px;
+  padding:5px;display:grid;box-shadow:0 12px 30px rgba(0,0,0,.45);z-index:30}
+.fmenu[hidden]{display:none}
+.fmenu button{background:none;border:0;text-align:left;padding:8px 12px;border-radius:7px;white-space:nowrap}
+.fmenu button:hover,.fmenu button:focus-visible{background:color-mix(in srgb,var(--ink) 8%,transparent)}
 button{font:600 13.5px var(--body);padding:9px 16px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
 button:hover{border-color:var(--muted)}
 button.pri{background:var(--accent);color:var(--on-accent);border-color:transparent}
@@ -352,7 +374,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 #vHist[hidden],#vSet[hidden]{display:none!important}
 #histList{flex:1;min-height:0;overflow-y:auto;align-content:start}
 .resgrid{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
-.resgrid>#camsWrap{flex:1.3 1 420px;min-width:0}
+.resgrid>.resmain{flex:1.3 1 420px;min-width:0;display:grid;gap:18px}
+.resmain:not(:has(> :not([hidden]))){display:none}
 .resside{flex:1 1 300px;min-width:0;display:grid;gap:12px}
 .resside:not(:has(> :not([hidden]))){display:none}
 .hbtns{display:flex;gap:8px;margin-left:auto}
@@ -540,7 +563,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       <span class="k">Premiere project saves to</span><span class="v" id="prPath"></span>
       <button id="bPr">Choose…</button><button class="quiet" id="bPrReset" hidden>Next to the XML</button>
     </div>
-    <label class="check"><input type="checkbox" id="rebuild"> Start over: rebuild the whole project, even if this folder was run before</label>
+    <input type="checkbox" id="rebuild" hidden>
     </details>
   </div>
 
@@ -587,14 +610,21 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <p class="stats" id="stats" hidden><b id="sSynced">0</b> synced so far, <b id="sAside">0</b> set aside<span hidden><b id="sCams"></b><span id="sCamsL"></span></span></p>
 
   <div class="resgrid">
+  <div class="resmain">
   <div id="camsWrap" hidden>
     <div class="camsHead"><span></span><span id="camsHead">Where each camera has footage in the song</span><span>Synced</span></div>
     <div class="cams" id="cams"></div>
   </div>
+  <div class="todo" id="todo" hidden>
+    <div class="h">Left for you to do in Premiere
+      <span class="tip"><button type="button" class="tipi" aria-label="Tips" aria-describedby="tipBox">i</button>
+        <span class="tipbox" id="tipBox" role="tooltip"><span class="th">Tips</span><ul id="tipList"></ul></span></span></div>
+    <div id="todoList"></div>
+  </div>
+  </div>
 
   <div class="resside">
   <div class="list" id="aside" hidden></div>
-  <div class="todo" id="todo" hidden><div class="h">Left for you to do in Premiere</div><div id="todoList"></div></div>
   </div>
   </div>
   <div class="error" id="error" hidden><b id="errTitle">Kickoff hit an error</b><p id="errText"></p></div>
@@ -605,11 +635,18 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   <div class="btns" id="btnsStart">
     <button class="pri" id="bStart" disabled>Start</button>
+    <button class="linkbtn" id="bRebuild" hidden>or rebuild from scratch</button>
   </div>
   <div class="btns" id="btnsDone" hidden>
     <button class="pri" id="bOpen">Open in Premiere</button>
-    <button id="bReveal"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Open XML folder</button>
-    <button id="bReport">Show report</button>
+    <div class="finder">
+      <button id="bFinder" aria-haspopup="menu" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Show in Finder<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+      <div class="fmenu" id="fMenu" role="menu" hidden>
+        <button role="menuitem" id="bRevealProject">Premiere project</button>
+        <button role="menuitem" id="bReveal">XML</button>
+        <button role="menuitem" id="bReport">Sync report</button>
+      </div>
+    </div>
     <button class="newrun" id="bNew"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New run</button>
   </div>
   <div class="btns" id="btnsRun" hidden>
@@ -644,18 +681,18 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     Violet: "--violet", Purple: "--purple", Blue: "--blue", Teal: "--teal", Green: "--green", Brown: "--brown" };
   // why a clip was set aside, in plain words, and where it ends up
   var REASONS = [
-    [/^no audio/, "no audio (slow motion?)", "Footage bins"],
-    [/^slow motion/, "slow motion", "Footage bins"],
-    [/^high frame rate/, "high frame rate", "Footage bins"],
+    [/^no audio/, "no audio (slow motion?)", "After the song"],
+    [/^slow motion/, "slow motion", "After the song"],
+    [/^high frame rate/, "high frame rate", "After the song"],
     [/^no match to any audio/, "no match to any audio file (B-roll?)", "Footage bins"],
     [/^lines up with no audio/, "lines up between audio files", "check report"],
     [/^timecode outside/, "timecode outside every audio file", "Footage bins"],
     [/^no timecode/, "no timecode", "Footage bins"],
-    [/^no match/, "no match to the song (B-roll?)", "Footage bins"],
-    [/^audio track is silent/, "silent audio", "Footage bins"],
-    [/^ambiguous/, "fits two places in the song", "check report"],
-    [/^confidence/, "unsure match", "check report"],
-    [/^short burst/, "only a false start", "check report"],
+    [/^no match/, "no match to the song (B-roll?)", "After the song"],
+    [/^audio track is silent/, "silent audio", "After the song"],
+    [/^ambiguous/, "fits two places in the song", "After the song"],
+    [/^confidence/, "unsure match", "After the song"],
+    [/^short burst/, "only a false start", "After the song"],
     [/^between plays/, "stretches between plays of the song", "Breakup only"],
     [/^unreadable/, "can't be read (RED/BRAW?)", "check report"]
   ];
@@ -705,6 +742,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (prDir) return prDir;
     var d = parent(xml);
     return base(d).toLowerCase() === "xml" ? parent(d) + "/Premiere" : d;
+  }
+  function makeProject(e) {          // the Premiere project is made as soon as the run ends (an add goes into the one they have)
+    if (e && e.xml && !e.add) post({ cmd: "makeProject", path: e.xml, projectDir: projectDirFor(e.xml) });
   }
   function openPremiere(xml, isAdd) {  // an add goes into the project they already have, so no new project
     post(isAdd ? { cmd: "premiere", path: xml } : { cmd: "premiere", path: xml, projectDir: projectDirFor(xml) });
@@ -962,6 +1002,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     });
   }
 
+  function ranBefore(run) {          // this footage has a finished run in History
+    var foot = run.paths.filter(function (p) { return !isSong(p); });
+    return history.some(function (h) {
+      return (h.outcome === "done" || h.outcome === "nothing") && (h.paths || []).some(function (p) { return foot.indexOf(p) >= 0; });
+    });
+  }
   function renderStage() {
     var music = mode === "music";
     show("jobsWrap", music);
@@ -979,6 +1025,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       : music ? "Start " + runs.length + " music videos"
       : runs[0].paths.filter(function (p) { return !isSong(p); }).length > 1 ? "Start with " + runs[0].paths.length + " folders" : "Start";
     $("bStart").title = typeof runs === "string" ? runs : "";
+    // run before: Start adds only what's new, and the one way to start over sits right under it
+    var again = typeof runs !== "string" && runs.some(ranBefore);
+    if (again && runs.length === 1) $("bStart").textContent = "Update project";
+    $("bStart").title = again ? "Adds only the clips that aren't in the project yet" : $("bStart").title;
+    show("bRebuild", again);
+    $("bRebuild").textContent = runs.length > 1 ? "or rebuild them from scratch" : "or rebuild from scratch";
     if (music) $("qNote").textContent = "";
     var note = typeof runs === "string" && (music ? jobs.some(function (j) { return j.song || j.footage.length; }) : false) ? runs : "";
     $("modeNote").textContent = note || MODE_NOTES[mode];
@@ -1311,11 +1363,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   var ICON_SAME = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>';
   // what the XML can't do, so Jake finishes it in Premiere (html: fixed text plus escaped names)
   function todo(extra) {
-    var lines = extra.filter(Boolean).concat(
-      ["Add a <b>Temp Color</b> adjustment layer to the " + esc(binName("adjustment", "Adjustment Layers")) + " bin.",
-       "Select the " + esc(binName("footage", "Footage")) + " bin, right-click, <b>Proxy &gt; Create Proxies</b>."]);
-    $("todoList").innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("")
-      + '<div class="note">Adding to a project you already have? Import the XML, then drag the contents of the bin Premiere makes to the top.</div>';
+    var lines = extra.filter(Boolean);
+    $("todoList").innerHTML = (lines.length ? lines : ["Nothing. It&rsquo;s ready to cut."])
+      .map(function (l) { return "<div>" + l + "</div>"; }).join("");
+    $("tipList").innerHTML =
+      "<li><b>Proxies:</b> select the " + esc(binName("footage", "Footage")) + " bin, right-click, <b>Proxy &gt; Create Proxies</b>.</li>" +
+      "<li><b>Adding to a project you already have?</b> Import the XML, then drag the contents of the bin Premiere makes to the top.</li>";
     show("todo", true);
   }
   function hero(tone, title, sub, chips) {
@@ -1390,7 +1443,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         : plural(e.clips, "clip") + " from " + plural(e.cameras.length, "camera") + ". " + whereTook(e),
       [[plural(e.cameras.length, "Breakup sequence"), ""], e.audio ? [plural(e.audio, "audio file"), ""] : null,
        e.unreadable ? [plural(e.unreadable, "unreadable clip"), "warn"] : null]);
-    $("bReport").textContent = "Show clip list";
+    $("bReport").textContent = "Clip list";
+    makeProject(e);
     show("btnsRun", false);
     show("btnsDone", true);
     $("bOpen").focus();
@@ -1493,7 +1547,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       r.querySelector(".f").textContent = it.file;
       r.querySelector(".f").title = it.file;
       r.querySelector(".c").textContent = it.cam ? camName(it.cam) : "";
-      r.querySelector(".t").textContent = it.at != null ? "at " + clock(it.at) : "";
+      r.querySelector(".t").textContent = it.passes != null
+        ? plural(it.passes, "pass", "passes") + (it.placed === 0 ? ", not synced" : it.placed < it.passes ? ", " + it.placed + " synced" : "")
+        : it.guess != null ? "song " + clock(it.guess) + "?" : it.at != null ? "at " + clock(it.at) : "";
       pl.appendChild(r);
     });
     var note = pop.querySelector(".pf span"), cb = pop.querySelector(".pf button");
@@ -1523,7 +1579,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   document.addEventListener("scroll", function (ev) { if (pop && !pop.contains(ev.target)) closePop(); }, true);
 
   function finishMusic(e) {
-    $("bReport").textContent = "Show report";
+    $("bReport").textContent = "Sync report";
     $("prog").className = "prog";
     $("bar").style.width = "100%";
     $("stage").textContent = "Done.";
@@ -1551,7 +1607,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         lk.addEventListener("mouseleave", function () { clearTimeout(hov); setTimeout(function () { if (!popPinned && !popHover) closePop(); }, 200); });
       }
     }
+    makeProject(e);
     todo([e.synced && e.mode !== "narrative" ? "In <b>" + esc(e.edit_name || e.project + "_Edit") + "</b>, select the camera nests, right-click, <b>Multi-Camera &gt; Enable</b>." : "",
+          e.synced && e.mode !== "narrative" && e.clips > e.synced ? "Clips that didn&rsquo;t sync are on V1 of each camera&rsquo;s Synced sequences, a minute after the song, under the <b>Unsure</b> and <b>No match</b> markers." : "",
           e.mode === "narrative" && e.synced ? "Everything is in <b>" + esc(e.sync_name || e.project + "_Sync") + "</b>: " +
             (e.cams_together ? "each take with A Cam on V1 and the other cameras above." : "each audio file with its clips over it.") : ""]);
     $("camsHead").textContent = e.mode === "narrative" ? (e.cams_together ? "Where each camera has footage, take by take" : "Where each camera has footage, audio file by audio file") : "Where each camera has footage in the song";
@@ -1879,14 +1937,30 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   $("drop").addEventListener("click", function () { if (!running() && $("btnsDone").hidden) post({ cmd: "pick", target: "any" }); });
   $("drop").addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && !running()) post({ cmd: "pick", target: "any" }); });
   $("bOpen").addEventListener("click", function () { openPremiere(state.result.xml, state.result.add); });
-  $("bReport").addEventListener("click", function () { post({ cmd: "report", path: state.result.report }); });
+  function finderMenu(on) { $("fMenu").hidden = !on; $("bFinder").setAttribute("aria-expanded", String(on)); }
+  $("bFinder").addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    $("bRevealProject").hidden = !!state.result.add;     // an add went into a project they already have
+    finderMenu($("fMenu").hidden);
+  });
+  document.addEventListener("click", function () { finderMenu(false); });
+  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") finderMenu(false); });
+  $("bReport").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.report }); });
   $("bReveal").addEventListener("click", function () { post({ cmd: "reveal", path: state.result.xml }); });
+  $("bRevealProject").addEventListener("click", function () {
+    post({ cmd: "revealProject", path: state.result.xml, projectDir: projectDirFor(state.result.xml) });
+  });
   function fresh() {
     clearTimeout(nextTimer); nextTimer = null;
     queue = []; jobs = [{ song: null, footage: [] }]; setupName = ""; queueDone = false; $("qName").innerHTML = "";
     batch = null; reset();                  // reset saves the empty boxes
   }
   $("bNew").addEventListener("click", fresh);
+  $("bRebuild").addEventListener("click", function () {
+    if (running()) return;
+    $("rebuild").checked = true; post({ cmd: "rebuild", on: true });
+    start();
+  });
   $("bNew2").addEventListener("click", fresh);
   $("bRetry").addEventListener("click", function () {      // the run that failed, then the rest of the batch
     if (!state.paths.length || running()) return;

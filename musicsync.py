@@ -35,7 +35,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.30"
+VERSION = "0.5.31"
 
 # ---------------------------------------------------------------- constants
 
@@ -230,6 +230,8 @@ REASON_SQ = "slow motion (S&Q, audio not real time)"
 REASON_NO_MATCH = "no match to song"
 REASON_LOW_CONF = "confidence below threshold"
 REASON_AMBIGUOUS = "ambiguous match (repeated section of song)"
+UNSURE_MIN_A = 6           # a clip too weak to place is still "unsure" (not "no match") when its best guess
+UNSURE_OVER_CHANCE = 2.0   # has this many landmarks and this many times what chance gives
 
 
 # ---------------------------------------------------------------- helpers
@@ -279,6 +281,12 @@ def rate_xml(fps):
         if abs(fps - ntsc) < 0.01:
             return base, True
     return int(round(fps)), False
+
+
+def fmt_song(seconds):
+    """Song time as m:ss."""
+    t = int(max(0.0, seconds))
+    return "%d:%02d" % (t // 60, t % 60)
 
 
 def fmt_tc(seconds, fps):
@@ -358,6 +366,7 @@ class Clip:
     split: bool = False                  # the song restarts / jumps inside this take (see parts)
     parts: list = field(default_factory=list)   # Part per pass of the song; one Part when not split
     seq_start_frame: Optional[int] = None
+    guess: Optional[float] = None        # unsure: song time at the best guess (shown in the stringout name)
     notes: list = field(default_factory=list)
     repeat_alt: Optional[float] = None   # placed at the first of two identical sections; the other
 
@@ -381,6 +390,7 @@ class Part:
     track: Optional[int] = None
     notes: list = field(default_factory=list)
     repeat_alt: Optional[float] = None
+    guess: Optional[float] = None        # unsure: song time the song first plays in this pass, at the best guess
 
 
 BRANDS = [("gopro", "GoPro"), ("dji", "DJI"), ("arri", "ARRI"), ("alexa", "ARRI"),
@@ -1058,8 +1068,14 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
                           ("placed by waveform: %d of %d windows line up (landmarks %d vs %d by chance)"
                            % (n_ok, n, A, N)))
     elif A < st.min_hashes or ev["strength"] < 0.25:
-        clip.reasons.append(REASON_NO_MATCH)
-        clip.notes.append("best alignment %d landmarks vs %d by chance" % (A, N))
+        # too little to place, but a guess well clear of chance (drums, where only the song's opening
+        # reads clearly) is worth the editor's look: unsure, with that guess, rather than no match
+        unsure = A >= UNSURE_MIN_A and A >= UNSURE_OVER_CHANCE * N and speed == 1.0
+        clip.reasons.append(REASON_LOW_CONF if unsure else REASON_NO_MATCH)
+        if unsure:
+            clip.guess = max(0.0, coarse - aoff)
+        clip.notes.append("best alignment %d landmarks vs %d by chance%s"
+                          % (A, N, ", best guess song %.2fs" % (coarse - aoff) if unsure else ""))
         return
     if conf < st.threshold and rescued is None:
         # Landmarks alone aren't decisive (usually because part of the clip is a repeated chorus).
@@ -1083,6 +1099,7 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
                               % (REPEAT_NOTE, other - aoff))
         else:
             clip.reasons.append(REASON_LOW_CONF)
+            clip.guess = max(0.0, coarse - aoff)
             clip.notes.append("best guess song %.2fs" % (coarse - aoff))
             return
 
@@ -1886,6 +1903,7 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
                                   % (p["off"] + p["first"], e["runner_up_offset"] + p["first"]))
             else:
                 part.reason = REASON_LOW_CONF
+                part.guess = p["off"] + p["first"]
                 part.notes.append("this pass likely starts at song %.1fs" % (p["off"] + p["first"]))
         clip.parts.append(part)
     placed = [p for p in clip.parts if p.status == "placed"]
@@ -1899,6 +1917,7 @@ def emit_parts(clip, master, st, passes, h, t, x, speed, xs):
         heard = [p for p in clip.parts if p.reason != REASON_BETWEEN] or clip.parts
         clip.reasons.append(heard[0].reason or REASON_LOW_CONF)
         clip.confidence = heard[0].confidence
+        clip.guess = next((p.guess for p in heard if p.guess is not None), None)
     return True
 
 
@@ -2289,8 +2308,10 @@ class Xmeml:
                 sub(ln, "trackindex", track_of[id(other)])
                 sub(ln, "clipindex", index_of[id(other)])
 
-    def sequence(self, parent, name, fps, width, height, start_tc_frame, entries, label=None, fit="fill"):
-        """entries: dicts with media, start, vtrack (or None), atrack (or None), aenabled."""
+    def sequence(self, parent, name, fps, width, height, start_tc_frame, entries, label=None, fit="fill",
+                 markers=()):
+        """entries: dicts with media, start, vtrack (or None), atrack (or None), aenabled.
+        markers: dicts with name, comment, start and end frames (a marker spanning that stretch)."""
         seq = sub(parent, "sequence", id=self.uid("sequence"))
         sub(seq, "uuid", "musicsync-%s-%s" % (datetime.datetime.now().strftime("%Y%m%d%H%M%S"), self.n))
         sub(seq, "name", name)
@@ -2374,6 +2395,12 @@ class Xmeml:
             sub(t, "enabled", "FALSE" if i - len(vtracks) + 1 in muted else "TRUE")
             sub(t, "locked", "FALSE")
         add_labels(seq, label)
+        for mk in markers:                 # sequence markers, after the tracks as Premiere writes them
+            m = sub(seq, "marker")
+            sub(m, "comment", mk.get("comment", ""))
+            sub(m, "name", mk["name"])
+            sub(m, "in", mk["start"])
+            sub(m, "out", mk["end"])
         return seq
 
 
@@ -2649,13 +2676,18 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         if placed and syncb is not None:
             (w, h) = args.sync_size or first_format([c for c, _ in placed], seq_fps)[0]
             entries, tc = sync_entries(placed, seq_fps, preroll, master_media, args, label)
-            tail = unsynced_entries(cl, entries, seq_fps, preroll, master_media) if SETTINGS["unsynced"] else []
+            tail, marks = unsynced_entries(cl, entries, seq_fps, preroll, master_media) \
+                if SETTINGS["unsynced"] else ([], [])
             for e in tail:
                 e["label"] = label
             entries += tail
-            xw.sequence(syncedb, seq_name("synced", letter), seq_fps, w, h, tc, entries, label)
+            # every clip of the camera is on a track or in the stringout: say which ones can't be
+            gone = [os.path.basename(c.path) for c in left_out(cl) if not (c.readable and c.duration)]
+            if gone and SETTINGS["unsynced"]:
+                log("Not in %s (ffmpeg can't read them): %s" % (seq_name("synced", letter), ", ".join(gone)))
+            xw.sequence(syncedb, seq_name("synced", letter), seq_fps, w, h, tc, entries, label, markers=marks)
             seq = xw.sequence(condb, seq_name("condensed", letter), seq_fps, w, h, tc,
-                              condense(entries, seq_fps), label)
+                              condense(entries, seq_fps), label, markers=marks)
             nests.append((letter, seq, (w, h), tc))
     maybe_empty(breakup, bpath, bool(len(breakup)))
     if narr and syncb is not None:
@@ -2681,7 +2713,8 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             if master_media and not args.no_master_audio:
                 entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1, tall=True))
             return entries
-        xw.sequence(syncb, seq_name("nested", project=name), seq_fps, w, h, tc, all_cams())
+        xw.sequence(condb if condb is not None else syncb, seq_name("nested", project=name), seq_fps, w, h, tc,
+                    all_cams())
         xw.sequence(edit, seq_name("edit", project=name), seq_fps, w, h, tc, all_cams())
     elif setup_only or narr:
         # an empty sequence to cut in, at the delivery size, starting at 01:00:00:00
@@ -2743,22 +2776,46 @@ def clip_name(c, p):
 UNSYNCED_GAP_S = 60     # clips that didn't sync start this long after the song (or the last take) ends
 
 
+UNSURE_REASONS = (REASON_LOW_CONF, REASON_AMBIGUOUS, REASON_SHORT)
+
+
+def is_unsure(c):
+    return bool(c.reasons) and c.reasons[0] in UNSURE_REASONS
+
+
+def left_out(clips):
+    """Clips of a camera with no pass on a Synced track: every one of them goes in the stringout."""
+    return [c for c in clips if not (c.status == "placed" and any(p.status == "placed" for p in c.parts))]
+
+
 def unsynced_entries(clips, entries, seq_fps, preroll_s, master_media):
-    """Clips of a camera that didn't line up with the song, back to back on V1 in file order, a
-    minute after the song and every synced take have ended, each with all its camera audio on
-    A2, A3... (the song is on A1), named with why it wasn't synced."""
-    left = [c for c in clips if c.readable and c.fps and c.width and c.status != "placed"]
+    """Clips of a camera that didn't line up with the song, back to back on V1 a minute after the
+    song and every synced take have ended: the unsure ones first, then the rest, each group in file
+    order, each clip with all its camera audio on A2, A3... (the song is on A1), named with why it
+    wasn't synced. Returns (entries, markers), one marker spanning each group."""
+    left = [c for c in left_out(clips) if c.readable and c.duration]
     if not left:
-        return []
+        return [], []
     ends = [int(round(preroll_s * seq_fps)) + int(round((master_media.duration if master_media else 0) * seq_fps))]
     ends += [e["start"] + entry_span(e, seq_fps)[1] for e in entries if e.get("media") is not None]
-    pos, out = max(ends) + int(round(UNSYNCED_GAP_S * seq_fps)), []
-    for c in left:
-        why = re.split(r"\s*[(;]", (c.reasons or ["not synced"])[0])[0].strip()
-        out.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=2, all_audio="raw",
-                        label=None, tail=True, name="%s (%s)" % (os.path.basename(c.path), why)))
-        pos += int(round(c.duration * seq_fps))
-    return out
+    pos, out, markers = max(ends) + int(round(UNSYNCED_GAP_S * seq_fps)), [], []
+    for title, group in (("Unsure", [c for c in left if is_unsure(c)]),
+                         ("No match", [c for c in left if not is_unsure(c)])):
+        if not group:
+            continue
+        first = pos
+        for c in group:
+            why = re.split(r"\s*[(;]", (c.reasons or ["not synced"])[0])[0].strip()
+            if c.status == "placed":        # placed, but no pass of it made it onto a track
+                why = "not synced"
+            if c.guess is not None and is_unsure(c):
+                why += ", song %s?" % fmt_song(c.guess)
+            out.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=2, all_audio="raw",
+                            label=None, tail=True, name="%s (%s)" % (os.path.basename(c.path), why)))
+            pos += max(1, int(round(c.duration * seq_fps)))
+        markers.append(dict(name=title, comment="%d clip%s that didn't sync" % (len(group), "s"[len(group) == 1:]),
+                            start=first, end=pos))
+    return out, markers
 
 
 def placements_of(clips):
@@ -3316,7 +3373,10 @@ def clip_lists(clips, master):
             at = round(p.offset + p.src_in * c.speed, 1)
         elif song_spans(c):
             at = round(min(sp[0] for sp in song_spans(c)), 1)
-        return dict(file=os.path.basename(c.path), cam=clip_cam(c), at=at)
+        d = dict(file=os.path.basename(c.path), cam=clip_cam(c), at=at)
+        if c.status != "placed" and c.guess is not None:
+            d["guess"] = round(c.guess, 1)
+        return d
     if master is None:
         return {}
     look, seen = [], set()
@@ -3329,7 +3389,9 @@ def clip_lists(clips, master):
         if c.status != "placed":
             aside[c.reasons[0] if c.reasons else REASON_NO_MATCH].append(item(c))
     chorus = [item(c, p) for c in clips for p in c.parts if p.repeat_alt is not None]
-    return dict(worth_a_look=look, restarted=[item(c) for c in clips if c.split], check_chorus=chorus,
+    return dict(worth_a_look=look, restarted=[dict(item(c), passes=len(c.parts),
+                                                                  placed=sum(p.status == "placed" for p in c.parts))
+                                                             for c in clips if c.split], check_chorus=chorus,
                 aside=dict(aside))
 
 
