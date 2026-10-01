@@ -39,7 +39,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.41"
+VERSION = "0.5.42"
 
 # ---------------------------------------------------------------- constants
 
