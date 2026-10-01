@@ -234,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "premiere": if let p = path { openInPremiere(p, projectDir: body["projectDir"] as? String) }
         case "report": if let p = path { openReport(p) }
         case "reveal": if let p = path { NSWorkspace.shared.activateFileViewerSelecting([p]) }
+        case "scanFolder": if let p = path { scanFolder(p) }
         case "makeProject": if let p = path { _ = makeProject(p, projectDir: body["projectDir"] as? String) }
         case "revealProject":
             if let p = path {
@@ -295,7 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard proc?.isRunning != true else { NSSound.beep(); return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = target != "song"
-        let folderOnly = target == "export" || target == "prproj"
+        let folderOnly = target == "export" || target == "prproj" || target == "template"
         panel.canChooseFiles = !folderOnly
         // exactly the files usable() keeps, so nothing that can be chosen is dropped afterwards
         let audioTypes = audioExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
@@ -303,15 +304,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if target == "song" { panel.allowedContentTypes = audioTypes }
         else if panel.canChooseFiles { panel.allowedContentTypes = [UTType.folder] + audioTypes + videoTypes }
         panel.allowsMultipleSelection = target == "footage" || target == "any"
-        panel.canCreateDirectories = folderOnly
-        panel.prompt = target == "export" ? "Export Here" : target == "prproj" ? "Save Here" : "Add"
+        panel.canCreateDirectories = folderOnly && target != "template"
+        panel.prompt = target == "export" ? "Export Here" : target == "prproj" ? "Save Here" : target == "template" ? "Import" : "Add"
         panel.message = target == "song" ? "Choose the song"
             : target == "footage" ? "Choose the footage: the shoot folder, a day, cards or clips"
             : target == "export" ? "Choose the folder the XML goes in"
             : target == "prproj" ? "Choose the folder the Premiere project goes in"
+            : target == "template" ? "Choose a project folder. Kickoff makes a template from its folders"
             : "Choose the shoot folder or cards (and the song if it isn't in the folder)"
         panel.beginSheetModal(for: window) { [weak self] result in
             guard let self = self, result == .OK else { return }
+            if target == "template" {
+                if let u = panel.urls.first { self.scanFolder(u) }
+                return
+            }
             let paths = self.json(usable(panel.urls).map { $0.path })
             if target == "any" {
                 self.js("Kickoff.add(\(paths))")
@@ -319,6 +325,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 self.js("Kickoff.picked(\(paths), \(self.json(target)), \(row))")
             }
         }
+    }
+
+    // a project folder's subfolders, as bins for a template: names only, hidden folders and packages skipped
+    func folderTree(_ url: URL, depth: Int) -> [[String: Any]] {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
+        guard depth < 4, let items = try? FileManager.default.contentsOfDirectory(at: url,
+            includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return [] }
+        var out: [[String: Any]] = []
+        let sorted = items.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        for u in sorted {
+            let v = try? u.resourceValues(forKeys: Set(keys))
+            if v?.isDirectory != true || v?.isPackage == true { continue }
+            var bin: [String: Any] = ["name": u.lastPathComponent]
+            let kids = folderTree(u, depth: depth + 1)
+            if !kids.isEmpty { bin["children"] = kids }
+            out.append(bin)
+            if out.count >= 60 { break }
+        }
+        return out
+    }
+
+    func scanFolder(_ url: URL) {
+        let tree = folderTree(url, depth: 0)
+        js("Kickoff.folderTree && Kickoff.folderTree(\(json(url.lastPathComponent)), \(json(tree)))")
     }
 
     func run(_ paths: [String]) {
