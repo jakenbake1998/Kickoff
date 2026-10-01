@@ -39,7 +39,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.39"
+VERSION = "0.5.40"
 
 # ---------------------------------------------------------------- constants
 
@@ -1951,15 +1951,13 @@ RUN_WINS = 3
 PAIR_STRONG = 2.0          # ...or just 2 in a row when both are this clear (Day 2/3 negatives top out at 1.23)
 
 
-def phase_run(xs, master, st, h, t, lo, hi, known):
-    """The longest run of RUN_WINS or more consecutive 10 s windows (hop 5 s) in [lo, hi] whose phase
-    peaks against the whole song all land on one position within a frame, each PHASE_AGREE clear, at
-    no known pass. Shaped like phase_gap's result, or None."""
+def _phase_run_grid(xs, master, lo, hi, known, best):
+    """phase_run on one grid of 10 s windows starting at lo: `best` or a longer run found here."""
     starts = list(np.arange(lo, hi - PHASE_WIN_S + 1e-6, PHASE_HOP_S))
     if len(starts) < 2:
-        return None
+        return best
     res = [(a,) + phase_search(xs, master, a, a + PHASE_WIN_S) for a in starts]
-    best, i = None, 0
+    i = 0
     while i < len(res):
         a, o, r = res[i]
         j = i
@@ -1973,6 +1971,18 @@ def phase_run(xs, master, st, h, t, lo, hi, known):
                 best = (n, float(np.median([x[1] for x in res[i:j + 1]])), res[i][0],
                         res[j][0] + PHASE_WIN_S, min(x[2] for x in res[i:j + 1]))
         i = j + 1
+    return best
+
+
+def phase_run(xs, master, st, h, t, lo, hi, known):
+    """The longest run of RUN_WINS or more consecutive 10 s windows (hop 5 s) in [lo, hi] whose phase
+    peaks against the whole song all land on one position within a frame, each PHASE_AGREE clear, at
+    no known pass. Shaped like phase_gap's result, or None. A second grid, shifted half a hop, catches
+    a short play the first grid cuts in two (DJI 180238 at 1283: 3.02x and 1.86x on one grid, 3.64x
+    and 2.44x on the other)."""
+    best = None
+    for shift in (0.0, PHASE_HOP_S / 2):
+        best = _phase_run_grid(xs, master, lo + shift, hi, known, best)
     if best is None:
         return None
     n, o, first, last, score = best
