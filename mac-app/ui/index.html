@@ -242,15 +242,40 @@ button.pause:hover{background:color-mix(in srgb,var(--accent) 22%,transparent)}
 button.pause + button.stop{margin-left:10px}
 button.stop:hover{background:color-mix(in srgb,var(--bad) 22%,transparent);border-color:var(--bad)}
 button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
-.builds{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;display:grid;gap:10px}
-.builds .h{font-size:13px;color:var(--muted);font-weight:600}
-.bgrid{display:grid;grid-template-columns:minmax(190px,230px) 1fr;gap:18px;align-items:start}
-@media (max-width:620px){.bgrid{grid-template-columns:1fr}}
+.builds{display:grid;gap:10px;grid-auto-rows:max-content;align-content:start}
+.thead{display:grid;gap:1px}
+.th{margin:0;font:700 16px/1.25 var(--display);letter-spacing:.1px}
+.ts{margin:0;color:var(--muted);font-size:12.5px}
+.tpl{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;transition:border-color .15s}
+.trow{all:unset;box-sizing:border-box;width:100%;display:flex;align-items:center;gap:14px;padding:13px 16px;cursor:pointer}
+.trow:hover{background:color-mix(in srgb,var(--ink) 3%,transparent)}
+.trow:hover .tchev{color:var(--ink)}
+.trow:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:12px}
+.tico{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center;color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.tt{flex:1;min-width:0;display:grid;gap:1px}
+.tn{font-weight:600;font-size:14.5px;display:flex;align-items:center;gap:9px}
+.tuse{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:500;color:var(--accent)}
+.td{color:var(--muted);font-size:12.5px;line-height:1.4}
+.tchev{flex:none;color:var(--muted);transition:color .15s}
+.tsheet{width:min(760px,calc(100vw - 48px));max-height:calc(100vh - 64px);padding:0;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);box-shadow:0 24px 70px rgba(0,0,0,.55);overflow:hidden}
+.tsheet[open]{display:grid;grid-template-rows:auto minmax(0,1fr);animation:sheetIn .2s ease-out}
+.tsheet::backdrop{background:rgba(10,11,13,.62);backdrop-filter:blur(2px)}
+@keyframes sheetIn{from{opacity:0;transform:translateY(8px) scale(.985)}}
+.tshead{display:flex;align-items:center;gap:14px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.tshead .tn{font:700 18px/1.2 var(--display)}
+.tclose{all:unset;flex:none;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--muted);cursor:pointer}
+.tclose:hover{color:var(--ink);background:color-mix(in srgb,var(--ink) 7%,transparent)}
+.tclose:focus-visible{outline:2px solid var(--accent)}
+.tdetail:focus{outline:none}
+.tdetail{display:grid;grid-template-columns:minmax(200px,250px) 1fr;gap:22px;align-items:start;padding:18px 18px 20px;overflow-y:auto;background:color-mix(in srgb,var(--bg) 45%,var(--panel))}
+@media (max-width:620px){.tdetail{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){.tchev{transition:none}.tsheet[open]{animation:none}}
+.tfoot{margin:0;color:var(--muted);font-size:12.5px}
 .tree{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px;line-height:1.4;display:grid;gap:1px}
 .tree>div{display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tree .l2{padding-left:18px}
 .tree .tb{font-weight:600}
-.tree .dim,.steps .dim{color:var(--muted)}
+.tree .dim{color:var(--muted)}
 .fold{width:13px;height:10px;border-radius:2px;background:var(--muted);opacity:.55;flex:none;position:relative}
 .fold:before{content:"";position:absolute;left:0;top:-2px;width:6px;height:3px;border-radius:1px 1px 0 0;background:inherit}
 .chip{width:10px;height:10px;border-radius:3px;flex:none}
@@ -579,8 +604,33 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
 
   <div class="builds" id="hints">
-    <div class="h">What you get in Premiere</div>
-    <div class="bgrid">
+    <div class="thead">
+      <h2 class="th">Project template</h2>
+      <p class="ts">The bins and sequences Kickoff builds in Premiere.</p>
+    </div>
+    <div class="tpl" id="tplDefault">
+      <button class="trow" id="bTpl" type="button" aria-haspopup="dialog">
+        <span class="tico" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+        <span class="tt">
+          <span class="tn">Default <span class="tuse"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>In use</span></span>
+          <span class="td">A bin for every camera, a Breakup per camera and an Edit sequence ready to cut.</span>
+        </span>
+        <svg class="tchev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+      </button>
+    </div>
+    <p class="tfoot">Shooting over several days? Run the same folder again and Kickoff adds only the new cards.</p>
+  </div>
+
+  <dialog class="tsheet" id="tplDetail" aria-labelledby="tplName">
+    <div class="tshead">
+      <span class="tico" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+      <span class="tt">
+        <span class="tn"><span id="tplName">Default</span> <span class="tuse"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>In use</span></span>
+        <span class="td">Your bin layout, built the same way for every shoot.</span>
+      </span>
+      <button class="tclose" id="bTplClose" type="button" aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="tdetail" tabindex="-1" autofocus>
       <div class="treecol">
         <div class="tree" id="tree" aria-label="The project as it appears in Premiere"></div>
         <button class="custom" id="bCustom">Customize</button>
@@ -591,10 +641,9 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         <li><b>A Breakup per camera.</b> All of that camera&rsquo;s clips back to back, with every audio channel, to scrub through.</li>
         <li data-for="setup"><b>No syncing.</b> Bins, Breakups and an empty Edit sequence, with audio sorted into Music, SFX and Captured.</li>
         <li><b>Ready to cut.</b> A <span id="sizeWord">4K</span> Edit sequence, and every clip scaled to fill the frame, so no black edges.</li>
-        <li class="dim">Shooting over several days? Run the same folder again and Kickoff adds only the new cards.</li>
       </ul>
     </div>
-  </div>
+  </dialog>
 
   <div id="run" hidden>
     <div style="display:grid;gap:18px">
@@ -722,7 +771,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     mode = m;
     try { localStorage.setItem("kickoff-screen", m); } catch (e) {}
     $("modeNote").textContent = MODE_NOTES[m];
-    document.querySelectorAll("#hints [data-for]").forEach(function (d) { d.hidden = d.dataset.for !== m; });
+    document.querySelectorAll("#hints [data-for], #tplDetail [data-for]").forEach(function (d) { d.hidden = d.dataset.for !== m; });
     if ($("tree")) renderTree();
     post({ cmd: "mode", mode: m });
   }
@@ -2488,7 +2537,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   });
   $("bSet").addEventListener("click", function () { showView($("vSet").hidden ? "set" : mode); });
   $("bSetBack").addEventListener("click", function () { showView(mode); });
-  $("bCustom").addEventListener("click", function () { pane = "bins"; showView("set"); });
+  $("bCustom").addEventListener("click", function () { $("tplDetail").close(); pane = "bins"; showView("set"); });
+  $("bTpl").addEventListener("click", function () { renderTree(); $("tplDetail").showModal(); });
+  $("bTplClose").addEventListener("click", function () { $("tplDetail").close(); });
+  $("tplDetail").addEventListener("click", function (e) { if (e.target === this) this.close(); });   // a click outside the sheet
 
   window.Kickoff = {
     started: started,
