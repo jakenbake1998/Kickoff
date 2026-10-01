@@ -247,6 +247,7 @@ button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);
 .th{margin:0;font:700 16px/1.25 var(--display);letter-spacing:.1px}
 .ts{margin:0;color:var(--muted);font-size:12.5px}
 .tpl{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;transition:border-color .15s}
+.tlist{display:grid;gap:8px}
 .trow{all:unset;box-sizing:border-box;width:100%;display:flex;align-items:center;gap:14px;padding:13px 16px;cursor:pointer}
 .trow:hover{background:color-mix(in srgb,var(--ink) 3%,transparent)}
 .trow:hover .tchev{color:var(--ink)}
@@ -271,6 +272,24 @@ button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);
 @media (max-width:620px){.tdetail{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){.tchev{transition:none}.tsheet[open]{animation:none}}
 .tfoot{margin:0;color:var(--muted);font-size:12.5px}
+.tlock{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:500;color:var(--muted)}
+.tshead .tn{flex-wrap:wrap}
+#tplRename{font:700 18px/1.2 var(--display);color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:2px 8px;width:min(260px,100%)}
+#tplRename:focus{outline:none;border-color:var(--accent)}
+.tusebtn{flex:none;background:var(--accent);color:#fff;border:0;border-radius:9px;padding:8px 14px;font:600 13px var(--body);cursor:pointer}
+.tusebtn:hover{filter:brightness(1.07)}
+.treebox{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg);display:grid}
+.treebox .tree{border:0;border-radius:0;padding:10px 12px}
+.tbig{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px;border-top:1px solid var(--line);font:600 13.5px var(--body);color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent);cursor:pointer}
+.tbig:hover{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.tbig:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.tside{display:grid;gap:16px;align-content:start}
+.tdetail.editing{grid-template-columns:1fr}
+.tdetail.editing .tside{display:none}
+.tdetail.editing .treebox{background:var(--panel)}
+.tdel{all:unset;justify-self:start;font-size:12.5px;color:var(--muted);cursor:pointer;padding:2px 0}
+.tdel:hover{color:var(--bad,#ef6b6b)}
+.tdel[data-armed]{color:var(--bad,#ef6b6b)}
 .tree{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px;line-height:1.4;display:grid;gap:1px}
 .tree>div{display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tree .l2{padding-left:18px}
@@ -563,13 +582,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div class="seg stabs" id="sTabs">
       <button data-pane="seq" aria-pressed="true">Sequences</button>
       <button data-pane="labels" aria-pressed="false">Label colors</button>
-      <button data-pane="bins" aria-pressed="false">Folder structure</button>
       <button data-pane="files" aria-pressed="false">Files</button>
       <button data-pane="sync" aria-pressed="false">Syncing</button>
     </div>
     <div class="spane" id="pane-seq"></div>
     <div class="spane" id="pane-labels" hidden></div>
-    <div class="spane" id="pane-bins" hidden></div>
     <div class="spane" id="pane-files" hidden></div>
     <div class="spane" id="pane-sync" hidden></div>
   </section>
@@ -608,16 +625,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       <h2 class="th">Project template</h2>
       <p class="ts">The bins and sequences Kickoff builds in Premiere.</p>
     </div>
-    <div class="tpl" id="tplDefault">
-      <button class="trow" id="bTpl" type="button" aria-haspopup="dialog">
-        <span class="tico" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
-        <span class="tt">
-          <span class="tn">Default <span class="tuse"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>In use</span></span>
-          <span class="td">A bin for every camera, a Breakup per camera and an Edit sequence ready to cut.</span>
-        </span>
-        <svg class="tchev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-      </button>
-    </div>
+    <div class="tlist" id="tplList"></div>
     <p class="tfoot">Shooting over several days? Run the same folder again and Kickoff adds only the new cards.</p>
   </div>
 
@@ -625,23 +633,27 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div class="tshead">
       <span class="tico" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
       <span class="tt">
-        <span class="tn"><span id="tplName">Default</span> <span class="tuse"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>In use</span></span>
-        <span class="td">Your bin layout, built the same way for every shoot.</span>
+        <span class="tn"><span id="tplName"></span><input id="tplRename" type="text" spellcheck="false" aria-label="Template name" hidden><span class="tuse" id="tplInUse"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>In use</span><span class="tlock" id="tplLock"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Locked</span></span>
+        <span class="td" id="tplSub"></span>
       </span>
+      <button class="tusebtn" id="bTplUse" type="button">Use this template</button>
       <button class="tclose" id="bTplClose" type="button" aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="tdetail" tabindex="-1" autofocus>
-      <div class="treecol">
+      <div class="treebox">
         <div class="tree" id="tree" aria-label="The project as it appears in Premiere"></div>
-        <button class="custom" id="bCustom">Customize</button>
+        <button class="tbig" id="bCustom" type="button"></button>
       </div>
-      <ul class="steps">
-        <li><b>A bin for every camera.</b> Named after your camera folders, so &ldquo;B Cam (FX3)&rdquo; stays B Cam (FX3), with its own label color.</li>
-        <li data-for="music"><b>Every clip lined up to the song.</b> Per camera, a Synced sequence with each take on its own track at the right spot, and a Condensed copy packed onto as few tracks as possible for multicam. Takes where the song restarted are split into passes.</li>
-        <li><b>A Breakup per camera.</b> All of that camera&rsquo;s clips back to back, with every audio channel, to scrub through.</li>
-        <li data-for="setup"><b>No syncing.</b> Bins, Breakups and an empty Edit sequence, with audio sorted into Music, SFX and Captured.</li>
-        <li><b>Ready to cut.</b> A <span id="sizeWord">4K</span> Edit sequence, and every clip scaled to fill the frame, so no black edges.</li>
-      </ul>
+      <div class="tside">
+        <ul class="steps">
+          <li><b>A bin for every camera.</b> Named after your camera folders, so &ldquo;B Cam (FX3)&rdquo; stays B Cam (FX3), with its own label color.</li>
+          <li data-for="music"><b>Every clip lined up to the song.</b> Per camera, a Synced sequence with each take on its own track at the right spot, and a Condensed copy packed onto as few tracks as possible for multicam. Takes where the song restarted are split into passes.</li>
+          <li><b>A Breakup per camera.</b> All of that camera&rsquo;s clips back to back, with every audio channel, to scrub through.</li>
+          <li data-for="setup"><b>No syncing.</b> Bins, Breakups and an empty Edit sequence, with audio sorted into Music, SFX and Captured.</li>
+          <li><b>Ready to cut.</b> A <span id="sizeWord">4K</span> Edit sequence, and every clip scaled to fill the frame, so no black edges.</li>
+        </ul>
+        <button class="tdel" id="bTplDel" type="button">Delete this template</button>
+      </div>
     </div>
   </dialog>
 
@@ -2120,7 +2132,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     names: { breakup: "{cam}_Breakup", synced: "{cam}_Synced", condensed: "{cam}_Synced_Condensed",
              nested: "{project}_CamsNested", edit: "{project}_Edit" },
     unsynced: true, unsynced_gap_s: 60, place_repeats: true, skip_folders: [],
-    timecode_narrative: true, timecode_music: false
+    timecode_narrative: true, timecode_music: false,
+    templates: [], template: -1          // the project template in use: -1 is Default (locked), else one of templates
   };
   // bins Kickoff fills: they can be renamed and moved, not removed
   var REQUIRED = { footage: 1, breakup: 1, sync: 1, synced: 1, condensed: 1, edit: 1, music: 1 };
@@ -2142,10 +2155,19 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       else s[k] = obj[k];
     });
     settings = s;
+    if (!Array.isArray(s.templates)) s.templates = [];
+    if (s.template >= s.templates.length) s.template = -1;
+    if (s.template < 0 && JSON.stringify(s.bins) !== JSON.stringify(DEFAULT_BINS)) {
+      // bins customized before templates existed: they become a template of their own, still in use
+      s.templates.push({ name: "My template", bins: s.bins });
+      s.template = s.templates.length - 1;
+    }
+    s.bins = s.template < 0 ? clone(DEFAULT_BINS) : s.templates[s.template].bins;
   }
   try { adopt(JSON.parse(localStorage.getItem("kickoff-settings") || "null")); } catch (e) {}
   var saveTimer = null;
   function saveSettings() {
+    if (settings.template >= 0) settings.templates[settings.template].bins = settings.bins;
     try { localStorage.setItem("kickoff-settings", JSON.stringify(settings)); } catch (e) {}
     clearTimeout(saveTimer);
     saveTimer = setTimeout(function () { post({ cmd: "settings", settings: settings }); }, 300);
@@ -2164,7 +2186,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function labelFor(letter) { return settings.labels[letter] || LABEL_ORDER[(letter.charCodeAt(0) - 65) % LABEL_ORDER.length]; }
 
   // the "What you get in Premiere" tree, as Settings has it
+  var viewing = -1;                       // the template the details sheet shows
+  function tplBins(i) { return i < 0 ? DEFAULT_BINS : settings.templates[i].bins; }
+  function tplName(i) { return i < 0 ? "Default" : settings.templates[i].name; }
   function renderTree() {
+    renderTplList();
     var html = [], setup = mode === "setup";
     function skip(b) { return setup && /^(sync|synced|condensed)$/.test(b.role || ""); }
     (function draw(list, d) {
@@ -2182,7 +2208,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         });
         draw(b.children || [], d + 1);
       });
-    })(settings.bins, 0);
+    })(tplBins(viewing), 0);
     $("tree").innerHTML = html.join("");
     var sz = settings.sync_size;
     $("sizeWord").textContent = sz === "first" ? "camera-size" : /^(3840|4096)x2160$/.test(sz) ? "4K" :
@@ -2222,7 +2248,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   function renderSettings() {
-    ["seq", "labels", "bins", "files", "sync"].forEach(function (k) { $("pane-" + k).hidden = k !== pane; $("pane-" + k).innerHTML = ""; });
+    ["seq", "labels", "files", "sync"].forEach(function (k) { $("pane-" + k).hidden = k !== pane; $("pane-" + k).innerHTML = ""; });
     document.querySelectorAll("#sTabs button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.pane === pane)); });
     var P = $("pane-" + pane), g;
     if (pane === "seq") {
@@ -2272,13 +2298,6 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         g.appendChild(addc);
       }
       P.appendChild(g);
-    } else if (pane === "bins") {
-      g = group("Folder structure", "Drag a bin to move it, or drop it on another bin to put it inside. Double-click a name to rename it.");
-      var holder = el("div", { style: "display:grid;gap:10px" });
-      g.appendChild(holder);
-      P.appendChild(g);
-      BinTree(holder, { bins: settings.bins, required: REQUIRED, notes: ROLE_NOTE, scroller: P,
-        onChange: function () { saveSettings(); } });
     } else if (pane === "files") {
       g = group("Where it saves", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
       g.appendChild(destControl("export"));
@@ -2537,9 +2556,89 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   });
   $("bSet").addEventListener("click", function () { showView($("vSet").hidden ? "set" : mode); });
   $("bSetBack").addEventListener("click", function () { showView(mode); });
-  $("bCustom").addEventListener("click", function () { $("tplDetail").close(); pane = "bins"; showView("set"); });
-  $("bTpl").addEventListener("click", function () { renderTree(); $("tplDetail").showModal(); });
-  $("bTplClose").addEventListener("click", function () { $("tplDetail").close(); });
+  var FOLDER_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  var CHECK_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>';
+  function tplDesc(i) {
+    return i < 0 ? "A bin for every camera, a Breakup per camera and an Edit sequence ready to cut."
+      : "Made from " + esc(settings.templates[i].from || "Default") + ". Yours to change.";
+  }
+  function renderTplList() {
+    var list = $("tplList");
+    if (!list) return;
+    list.innerHTML = "";
+    [-1].concat(settings.templates.map(function (_, i) { return i; })).forEach(function (i) {
+      var b = el("button", { class: "trow", type: "button", "aria-haspopup": "dialog" },
+        '<span class="tico" aria-hidden="true">' + FOLDER_SVG + '</span><span class="tt"><span class="tn">' + esc(tplName(i)) +
+        (settings.template === i ? ' <span class="tuse">' + CHECK_SVG + 'In use</span>' : "") + '</span><span class="td">' + tplDesc(i) +
+        '</span></span><svg class="tchev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>');
+      b.addEventListener("click", function () { openTpl(i); });
+      var card = el("div", { class: "tpl" }); card.appendChild(b); list.appendChild(card);
+    });
+  }
+  function openTpl(i) {
+    viewing = i;
+    var mine = i >= 0, inUse = settings.template === i;
+    $("tplName").textContent = tplName(i); $("tplName").hidden = mine;
+    $("tplRename").hidden = !mine; if (mine) $("tplRename").value = tplName(i);
+    $("tplInUse").hidden = !inUse;
+    $("tplLock").hidden = mine;
+    $("tplSub").textContent = mine ? "Rename it here. Customize changes its bins." : "Kickoff's standard layout. Make a template to change it.";
+    $("bTplUse").hidden = inUse;
+    $("bCustom").innerHTML = mine ? "Customize bins" : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Make a template from Default';
+    setEditing(false);
+    $("bTplDel").hidden = !mine; delete $("bTplDel").dataset.armed; $("bTplDel").textContent = "Delete this template";
+    renderTree();
+    if (!$("tplDetail").open) $("tplDetail").showModal();
+  }
+  function useTpl(i) {
+    settings.template = i;
+    settings.bins = i < 0 ? clone(DEFAULT_BINS) : settings.templates[i].bins;
+    saveSettings();
+  }
+  $("bTplUse").addEventListener("click", function () { useTpl(viewing); openTpl(viewing); });
+  $("tplRename").addEventListener("input", function () {
+    settings.templates[viewing].name = this.value.trim() || "Untitled template"; saveSettings();
+  });
+  $("bCustom").addEventListener("click", function () {
+    if (viewing < 0) {                   // Default is locked: copy it into a new template, in use, named for renaming
+      var n = settings.templates.length + 1;
+      settings.templates.push({ name: "Template " + n, from: "Default", bins: clone(DEFAULT_BINS) });
+      useTpl(settings.templates.length - 1);
+      openTpl(settings.template);
+      $("tplRename").focus(); $("tplRename").select();
+      return;
+    }
+    setEditing(!editing);
+  });
+  var editing = false;
+  function setEditing(on) {             // Customize: the bin editor takes the details' place, Done goes back
+    editing = on;
+    $("tplDetail").querySelector(".tdetail").classList.toggle("editing", on);
+    var old = $("tplEdit"); if (old) old.remove();
+    $("tree").hidden = on;
+    if (viewing >= 0) $("bCustom").textContent = on ? "Done" : "Customize bins";
+    $("tplSub").textContent = viewing < 0 ? "Kickoff's standard layout. Make a template to change it."
+      : on ? "Drag a bin to move it, or drop it on another bin to put it inside. Double-click a name to rename it."
+      : "Rename it here. Customize changes its bins.";
+    if (!on) { renderTree(); return; }
+    var holder = el("div", { id: "tplEdit", style: "display:grid;gap:10px;padding:12px" });
+    $("tree").after(holder);
+    BinTree(holder, { bins: settings.templates[viewing].bins, required: REQUIRED, notes: ROLE_NOTE,
+      scroller: $("tplDetail").querySelector(".tdetail"), onChange: function () { saveSettings(); } });
+  }
+  $("bTplDel").addEventListener("click", function () {
+    var bt = this;
+    if (!bt.dataset.armed) {
+      bt.dataset.armed = "1"; bt.textContent = "Click again to delete " + tplName(viewing);
+      setTimeout(function () { delete bt.dataset.armed; bt.textContent = "Delete this template"; }, 4000);
+      return;
+    }
+    var was = settings.template;
+    settings.templates.splice(viewing, 1);
+    if (was === viewing) useTpl(-1);
+    else { if (was > viewing) settings.template = was - 1; saveSettings(); }
+    $("tplDetail").close();
+  });
   $("tplDetail").addEventListener("click", function (e) { if (e.target === this) this.close(); });   // a click outside the sheet
 
   window.Kickoff = {
