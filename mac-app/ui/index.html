@@ -582,7 +582,42 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   .slopdone b{color:var(--ink)}
   .slopdone.bad{color:var(--bad)}
   @keyframes spin{to{transform:rotate(360deg)}}
-  #bSlop{display:inline-flex;align-items:center;gap:7px}
+  /* the Slop Cut button is AI slop on purpose: far too much glow, rainbow everything */
+  #bSlop{display:inline-flex;align-items:center;gap:7px;position:relative;border:0;color:#fff;font-weight:800;letter-spacing:.2px;
+    background:linear-gradient(90deg,#ff2bd6,#8b5cff,#22d3ee,#a3ff3c,#ffb800,#ff2bd6);background-size:300% 100%;
+    text-shadow:0 0 6px rgba(255,255,255,.9),0 0 14px #ff2bd6;
+    animation:slopFlow 3s linear infinite,slopGlow 1.6s ease-in-out infinite alternate}
+  #bSlop:hover{filter:saturate(1.6) brightness(1.15);transform:scale(1.04)}
+  #bSlop .spark{display:inline-block;animation:slopSpin 2.4s linear infinite}
+  @keyframes slopFlow{to{background-position:300% 0}}
+  @keyframes slopGlow{from{box-shadow:0 0 14px 4px #ff2bd6,0 0 40px 12px rgba(139,92,255,.85),0 0 80px 26px rgba(34,211,238,.5),0 0 140px 50px rgba(255,43,214,.25)}
+    to{box-shadow:0 0 22px 8px #22d3ee,0 0 60px 20px rgba(255,43,214,.9),0 0 120px 40px rgba(163,255,60,.45),0 0 200px 70px rgba(139,92,255,.3)}}
+  @keyframes slopSpin{0%{transform:rotate(0) scale(1)}50%{transform:rotate(180deg) scale(1.35)}100%{transform:rotate(360deg) scale(1)}}
+  #bSlop.boom{animation:slopBoom .45s cubic-bezier(.2,.9,.3,1.4) forwards}
+  @keyframes slopBoom{0%{transform:scale(1)}40%{transform:scale(1.5);filter:brightness(2.5) saturate(2)}100%{transform:scale(0);opacity:0}}
+  .slopfx{position:fixed;inset:0;pointer-events:none;z-index:80;overflow:hidden}
+  .slopfx .flash{position:absolute;inset:0;background:radial-gradient(circle at var(--x) var(--y),rgba(255,255,255,.95),rgba(255,43,214,.55) 18%,rgba(34,211,238,.25) 38%,transparent 65%);animation:slopFlash .7s ease-out forwards}
+  .slopfx .ring{position:absolute;left:var(--x);top:var(--y);width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;border:6px solid #fff;
+    box-shadow:0 0 30px #ff2bd6,inset 0 0 30px #22d3ee;animation:slopRing .7s ease-out forwards}
+  .slopfx i{position:absolute;left:var(--x);top:var(--y);font-style:normal;font-size:var(--s);will-change:transform,opacity;
+    animation:slopBit var(--d) cubic-bezier(.1,.8,.3,1) forwards}
+  @keyframes slopFlash{0%{opacity:1}100%{opacity:0}}
+  @keyframes slopRing{to{transform:scale(40);opacity:0;border-width:1px}}
+  @keyframes slopBit{0%{transform:translate(-50%,-50%) scale(.3);opacity:1}70%{opacity:1}
+    100%{transform:translate(calc(-50% + var(--dx)),calc(-50% + var(--dy))) rotate(var(--r)) scale(1);opacity:0}}
+  /* the ⓘ: a trippy, animated, overdone background */
+  .slop .tipbox{color:#fff;border:0;overflow:hidden;isolation:isolate;text-shadow:0 1px 3px rgba(0,0,0,.85)}
+  .slop .tipbox::before{content:"";position:absolute;inset:-60%;z-index:-2;
+    background:conic-gradient(from 0deg,#ff2bd6,#8b5cff,#22d3ee,#a3ff3c,#ffb800,#ff2bd6);animation:slopTrip 6s linear infinite}
+  .slop .tipbox .trip{position:absolute;inset:0;z-index:-1;background:
+    repeating-radial-gradient(circle at 30% 40%,rgba(0,0,0,.0) 0 10px,rgba(0,0,0,.28) 10px 20px),rgba(20,8,40,.45);
+    animation:slopWobble 3s ease-in-out infinite alternate}
+  .slop .tipbox .th{color:#fff;font-size:14px;text-shadow:0 0 8px #ff2bd6,0 0 16px #22d3ee}
+  .slop .tipbox b{color:#fff}
+  .slop .tipbox::after{display:none}
+  @keyframes slopTrip{to{transform:rotate(360deg);filter:hue-rotate(360deg)}}
+  @keyframes slopWobble{from{background-position:0 0;transform:scale(1)}to{background-position:40px -30px;transform:scale(1.15)}}
+  @media (prefers-reduced-motion:reduce){#bSlop,#bSlop .spark,.slop .tipbox::before,.slop .tipbox .trip{animation:none}}
 </style>
 </head>
 <body>
@@ -755,7 +790,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
   <div class="btns" id="btnsDone" hidden>
     <button class="pri" id="bOpen">Open in Premiere</button>
-    <button id="bSlop" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/></svg>Make a Slop Cut</button>
+    <button id="bSlop" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/></svg>Make a Slop Cut <span class="spark" aria-hidden="true">&#x2728;</span></button>
     <div class="finder">
       <button id="bFinder" aria-haspopup="menu" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Show in Finder<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
       <div class="fmenu" id="fMenu" role="menu" hidden>
@@ -782,7 +817,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div class="ask slop" role="dialog" aria-modal="true" aria-labelledby="slopTitle">
       <div class="slophead"><h3 id="slopTitle">KickOff Slop Cut</h3>
         <span class="tip"><button type="button" class="tipi" aria-label="What's a Slop Cut?" aria-describedby="slopTip">i</button>
-          <span class="tipbox" id="slopTip" role="tooltip"><span class="th">What&rsquo;s a Slop Cut?</span>
+          <span class="tipbox" id="slopTip" role="tooltip"><span class="trip" aria-hidden="true"></span><span class="th">What&rsquo;s a Slop Cut?</span>
             Our editors haven&rsquo;t slept since 2019. They live on cold brew, cut on the beat, and never ask for notes. Drummer on the fills, singer on the lines, the wide when the song turns. Then you&rsquo;re done. Ship it, deliver, send. Adi&oacute;s, amigos! &#x1F57A;<br><br>
             <b>Real talk:</b> it&rsquo;s a copy of your Edit sequence, cut up. Shots it isn&rsquo;t using are disabled, not deleted, so every angle is still there to switch on.</span></span></div>
       <p class="hint" id="slopSub">Who&rsquo;s each camera on?</p>
@@ -2886,7 +2921,32 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       slopView("error", esc(slop.err || "The editors walked off the job. Try again, or run a fresh sync first."));
     }
   }
-  $("bSlop").addEventListener("click", slopOpen);
+  // clicking it blows it up: a flash, a shock ring and a burst of sparkles, then the window opens
+  function slopBoom() {
+    var btn = $("bSlop");
+    if (btn.classList.contains("boom") || running()) return;
+    var r = btn.getBoundingClientRect(), fx = document.createElement("div");
+    fx.className = "slopfx";
+    fx.style.setProperty("--x", (r.left + r.width / 2) + "px");
+    fx.style.setProperty("--y", (r.top + r.height / 2) + "px");
+    fx.innerHTML = '<div class="flash"></div><div class="ring"></div>';
+    var bits = ["\u2728", "\u{1F4A5}", "\u{1F3AC}", "\u2B50", "\u{1F525}", "\u{1F57A}", "\u{1F4AB}", "\u{1F308}"];
+    for (var k = 0; k < 46; k++) {
+      var i = document.createElement("i"), a = Math.random() * Math.PI * 2, d = 160 + Math.random() * 420;
+      i.textContent = bits[k % bits.length];
+      i.style.setProperty("--dx", (Math.cos(a) * d).toFixed(0) + "px");
+      i.style.setProperty("--dy", (Math.sin(a) * d).toFixed(0) + "px");
+      i.style.setProperty("--r", ((Math.random() - .5) * 900).toFixed(0) + "deg");
+      i.style.setProperty("--s", (14 + Math.random() * 26).toFixed(0) + "px");
+      i.style.setProperty("--d", (0.7 + Math.random() * 0.6).toFixed(2) + "s");
+      fx.appendChild(i);
+    }
+    document.body.appendChild(fx);
+    btn.classList.add("boom");
+    setTimeout(slopOpen, 520);
+    setTimeout(function () { fx.remove(); btn.classList.remove("boom"); }, 1500);
+  }
+  $("bSlop").addEventListener("click", slopBoom);
   $("bSlopGo").addEventListener("click", slopGo);
   $("bSlopCancel").addEventListener("click", function () { if (slop && !slop.busy) { show("slopWrap", false); slop = null; } });
   document.addEventListener("keydown", function (ev) {
