@@ -31,6 +31,7 @@ import tempfile
 import threading
 import urllib.parse
 import warnings
+import zlib
 import xml.etree.ElementTree as ET
 import dataclasses
 from dataclasses import dataclass, field
@@ -39,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.42"
+VERSION = "0.5.43"
 
 # ---------------------------------------------------------------- constants
 
@@ -3698,6 +3699,382 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
 
 # ---------------------------------------------------------------- main
 
+# ---------------------------------------------------------------- Slop Cut
+
+# A rough first assembly, cut for you: a copy of the Edit sequence with every camera's nest cut on
+# the beat, the camera picked for each shot enabled and the rest disabled (never deleted, so every
+# angle is still there to switch on). It reads the finished project XML and the song; sync
+# placement is never touched.
+SLOP_ROLES = ("drums", "bass", "guitar", "vocals", "keys", "wide")
+SLOP_MIN_S, SLOP_MAX_S = 2.0, 8.0
+SLOP_SR, SLOP_HOP = 22050, 512             # 23.2 ms analysis frames
+SLOP_NAME = "Slop Cut"
+
+
+def slop_audio(path):
+    r = run(["ffmpeg", "-v", "error", "-nostdin", "-i", path, "-vn", "-ac", "1", "-ar", str(SLOP_SR),
+             "-f", "s16le", "-acodec", "pcm_s16le", "-"])
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode(errors="replace").strip()[-300:])
+    return np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def rank01(v):
+    """Each value's place among all of them, 0 (quietest) to 1 (loudest)."""
+    v = np.asarray(v, float)
+    if len(v) < 2:
+        return np.zeros_like(v)
+    return np.argsort(np.argsort(v, kind="stable"), kind="stable") / (len(v) - 1.0)
+
+
+def track_beats(onset, fps):
+    """Beat frames from an onset curve: tempo from its autocorrelation (leaning towards 120 BPM),
+    then the beats by dynamic programming (Ellis 2007): each beat sits on a strong onset about one
+    beat after the last."""
+    o = onset - onset.mean()
+    ac = np.correlate(o, o, "full")[len(o) - 1:]
+    lags = np.arange(len(ac))
+    lo, hi = int(fps * 60 / 200), int(fps * 60 / 70)
+    bpm = 60.0 * fps / np.maximum(lags[lo:hi], 1)
+    w = ac[lo:hi] * np.exp(-0.5 * (np.log2(bpm / 120.0) / 0.9) ** 2)
+    k = int(np.argmax(w))
+    period = float(lo + k)
+    if 0 < k < len(w) - 1:                       # between whole frames: the peak of a parabola through 3
+        d = w[k - 1] - 2 * w[k] + w[k + 1]
+        if d < 0:
+            period += 0.5 * (w[k - 1] - w[k + 1]) / d
+    score = (onset / (onset.std() + 1e-9)).astype(float)
+    back = np.full(len(onset), -1)
+    win = np.arange(-int(round(2 * period)), -int(round(period / 2)) + 1)
+    pen = -100.0 * np.log(-win / period) ** 2
+    for t in range(len(onset)):
+        prev = t + win
+        ok = prev >= 0
+        if not ok.any():
+            continue
+        cand = score[prev[ok]] + pen[ok]
+        k = int(np.argmax(cand))
+        if cand[k] > 0:
+            score[t] += cand[k]
+            back[t] = prev[ok][k]
+    tail = int(round(period * 2))
+    t = int(np.argmax(score[-tail:])) + max(0, len(score) - tail)
+    beats = []
+    while t >= 0:
+        beats.append(t)
+        t = back[t]
+    return np.array(beats[::-1]), 60.0 * fps / period
+
+
+def song_analysis(path):
+    """What happens in the song, beat by beat: beat and bar times, how hard each instrument
+    group is playing, drum fills, and where sections change. Band splits of a harmonic/percussive
+    separated spectrogram, not real stems: good for drums and bass, rougher for guitars vs keys."""
+    x = slop_audio(path)
+    dur = len(x) / SLOP_SR
+    _, _, Z = signal.stft(x, fs=SLOP_SR, window="hann", nperseg=2048, noverlap=2048 - SLOP_HOP,
+                          boundary=None, padded=False)
+    freqs = np.fft.rfftfreq(2048, 1.0 / SLOP_SR)
+    keep = freqs < 6000
+    S = np.abs(Z[keep]).astype(np.float32)
+    freqs = freqs[keep]
+    fps = SLOP_SR / SLOP_HOP
+    H = ndimage.median_filter(S, size=(1, 17))           # steady along time: notes
+    P = ndimage.median_filter(S, size=(17, 1))           # steady along frequency: hits
+    mh = H ** 2 / (H ** 2 + P ** 2 + 1e-12)
+    Sh, Sp = S * mh, S * (1 - mh)
+
+    def band(M, a, b):
+        return M[(freqs >= a) & (freqs < b)].sum(axis=0)
+    lp = np.log1p(100 * Sp)
+    onset = np.maximum(0, np.diff(lp, axis=1, prepend=lp[:, :1])).sum(axis=0)
+    onset = ndimage.gaussian_filter1d(onset, 1)
+    beats, bpm = track_beats(onset, fps)
+    beat_t = beats / fps + 1024.0 / SLOP_SR              # a frame's time is the middle of its window
+    if len(beat_t) < 8:                                   # no pulse to speak of: a cut every 2 s
+        beat_t = np.arange(0, dur, 0.5)
+        bpm = 120.0
+    # downbeats: the beat of four with the most kick on it
+    kick = band(Sp, 30, 150)
+    kick_on = np.maximum(0, np.diff(np.log1p(100 * kick), prepend=0))
+    on_beat = np.array([kick_on[max(0, int(t * fps) - 2):int(t * fps) + 3].max(initial=0) for t in beat_t])
+    phase = int(np.argmax([on_beat[k::4].mean() if len(on_beat[k::4]) else 0 for k in range(4)]))
+
+    edges = np.append(beat_t, dur)
+    feats = {"drums": band(Sp, 30, 6000), "bass": band(Sh, 35, 250), "mid": band(Sh, 250, 3500),
+             "high": band(Sh, 1500, 6000), "keys": band(Sh, 250, 2000), "loud": S.sum(axis=0)}
+    nf = S.shape[1]
+
+    def beat_mean(v, a, b):
+        i = min(int(a * fps), nf - 1)
+        return float(v[i:max(i + 1, min(nf, int(b * fps)))].mean())
+    per = {k: np.array([beat_mean(v, a, b) for a, b in zip(edges[:-1], edges[1:])]) for k, v in feats.items()}
+    busy = np.array([beat_mean(onset, a, b) for a, b in zip(edges[:-1], edges[1:])])
+    nb = len(beat_t)
+    # vocals: mid-band notes rising above the bed under them (lines come and go; guitars sit there)
+    mid = np.log1p(per["mid"])
+    bed = ndimage.uniform_filter1d(ndimage.minimum_filter1d(mid, 17), 9)
+    vox = rank01(mid - bed)
+    act = {"drums": rank01(per["drums"]), "bass": rank01(per["bass"]), "vocals": vox,
+           "guitar": rank01(np.log1p(per["mid"]) + 0.5 * np.log1p(per["high"])),
+           "keys": rank01(per["keys"]), "loud": rank01(per["loud"])}
+    for k in act:
+        act[k] = ndimage.uniform_filter1d(act[k], 3)
+    # a solo: bright notes and no singing; a bass lead: bass up, the rest down
+    solo = (rank01(per["high"]) > 0.75) & (vox < 0.35)
+    bass_lead = (act["bass"] > 0.7) & (act["guitar"] < 0.45) & (vox < 0.45)
+    # sections: where the sound of 8 bars changes from the 8 before (a checkerboard over band levels)
+    F = np.vstack([ndimage.uniform_filter1d(np.log1p(per[k]), 4) for k in ("drums", "bass", "mid", "high", "loud")])
+    F = (F - F.mean(axis=1, keepdims=True)) / (F.std(axis=1, keepdims=True) + 1e-9)
+    w = 16
+    nov = np.zeros(nb)
+    for i in range(w, nb - w):
+        nov[i] = np.linalg.norm(F[:, i:i + w].mean(axis=1) - F[:, i - w:i].mean(axis=1))
+    peaks, _ = signal.find_peaks(nov, distance=16, height=max(0.8, np.percentile(nov, 80)) if nb > 2 * w else 1e9)
+    sections = sorted({p - ((p - phase) % 4) for p in peaks if p - ((p - phase) % 4) > 0})
+    # fills: the last beats before a new section or 8-bar phrase, busier than the drums usually are
+    fills = []
+    marks = set(sections) | {b for b in range(phase, nb, 32) if b > 0}
+    usual = np.median(busy) + 1e-9
+    for b in sorted(marks):
+        lead = busy[max(0, b - 2):b]
+        if len(lead) and lead.mean() > 1.5 * usual:
+            fills.append(b)
+    return dict(dur=dur, bpm=bpm, beats=beat_t, phase=phase, act=act, solo=solo, bass_lead=bass_lead,
+                sections=sections, fills=fills)
+
+
+def plan_cuts(an, cams, seed=0):
+    """Shots in song seconds [(start, end, letter or None)]. cams: {letter: (role, [(a, b) seconds
+    the camera has a take])}. Cuts land on bar lines (beats when a bar is too long), shots run 2 to
+    8 s, and a shot only goes to a camera that has a take for all of it."""
+    beats, nb = an["beats"], len(an["beats"])
+    bar_len = 4 * 60.0 / an["bpm"]
+    bars = [b for b in range(an["phase"], nb, 4)]
+    if bar_len > SLOP_MAX_S:
+        bars = list(range(nb))
+    t_of = lambda b: beats[b] if b < nb else an["dur"]
+    sections, fills = set(an["sections"]), set(an["fills"])
+    act = an["act"]
+    # cut points: first beat, then walk bar lines; fills get a drum shot leading into the next bar
+    cuts, fill_starts = [0], set()
+    b = 0
+    while True:
+        lively = act["loud"][min(b, nb - 1)]
+        want = 2.6 if lively > 0.7 else 4.0 if lively > 0.4 else 6.0
+        nxt = [k for k in bars if t_of(k) - t_of(b) >= SLOP_MIN_S - 1e-6 and t_of(k) - t_of(b) <= SLOP_MAX_S + 1e-6]
+        forced = [k for k in nxt if k in sections or k in fills]
+        if forced:
+            k = forced[0]
+            if k in fills:          # start the drum shot so it lasts at least 2 s and ends on the downbeat
+                f = max([j for j in range(b + 1, k) if t_of(k) - t_of(j) >= SLOP_MIN_S - 1e-6
+                         and t_of(j) - t_of(b) >= SLOP_MIN_S - 1e-6], default=None)
+                if f is not None:
+                    cuts += [f, k]
+                    fill_starts.add(float(t_of(f)))
+                    b = k
+                    continue
+        elif nxt:
+            k = min(nxt, key=lambda k: abs(t_of(k) - t_of(b) - want))
+        else:
+            k = min([j for j in range(b + 1, nb + 1) if t_of(j) - t_of(b) >= SLOP_MIN_S - 1e-6], default=nb)
+        if k >= nb or an["dur"] - t_of(k) < SLOP_MIN_S:
+            break
+        cuts.append(k)
+        b = k
+    times = [0.0] + [float(t_of(k)) for k in cuts[1:]] + [an["dur"]]
+    starts_sec = {float(t_of(k)) for k in sections} | {0.0}
+
+    def covers(spans, a, b):
+        return sum(max(0.0, min(b, y) - max(a, x)) for x, y in spans) / max(1e-6, b - a)
+
+    shots, used = [], collections.Counter()
+    prev = []
+    for a, b in zip(times[:-1], times[1:]):
+        i0, i1 = int(np.searchsorted(beats, a)), max(int(np.searchsorted(beats, a)) + 1, int(np.searchsorted(beats, b)))
+        i0, i1 = min(i0, nb - 1), min(i1, nb)
+        m = lambda k: float(np.mean(act[k][i0:i1])) if i1 > i0 else 0.0
+        solo = bool(an["solo"][i0:i1].mean() > 0.5) if i1 > i0 else False
+        bass_lead = bool(an["bass_lead"][i0:i1].mean() > 0.5) if i1 > i0 else False
+        in_fill = a in fill_starts
+        cov = {L: covers(sp, a, b) for L, (role, sp) in cams.items()}
+        full = [L for L, c in cov.items() if c > 0.97]
+        pool = full or [L for L, c in cov.items() if c > 0 and c == max(cov.values())]
+        if not pool:
+            shots.append((a, b, None))
+            continue
+        total = sum(used.values()) or 1.0
+
+        def score(L):
+            role = cams[L][0]
+            s = {"drums": m("drums"), "bass": m("bass"), "vocals": 1.3 * m("vocals"), "guitar": m("guitar"),
+                 "keys": 0.8 * m("keys"), "wide": 0.45}.get(role, 0.3)
+            if in_fill and role == "drums":
+                s += 2.0
+            if a in starts_sec and role == "wide":
+                s += 0.8
+            if solo and role == "guitar":
+                s += 0.8
+            if bass_lead and role == "bass":
+                s += 0.6
+            if prev and L == prev[-1]:
+                s -= 10.0
+            if len(prev) > 1 and L == prev[-2]:
+                s -= 0.3
+            s -= 0.6 * used[L] / total
+            s += 0.05 * (zlib.crc32(("%s %.2f %d" % (L, a, seed)).encode()) % 100) / 100.0   # breaks ties, same every run
+            return s
+        L = max(pool, key=score)
+        shots.append((a, b, L))
+        used[L] += b - a
+        prev.append(L)
+    return shots
+
+
+def parse_roles(items):
+    """'roles:A=drums,B=bass' (from the window) or 'A=drums,B=bass' -> {'A': 'drums', ...}."""
+    out = {}
+    for it in items:
+        it = it.split(":", 1)[1] if it.lower().startswith("roles:") else it
+        for kv in it.split(","):
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                v = v.strip().lower()
+                out[k.strip().upper()] = v if v in SLOP_ROLES else "wide"
+    return out
+
+
+def xml_fps(el):
+    r = el.find("rate")
+    base = float(r.findtext("timebase") or 24)
+    return base * 1000 / 1001 if (r.findtext("ntsc") or "").upper() == "TRUE" else base
+
+
+def url_to_path(u):
+    p = urllib.parse.urlparse(u)
+    path = urllib.parse.unquote(p.path)
+    if p.netloc and p.netloc != "localhost":
+        path = "//" + p.netloc + path
+    return path
+
+
+def slop_cut(xml_path, roles, seed=0):
+    """Add '<project>_Slop Cut' next to the Edit sequence in the project XML (replacing an earlier
+    one). Returns (sequence name, shots, cameras used)."""
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    project = root.findtext("project/name") or ""
+    edit_name = seq_name("edit", project=project)
+    parent_of = {c: p for p in root.iter() for c in p}
+    seqs = list(root.iter("sequence"))
+    by_id = {s.get("id"): s for s in seqs if s.find("media") is not None}
+    edit = next((s for s in seqs if s.findtext("name") == edit_name and s.find("media") is not None), None)
+    if edit is None:
+        edit = next((s for s in seqs if (s.findtext("name") or "").endswith("_Edit") and s.find("media") is not None), None)
+    if edit is None:
+        raise RuntimeError("there's no Edit sequence in %s" % os.path.basename(xml_path))
+    fps = xml_fps(edit)
+    vtracks = edit.findall("media/video/track")
+    song_ci = next((ci for ci in edit.iterfind("media/audio/track/clipitem")), None)
+    if song_ci is None:
+        raise RuntimeError("the Edit sequence has no song on it, so there's nothing to cut to")
+    fid = song_ci.find("file").get("id")
+    fel = next(f for f in root.iter("file") if f.get("id") == fid and f.find("pathurl") is not None)
+    song_path = url_to_path(fel.findtext("pathurl"))
+    if not os.path.exists(song_path):
+        raise RuntimeError("can't find the song at %s" % song_path)
+    song_frame = int(song_ci.findtext("start"))
+    to_s = lambda f: (f - song_frame) / fps
+    # each video track holds one camera's nest; where that camera has takes, from its own sequence
+    cams, track_cam = {}, {}
+    letters_known = set(roles)
+    for i, tr in enumerate(vtracks):
+        ci = tr.find("clipitem")
+        if ci is None or ci.find("sequence") is None:
+            continue
+        nest = by_id.get(ci.find("sequence").get("id"))
+        nname = ci.findtext("name") or ""
+        letter = next((L for L in sorted(letters_known, key=len, reverse=True)
+                       if nname == seq_name("condensed", L)), None)
+        if letter is None:
+            m = re.match(r"^([A-Z]{1,2})\b", nname)
+            letter = m.group(1) if m else chr(ord("A") + i)
+        spans = []
+        if nest is not None:
+            for nci in nest.iterfind("media/video/track/clipitem"):
+                a, b = to_s(int(nci.findtext("start"))), to_s(int(nci.findtext("end")))
+                spans.append((a, b))
+        track_cam[i] = letter
+        cams[letter] = (roles.get(letter, "wide"), spans)
+    if not cams:
+        raise RuntimeError("the Edit sequence has no camera nests to cut")
+    event("stage", text="Listening to the song")
+    an = song_analysis(song_path)
+    cams = {L: (r, [(max(0.0, a), min(an["dur"], b)) for a, b in sp if b > 0 and a < an["dur"]])
+            for L, (r, sp) in cams.items()}
+    event("stage", text="Cutting the Slop Cut")
+    shots = plan_cuts(an, cams, seed)
+
+    # the copy: same tracks and song, each nest cut at every shot line, enabled only where it's on
+    name = "%s_%s" % (project, SLOP_NAME) if project else SLOP_NAME
+    holder = parent_of[edit]
+    for old in [s for s in holder.findall("sequence") if s.findtext("name") == name]:
+        holder.remove(old)
+    new = copy.deepcopy(edit)
+    new.set("id", "sequence-slop")
+    new.find("name").text = name
+    if new.find("uuid") is not None:
+        new.find("uuid").text = "kickoff-slop-%s" % datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    n = 0
+    for ci in new.iter("clipitem"):
+        n += 1
+        ci.set("id", "clipitem-slop-%d" % n)
+    end_frame = int(new.findtext("duration"))
+    lines = [song_frame + int(round(a * fps)) for a, _, _ in shots] + [song_frame + int(round(shots[-1][1] * fps))]
+    pieces = [(0, lines[0], None)] + [(lines[k], lines[k + 1], shots[k][2]) for k in range(len(shots))]
+    for i, tr in enumerate(new.findall("media/video/track")):
+        ci = tr.find("clipitem")
+        if ci is None or ci.find("sequence") is None or i not in track_cam:
+            continue
+        nframes = int(ci.findtext("end")) - int(ci.findtext("start"))
+        segs = pieces + ([(lines[-1], max(lines[-1], nframes), None)] if nframes > lines[-1] else [])
+        k = list(tr).index(ci)
+        tr.remove(ci)
+        for a, b, L in segs:
+            a, b = max(0, a), min(nframes, b)
+            if b <= a:
+                continue
+            seg = copy.deepcopy(ci)
+            n += 1
+            seg.set("id", "clipitem-slop-%d" % n)
+            seg.find("enabled").text = "TRUE" if L == track_cam[i] else "FALSE"
+            for tag, v in (("start", a), ("end", b), ("in", a), ("out", b)):
+                seg.find(tag).text = str(v)
+            tr.insert(k, seg)
+            k += 1
+    new.find("duration").text = str(end_frame)
+    holder.insert(list(holder).index(edit) + 1, new)
+    write_xml(root, xml_path)
+    used = collections.Counter(L for _, _, L in shots if L)
+    return name, shots, used, an
+
+
+def slop_main(args):
+    xml = next((p for p in args.paths if p.lower().endswith(".xml")), None)
+    if not xml or not os.path.isfile(xml):
+        sys.exit("error: give the project XML to cut a Slop Cut in")
+    roles = parse_roles([p for p in args.paths if p != xml] + ([args.roles] if args.roles else []))
+    event("stage", text="Reading the project")
+    try:
+        name, shots, used, an = slop_cut(os.path.abspath(xml), roles)
+    except (RuntimeError, ET.ParseError, OSError) as e:
+        sys.exit("error: %s" % e)
+    log("Added %s to %s: %d shots at %.0f BPM." % (name, os.path.basename(xml), len(shots), an["bpm"]))
+    event("slop", xml=os.path.abspath(xml), name=name, shots=len(shots), bpm=round(an["bpm"]),
+          cameras=dict(used), seconds={L: round(sum(b - a for a, b, M in shots if M == L), 1) for L in used})
+    return 0
+
+
 def main(argv=None):
     # the window's Settings page (a JSON file) sets the defaults below; flags still win over it
     pre = argparse.ArgumentParser(add_help=False)
@@ -3750,15 +4127,18 @@ def main(argv=None):
                     help="keep placed stretches whose picture is a flat color (see drop_blank)")
     ap.add_argument("--no-cache", action="store_true",
                     help="don't keep decoded camera audio for the next run (see audio_cache_dir)")
-    ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras"], default="auto",
+    ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras", "slop"], default="auto",
                     help="music: sync to the song (music video); narrative: sync each clip to the sound "
                          "recordist's audio files (timecode, else scratch audio) in one Sync sequence; cameras: "
                          "narrative with no sound files, the cameras synced to each other; setup: "
                          "bins, Breakups and an empty Edit sequence only (commercials); auto (default): music "
-                         "when a song is found and clips line up with it")
+                         "when a song is found and clips line up with it; slop: add a Slop Cut (a rough edit) to "
+                         "a finished project XML, given as the path, with --roles")
     ap.add_argument("--sync-by", choices=["auto", "timecode", "audio"], default=None,
                     help="auto (default): timecode when the clip and the audio both carry it, else the "
                          "sound; audio: ignore timecode; timecode: only timecode")
+    ap.add_argument("--roles", help="Slop Cut: who each camera is on, e.g. A=drums,B=vocals,C=wide "
+                                    "(drums, bass, guitar, vocals, keys or wide)")
     ap.add_argument("--rebuild", action="store_true",
                     help="build the whole project again even if this folder was run before (by default a "
                          "second run only adds the cards that are new since then)")
@@ -3779,6 +4159,8 @@ def main(argv=None):
             else ("timecode" if SETTINGS["timecode_music"] else "audio")
     global EVENTS
     EVENTS = args.events
+    if args.mode == "slop":
+        return slop_main(args)
     if args.sync_size == "first":
         args.sync_size = None
     else:

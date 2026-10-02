@@ -146,6 +146,23 @@ If the XML was written on a different machine than the one editing, rewrite the 
 
 Otherwise Premiere asks you to relink; pointing it at one file relinks the rest from the same folder.
 
+## Slop Cut (a rough edit, cut for you)
+
+When a music video finishes, **Make a Slop Cut** on the end screen asks who each camera is on (Drums,
+Bass, Guitar, Vocals, Keys or Wide) and adds `<project>_Slop Cut` to the Edit bin, right under the Edit
+sequence, in the same XML. It's a copy of the Edit sequence with every camera's nest cut at the same
+lines, on the beat: the camera picked for each shot is enabled and the others are disabled, never
+deleted, so every angle is still there to switch on.
+
+How it picks: Kickoff finds the beats and bars in the song and splits it into bands (drums, bass, the
+mids where vocals and guitars sit, the highs). Shots run 2 to 8 s and cut on bar lines (shorter when the
+song is loud). Drum fills go to the drummer, vocal lines to the singer, a bass lead to the bassist, a
+solo to the guitarist, and a new section opens on the wide. A camera is only used where it has a take
+for the whole shot. Running it again replaces the earlier Slop Cut. Sync placement isn't touched.
+
+From the command line: `python3 musicsync.py --mode slop "PROJECT.xml" --roles A=drums,B=vocals,C=wide`,
+then `python3 tests/check_slop.py "PROJECT.xml"` checks it.
+
 ## What gets set aside
 
 Nothing is guessed. Every clip that isn't placed gets a reason in the report:

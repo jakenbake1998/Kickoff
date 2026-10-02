@@ -563,6 +563,26 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   .ask p{margin:0 0 10px;line-height:1.45}
   .ask .hint{color:var(--muted);font-size:14px}
   .askbtns{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+  .ask.slop{max-width:600px;width:100%}
+  .slophead{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+  .slophead h3{margin:0}
+  .slop .tipbox{bottom:auto;top:calc(100% + 10px);left:-150px;width:340px}
+  .slop .tipbox::after{top:auto;bottom:100%;left:154px;border-top-color:transparent;border-bottom-color:#262a31}
+  .slopcams{display:grid;gap:8px;margin-top:14px}
+  .sloprow{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}
+  .sloprow .n{display:flex;align-items:center;gap:8px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+  .sloprow .chip{width:10px;height:10px;border-radius:3px;flex:none}
+  .roles{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:2px}
+  .roles button{padding:5px 9px;font-size:12.5px;font-weight:600;border:0;border-radius:7px;background:none;color:var(--muted)}
+  .roles button:hover{color:var(--ink)}
+  .roles button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+  .slopbusy{display:flex;align-items:center;gap:12px;margin:18px 0 4px;color:var(--muted)}
+  .slopbusy .spin{width:18px;height:18px;border-radius:50%;border:2.5px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite;flex:none}
+  .slopdone{margin:16px 0 0;line-height:1.45}
+  .slopdone b{color:var(--ink)}
+  .slopdone.bad{color:var(--bad)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #bSlop{display:inline-flex;align-items:center;gap:7px}
 </style>
 </head>
 <body>
@@ -735,6 +755,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
   <div class="btns" id="btnsDone" hidden>
     <button class="pri" id="bOpen">Open in Premiere</button>
+    <button id="bSlop" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/></svg>Make a Slop Cut</button>
     <div class="finder">
       <button id="bFinder" aria-haspopup="menu" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Show in Finder<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
       <div class="fmenu" id="fMenu" role="menu" hidden>
@@ -755,6 +776,20 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       <p>There are no sound recordist's files in what you added. Sync the cameras to each other instead?</p>
       <p class="hint">By timecode when the cameras have it, otherwise by their scratch audio. A Cam goes on V1, B Cam on V2, and nothing is trimmed.</p>
       <div class="askbtns"><button class="quiet" id="bAskCancel">Cancel</button><button class="pri" id="bAskCams">Sync cameras together</button></div>
+    </div>
+  </div>
+  <div class="askwrap" id="slopWrap" hidden>
+    <div class="ask slop" role="dialog" aria-modal="true" aria-labelledby="slopTitle">
+      <div class="slophead"><h3 id="slopTitle">KickOff Slop Cut</h3>
+        <span class="tip"><button type="button" class="tipi" aria-label="What's a Slop Cut?" aria-describedby="slopTip">i</button>
+          <span class="tipbox" id="slopTip" role="tooltip"><span class="th">What&rsquo;s a Slop Cut?</span>
+            Our editors haven&rsquo;t slept since 2019. They live on cold brew, cut on the beat, and never ask for notes. Drummer on the fills, singer on the lines, the wide when the song turns. Then you&rsquo;re done. Ship it, deliver, send. Adi&oacute;s, amigos! &#x1F57A;<br><br>
+            <b>Real talk:</b> it&rsquo;s a copy of your Edit sequence, cut up. Shots it isn&rsquo;t using are disabled, not deleted, so every angle is still there to switch on.</span></span></div>
+      <p class="hint" id="slopSub">Who&rsquo;s each camera on?</p>
+      <div class="slopcams" id="slopCams"></div>
+      <div class="slopbusy" id="slopBusy" hidden><span class="spin"></span><span id="slopStage">The editors are on it</span></div>
+      <p class="slopdone" id="slopDone" hidden></p>
+      <div class="askbtns"><button class="quiet" id="bSlopCancel">Cancel</button><button class="pri" id="bSlopGo">Cut it for me</button></div>
     </div>
   </div>
   <div class="btns" id="btnsErr" hidden>
@@ -1630,6 +1665,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 
   function finish(e) {
     record(e.nothing_new ? "nothing" : "done", e);
+    $("bSlop").hidden = true;
     $("aside").classList.remove("moves");
     $("bOpen").textContent = "Open in Premiere";
     $("bRetry").hidden = false;
@@ -1803,6 +1839,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     show("aside", rows.length > 0);
     show("btnsRun", false);
     show("btnsDone", true);
+    $("bSlop").hidden = !(e.synced && e.mode !== "narrative" && !e.add && e.xml);
     $("bOpen").focus();
   }
 
@@ -2766,11 +2803,110 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     pop.style.top = Math.max(16, b.top - pop.offsetHeight - 8) + "px";
   });
 
+  // ---- Slop Cut: a rough edit cut on the beat, added next to the Edit sequence in the same XML
+  var SLOP_ROLES = [["drums", "Drums"], ["bass", "Bass"], ["guitar", "Guitar"], ["vocals", "Vocals"], ["keys", "Keys"], ["wide", "Wide"]];
+  var slop = null;                 // {xml, roles} while the Slop Cut window is open; .busy while it cuts
+  function slopSaved() {
+    try { return JSON.parse(localStorage.getItem("kickoff.slopRoles") || "{}") || {}; } catch (err) { return {}; }
+  }
+  function slopOpen() {
+    var e = state.result;
+    if (!e || !e.xml || running()) return;
+    var saved = slopSaved();
+    slop = { xml: e.xml, roles: {} };
+    var box = $("slopCams");
+    box.innerHTML = "";
+    e.cameras.filter(function (c) { return c.synced; }).forEach(function (c) {
+      slop.roles[c.letter] = saved[c.letter] || "wide";
+      var row = document.createElement("div");
+      row.className = "sloprow";
+      var n = document.createElement("span");
+      n.className = "n";
+      n.title = c.name;
+      n.innerHTML = '<span class="chip"></span>';
+      n.firstChild.style.background = "var(" + (CAM_COLORS[c.label] || "--muted") + ")";
+      n.appendChild(document.createTextNode(c.name));
+      var seg = document.createElement("div");
+      seg.className = "roles";
+      seg.setAttribute("role", "group");
+      seg.setAttribute("aria-label", "Who " + c.letter + " Cam is on");
+      SLOP_ROLES.forEach(function (r) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = r[1];
+        b.setAttribute("aria-pressed", String(slop.roles[c.letter] === r[0]));
+        b.addEventListener("click", function () {
+          if (slop.busy) return;
+          slop.roles[c.letter] = r[0];
+          Array.prototype.forEach.call(seg.children, function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+        });
+        seg.appendChild(b);
+      });
+      row.append(n, seg);
+      box.appendChild(row);
+    });
+    slopView("pick");
+    show("slopWrap", true);
+    $("bSlopGo").focus();
+  }
+  function slopView(v, text) {
+    show("slopSub", v === "pick");
+    show("slopCams", v === "pick");
+    show("slopBusy", v === "busy");
+    var d = $("slopDone");
+    d.hidden = v !== "done" && v !== "error";
+    d.className = "slopdone" + (v === "error" ? " bad" : "");
+    if (v === "done" || v === "error") d.innerHTML = text;
+    $("bSlopCancel").textContent = v === "pick" ? "Cancel" : "Close";
+    $("bSlopCancel").hidden = v === "busy";
+    $("bSlopGo").hidden = v === "busy";
+    $("bSlopGo").textContent = v === "done" ? "Open in Premiere" : v === "error" ? "Try again" : "Cut it for me";
+  }
+  function slopGo() {
+    if (!slop) return;
+    if (slop.done) { show("slopWrap", false); $("bOpen").click(); slop = null; return; }
+    if (slop.failed) { slop.failed = false; slopView("pick"); return; }
+    try { localStorage.setItem("kickoff.slopRoles", JSON.stringify(Object.assign(slopSaved(), slop.roles))); } catch (err) {}
+    var roles = Object.keys(slop.roles).map(function (k) { return k + "=" + slop.roles[k]; }).join(",");
+    slop.busy = true; slop.err = ""; slop.result = null;
+    $("slopStage").textContent = "The editors are on it";
+    slopView("busy");
+    post({ cmd: "run", paths: [slop.xml, "roles:" + roles], mode: "slop", xmlDir: xmlDir || "drive", xmlName: "" });
+  }
+  function slopExit(code) {
+    slop.busy = false;
+    var r = slop.result;
+    if (code === 0 && r) {
+      slop.done = true;
+      var n = Object.keys(r.cameras || {}).length;
+      slopView("done", "&#x2713; <b>" + esc(r.name) + "</b> is in your Edit bin, right under the Edit sequence: "
+        + plural(r.shots, "shot") + " on " + plural(n, "camera") + ", cut at " + r.bpm + " BPM.");
+    } else {
+      slop.failed = true;
+      slopView("error", esc(slop.err || "The editors walked off the job. Try again, or run a fresh sync first."));
+    }
+  }
+  $("bSlop").addEventListener("click", slopOpen);
+  $("bSlopGo").addEventListener("click", slopGo);
+  $("bSlopCancel").addEventListener("click", function () { if (slop && !slop.busy) { show("slopWrap", false); slop = null; } });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && !$("slopWrap").hidden) $("bSlopCancel").click();
+  });
+
   window.Kickoff = {
-    started: started,
-    event: onEvent,
-    log: onLog,
-    exit: onExit,
+    started: function (paths) { if (slop && slop.busy) return; started(paths); },
+    event: function (e) {
+      if (!(slop && slop.busy)) return onEvent(e);
+      if (e.event === "stage") $("slopStage").textContent = e.text === "Listening to the song" ? "Listening to the song"
+        : e.text === "Cutting the Slop Cut" ? "Cutting on the beat" : "The editors are on it";
+      else if (e.event === "slop") slop.result = e;
+    },
+    log: function (line) {
+      if (!(slop && slop.busy)) return onLog(line);
+      var m = /^error:\s*(.*)/.exec(line);
+      if (m) slop.err = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+    },
+    exit: function (code) { if (slop && slop.busy) return slopExit(code); onExit(code); },
     add: function (paths) { add(paths); },
     drop: drop,
     folderTree: importTemplate,
