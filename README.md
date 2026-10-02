@@ -148,20 +148,26 @@ Otherwise Premiere asks you to relink; pointing it at one file relinks the rest 
 
 ## Slop Cut (a rough edit, cut for you)
 
-When a music video finishes, **Make a Slop Cut** on the end screen asks who each camera is on (Drums,
-Bass, Guitar, Vocals, Keys or Wide) and adds `<project>_Slop Cut` to the Edit bin, right under the Edit
-sequence, in the same XML. It's a copy of the Edit sequence with every camera's nest cut at the same
-lines, on the beat: the camera picked for each shot is enabled and the others are disabled, never
-deleted, so every angle is still there to switch on.
+When a music video finishes, **Make a Slop Cut** on the end screen adds `<project>_Slop Cut` to the Edit bin,
+right under the Edit sequence, in the same XML. It has the Edit sequence's song, with every synced take
+laid out on its own tracks (each camera's condensed tracks, A Cam's first) and cut at the shot lines. The
+take picked for each shot is enabled and every other piece is disabled, never deleted, so all the footage
+is there to switch on.
 
-How it picks: Kickoff finds the beats and bars in the song and splits it into bands (drums, bass, the
-mids where vocals and guitars sit, the highs). Shots run 2 to 8 s and cut on bar lines (shorter when the
-song is loud). Drum fills go to the drummer, vocal lines to the singer, a bass lead to the bassist, a
-solo to the guitarist, and a new section opens on the wide. A camera is only used where it has a take
-for the whole shot. Running it again replaces the earlier Slop Cut. Sync placement isn't touched.
+How it picks:
+- **The music.** Kickoff finds the beats and bars in the song and splits it into bands (drums, bass, the
+  mids where vocals and guitars sit, the highs). Cuts land on bar lines, every 1 to 2 bars when the song is
+  loud and 2 to 8 when it's calm, always 2 to 8 s, plus a cut into each drum fill, at each new section and
+  where the singing comes in.
+- **Who's in each take.** On the Mac, `kickoff_vision` (Apple Vision, built into macOS; the updater
+  compiles `mac-app/vision/kickoff_vision.swift`) looks at a frame a second of each take: instrument and
+  mic labels, how many people, how big the faces are. Results are cached with the audio cache.
+- Each shot goes to the take showing what the music calls for: drums on fills, the singer on vocal lines,
+  guitar on solos, a wide at a new section. A take that keeps winning keeps playing (up to 8 s), so the
+  cuts don't fall into a pattern. Without the frame tagger it cuts by the music alone.
 
-From the command line: `python3 musicsync.py --mode slop "PROJECT.xml" --roles A=drums,B=vocals,C=wide`,
-then `python3 tests/check_slop.py "PROJECT.xml"` checks it.
+Sync placement isn't touched. Running it again replaces the earlier Slop Cut. From the command line:
+`python3 musicsync.py --mode slop "PROJECT.xml"`, then `python3 tests/check_slop.py "PROJECT.xml"`.
 
 ## What gets set aside
 

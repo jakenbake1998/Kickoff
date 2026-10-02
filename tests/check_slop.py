@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Checks a Slop Cut in a project XML: it sits next to the Edit sequence, every camera track is cut
-at the same lines with no gaps, exactly one camera is on at a time while the song plays (and only
-where that camera has a take), shots run 2 to 8 s (the last may run a little long), and the Edit
-sequence itself is unchanged.
+"""Checks a Slop Cut in a project XML: it sits next to the Edit sequence, which is unchanged; every
+synced take in the camera sequences the Edit nests is in it, whole (cut into pieces, nothing
+dropped); no more than one take is on at a time, only while the song plays; and shots run 2 s or
+more (8 s at most, unless one take keeps playing because nothing else covers it).
 
     python3 tests/check_slop.py PROJECT.xml [ORIGINAL.xml]
 """
+import collections
 import sys
 import xml.etree.ElementTree as ET
 
@@ -28,39 +29,48 @@ def main(path, original=None):
         assert ET.tostring(o) == ET.tostring(edit), "the Edit sequence changed"
     song = slop.find("media/audio/track/clipitem")
     s0, s1 = int(song.findtext("start")), int(song.findtext("end"))
-    tracks = slop.findall("media/video/track")
-    cuts, on = None, {}
-    for i, tr in enumerate(tracks):
-        items = tr.findall("clipitem")
-        pos = 0
-        for ci in items:
+
+    # every take of the nested camera sequences, by (file, in): its length on the timeline
+    want = collections.Counter()
+    for ci in edit.iterfind("media/video/track/clipitem"):
+        nest = by_id[ci.find("sequence").get("id")]
+        for it in nest.iterfind("media/video/track/clipitem"):
+            if it.find("file") is not None:
+                want[it.find("file").get("id")] += int(it.findtext("end")) - int(it.findtext("start"))
+    got = collections.Counter()
+    on = []
+    for tr in slop.findall("media/video/track"):
+        pos = -1
+        for ci in tr.findall("clipitem"):
             a, b = int(ci.findtext("start")), int(ci.findtext("end"))
-            assert a == pos, "gap or overlap on V%d at %d" % (i + 1, a)
-            assert (ci.findtext("in"), ci.findtext("out")) == (str(a), str(b)), "nest not in step with the timeline"
+            assert a >= pos, "overlap on a track at %d" % a
+            assert b > a
             pos = b
+            got[ci.find("file").get("id")] += b - a
             if ci.findtext("enabled") == "TRUE":
-                on.setdefault(i, []).append((a, b))
-        lines = [int(ci.findtext("start")) for ci in items]
-        cuts = cuts or lines
-        assert set(lines) >= set(cuts) - {0} or set(cuts) >= set(lines), "tracks cut at different lines"
-        # takes in this camera's own sequence
-        nest = by_id[items[0].find("sequence").get("id")]
-        takes = [(int(c.findtext("start")), int(c.findtext("end"))) for c in nest.iterfind("media/video/track/clipitem")]
-        for a, b in on.get(i, []):
-            cov = sum(max(0, min(b, y) - max(a, x)) for x, y in takes)
-            if cov < 0.97 * (b - a):
-                print("  note: V%d is on at %.1f s with a take for %.0f%% of the shot" % (i + 1, (a - s0) / fps, 100 * cov / (b - a)))
-    shots = sorted((a, b, i) for i, sp in on.items() for a, b in sp)
-    for (a, b, i), nxt in zip(shots, shots[1:] + [None]):
-        assert s0 <= a and b <= s1 + 1, "a camera is on outside the song"
+                on.append((a, b, ci.find("file").get("id"), int(ci.findtext("in"))))
+            assert not ci.findall("link"), "a piece still links to clips that aren't there"
+    assert got == want, "takes missing or cut short: %s" % {k: (want[k], got[k]) for k in want if want[k] != got[k]}
+    on.sort()
+    shots = []
+    for a, b, f, i in on:          # pieces of one take that follow on, in step, are one shot
+        if shots and shots[-1][1] == a and shots[-1][2] == f and abs(shots[-1][3] + (a - shots[-1][0]) - i) <= 1:
+            shots[-1][1] = b
+        else:
+            shots.append([a, b, f, i])
+    for (a, b, f, _), nxt in zip(shots, shots[1:] + [None]):
+        assert s0 <= a and b <= s1 + 1, "a take is on outside the song"
         if nxt:
-            assert nxt[0] >= b, "two cameras on at once at %d" % nxt[0]
+            assert nxt[0] >= b, "two takes on at once at %.1f s" % ((nxt[0] - s0) / fps)
         L = (b - a) / fps
         assert L >= 2 - 1e-3, "shot of %.2f s at %.1f s" % (L, (a - s0) / fps)
-        assert L <= 8 + 1e-3 or nxt is None or (nxt is not None and L <= 10.5), "shot of %.2f s" % L
-    covered = sum(b - a for a, b, _ in shots)
-    print("Slop Cut OK: %d shots over %d tracks, %.0f%% of the song covered" % (
-        len(shots), len(tracks), 100.0 * covered / max(1, s1 - s0)))
+        if L > 8.05:
+            print("  note: a %.1f s shot at %.1f s" % (L, (a - s0) / fps))
+    lengths = sorted(round((b - a) / fps, 1) for a, b, _, _ in shots)
+    covered = sum(b - a for a, b, _, _ in shots)
+    print("Slop Cut OK: %d shots, %d takes used of %d, %.0f%% of the song covered, shot lengths %s" % (
+        len(shots), len({f for _, _, f, _ in shots}), len(want), 100.0 * covered / max(1, s1 - s0),
+        sorted(set(lengths))))
 
 
 if __name__ == "__main__":

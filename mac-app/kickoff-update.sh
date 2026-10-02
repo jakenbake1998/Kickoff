@@ -67,6 +67,15 @@ if [ -n "$SDK" ] && get mac-app/r3d/kickoff_r3d.cpp \
     changed="${changed:+$changed, }RED reader"
   fi
 fi
+# Slop Cut: the frame tagger (Apple Vision, part of macOS), rebuilt when its source changes
+if get mac-app/vision/kickoff_vision.swift \
+   && { ! cmp -s "$TMP/kickoff_vision.swift" "$SUPPORT/kickoff_vision.swift" || [ ! -x "$SUPPORT/kickoff_vision" ]; }; then
+  if xcrun swiftc -O -o "$TMP/kickoff_vision" "$TMP/kickoff_vision.swift" >/dev/null 2>&1; then
+    cp "$TMP/kickoff_vision" "$SUPPORT/kickoff_vision.upd" && mv "$SUPPORT/kickoff_vision.upd" "$SUPPORT/kickoff_vision"
+    cp "$TMP/kickoff_vision.swift" "$SUPPORT/kickoff_vision.swift"
+    changed="${changed:+$changed, }shot finder"
+  fi
+fi
 case "$changed" in
   *window*|*app*|*icon*) echo "Updated: $changed. The new window shows next time you open Kickoff." ;;
   ?*) echo "Updated: $changed" ;;

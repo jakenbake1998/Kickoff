@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.43"
+VERSION = "0.5.44"
 
 # ---------------------------------------------------------------- constants
 
@@ -3705,7 +3705,6 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
 # the beat, the camera picked for each shot enabled and the rest disabled (never deleted, so every
 # angle is still there to switch on). It reads the finished project XML and the song; sync
 # placement is never touched.
-SLOP_ROLES = ("drums", "bass", "guitar", "vocals", "keys", "wide")
 SLOP_MIN_S, SLOP_MAX_S = 2.0, 8.0
 SLOP_SR, SLOP_HOP = 22050, 512             # 23.2 ms analysis frames
 SLOP_NAME = "Slop Cut"
@@ -3844,34 +3843,36 @@ def song_analysis(path):
                 sections=sections, fills=fills)
 
 
-def plan_cuts(an, cams, seed=0):
-    """Shots in song seconds [(start, end, letter or None)]. cams: {letter: (role, [(a, b) seconds
-    the camera has a take])}. Cuts land on bar lines (beats when a bar is too long), shots run 2 to
-    8 s, and a shot only goes to a camera that has a take for all of it."""
+def shot_grid(an, seed=0):
+    """Where the cuts go, in song seconds: on bar lines (beats when bars are too long), at every new
+    section, into each drum fill and where the singing comes in. Shot lengths change with the song:
+    1 to 2 bars when it's loud, 2 to 8 when it's calm, always 2 to 8 s. Returns (times, fill shot
+    starts, section starts)."""
     beats, nb = an["beats"], len(an["beats"])
     bar_len = 4 * 60.0 / an["bpm"]
-    bars = [b for b in range(an["phase"], nb, 4)]
-    if bar_len > SLOP_MAX_S:
-        bars = list(range(nb))
-    t_of = lambda b: beats[b] if b < nb else an["dur"]
-    sections, fills = set(an["sections"]), set(an["fills"])
+    step = 1 if bar_len > SLOP_MAX_S else 4
+    bars = list(range(an["phase"] % step, nb, step))
+    t_of = lambda b: float(beats[b]) if b < nb else an["dur"]
     act = an["act"]
-    # cut points: first beat, then walk bar lines; fills get a drum shot leading into the next bar
-    cuts, fill_starts = [0], set()
-    b = 0
+    vox = act["vocals"]
+    vox_in = {b for b in bars if b >= 4 and vox[b] > 0.6 and vox[max(0, b - 4):b].mean() < 0.4}
+    marks = set(an["sections"]) | set(an["fills"]) | vox_in
+    cuts, fill_starts, b, n = [0], set(), 0, 0
     while True:
-        lively = act["loud"][min(b, nb - 1)]
-        want = 2.6 if lively > 0.7 else 4.0 if lively > 0.4 else 6.0
-        nxt = [k for k in bars if t_of(k) - t_of(b) >= SLOP_MIN_S - 1e-6 and t_of(k) - t_of(b) <= SLOP_MAX_S + 1e-6]
-        forced = [k for k in nxt if k in sections or k in fills]
+        n += 1
+        lively = float(act["loud"][min(b, nb - 1)])
+        choices = (1, 2, 2, 4) if lively > 0.7 else (2, 4, 4, 8) if lively > 0.4 else (4, 8, 8)
+        want = choices[zlib.crc32(("%d %d" % (n, seed)).encode()) % len(choices)] * bar_len
+        nxt = [k for k in bars if SLOP_MIN_S - 1e-6 <= t_of(k) - t_of(b) <= SLOP_MAX_S + 1e-6]
+        forced = [k for k in nxt if k in marks and t_of(k) - t_of(b) <= want + 1e-6]
         if forced:
             k = forced[0]
-            if k in fills:          # start the drum shot so it lasts at least 2 s and ends on the downbeat
+            if k in an["fills"]:      # a drum shot that lasts 2 s or more and ends on the downbeat
                 f = max([j for j in range(b + 1, k) if t_of(k) - t_of(j) >= SLOP_MIN_S - 1e-6
                          and t_of(j) - t_of(b) >= SLOP_MIN_S - 1e-6], default=None)
                 if f is not None:
                     cuts += [f, k]
-                    fill_starts.add(float(t_of(f)))
+                    fill_starts.add(t_of(f))
                     b = k
                     continue
         elif nxt:
@@ -3882,66 +3883,77 @@ def plan_cuts(an, cams, seed=0):
             break
         cuts.append(k)
         b = k
-    times = [0.0] + [float(t_of(k)) for k in cuts[1:]] + [an["dur"]]
-    starts_sec = {float(t_of(k)) for k in sections} | {0.0}
+    times = [0.0] + [t_of(k) for k in cuts[1:]] + [an["dur"]]
+    return times, fill_starts, {t_of(k) for k in an["sections"]} | {0.0}
+
+
+# who a frame shows, from Apple Vision's labels (classification identifiers, matched by substring)
+SHOT_WORDS = {"drums": ("drum", "cymbal", "percussion"), "guitar": ("guitar", "banjo", "ukulele"),
+              "keys": ("piano", "keyboard", "organ", "synthesizer", "accordion"),
+              "vocals": ("microphone", "singer", "karaoke"), "wide": ("concert", "stage", "crowd", "band")}
+
+
+def frame_roles(f):
+    """{role: 0..1} for one tagged frame."""
+    labels = {k.lower(): v for k, v in (f.get("labels") or {}).items()}
+    hit = lambda words: max([v for k, v in labels.items() if any(w in k for w in words)], default=0.0)
+    r = {k: min(1.0, 2.5 * hit(w)) for k, w in SHOT_WORDS.items()}
+    r["bass"] = 0.8 * r["guitar"]                     # a bass reads as a guitar to Vision
+    people, big, face = f.get("people", 0), f.get("big", 0.0), f.get("face", 0.0)
+    instr = max(r["drums"], r["guitar"], r["keys"])
+    if face > 0.16 and instr < 0.3:                   # a close-up of a face, no instrument: the singer
+        r["vocals"] = max(r["vocals"], 0.7)
+    if people >= 3 or (people >= 2 and big < 0.55):
+        r["wide"] = max(r["wide"], 0.8)
+    return r
+
+
+def plan_takes(an, takes, seed=0):
+    """Shots in song seconds [(start, end, take index or None)]. takes: dicts with cam, spans [(a, b)
+    in song seconds] and tags(a, b) -> {role: 0..1} or None (not looked at). Each shot goes to the
+    take showing the player the music calls for; a take that keeps winning just keeps playing
+    (up to 8 s), so the cuts don't fall into a steady pattern."""
+    times, fill_starts, starts = shot_grid(an, seed)
+    beats, nb, act = an["beats"], len(an["beats"]), an["act"]
 
     def covers(spans, a, b):
         return sum(max(0.0, min(b, y) - max(a, x)) for x, y in spans) / max(1e-6, b - a)
 
     shots, used = [], collections.Counter()
-    prev = []
     for a, b in zip(times[:-1], times[1:]):
-        i0, i1 = int(np.searchsorted(beats, a)), max(int(np.searchsorted(beats, a)) + 1, int(np.searchsorted(beats, b)))
-        i0, i1 = min(i0, nb - 1), min(i1, nb)
-        m = lambda k: float(np.mean(act[k][i0:i1])) if i1 > i0 else 0.0
-        solo = bool(an["solo"][i0:i1].mean() > 0.5) if i1 > i0 else False
-        bass_lead = bool(an["bass_lead"][i0:i1].mean() > 0.5) if i1 > i0 else False
-        in_fill = a in fill_starts
-        cov = {L: covers(sp, a, b) for L, (role, sp) in cams.items()}
-        full = [L for L, c in cov.items() if c > 0.97]
-        pool = full or [L for L, c in cov.items() if c > 0 and c == max(cov.values())]
+        i0 = min(int(np.searchsorted(beats, a)), nb - 1)
+        i1 = min(max(i0 + 1, int(np.searchsorted(beats, b))), nb)
+        m = lambda k: float(np.mean(act[k][i0:i1]))
+        need = {"drums": m("drums") + (2.0 if a in fill_starts else 0.0), "vocals": 1.3 * m("vocals"),
+                "guitar": m("guitar") + (0.8 if an["solo"][i0:i1].mean() > 0.5 else 0.0),
+                "bass": 0.8 * m("bass") + (0.6 if an["bass_lead"][i0:i1].mean() > 0.5 else 0.0),
+                "keys": 0.6 * m("keys"), "wide": 0.5 + (0.8 if a in starts else 0.0)}
+        cov = [covers(t["spans"], a, b) for t in takes]
+        pool = [i for i, c in enumerate(cov) if c > 0.97] or \
+               [i for i, c in enumerate(cov) if c > 0 and c == max(cov, default=0)]
         if not pool:
-            shots.append((a, b, None))
+            shots.append([a, b, None])
             continue
+        prev = shots[-1] if shots and shots[-1][2] is not None else None
         total = sum(used.values()) or 1.0
 
-        def score(L):
-            role = cams[L][0]
-            s = {"drums": m("drums"), "bass": m("bass"), "vocals": 1.3 * m("vocals"), "guitar": m("guitar"),
-                 "keys": 0.8 * m("keys"), "wide": 0.45}.get(role, 0.3)
-            if in_fill and role == "drums":
-                s += 2.0
-            if a in starts_sec and role == "wide":
-                s += 0.8
-            if solo and role == "guitar":
-                s += 0.8
-            if bass_lead and role == "bass":
-                s += 0.6
-            if prev and L == prev[-1]:
-                s -= 10.0
-            if len(prev) > 1 and L == prev[-2]:
-                s -= 0.3
-            s -= 0.6 * used[L] / total
-            s += 0.05 * (zlib.crc32(("%s %.2f %d" % (L, a, seed)).encode()) % 100) / 100.0   # breaks ties, same every run
-            return s
-        L = max(pool, key=score)
-        shots.append((a, b, L))
-        used[L] += b - a
-        prev.append(L)
-    return shots
-
-
-def parse_roles(items):
-    """'roles:A=drums,B=bass' (from the window) or 'A=drums,B=bass' -> {'A': 'drums', ...}."""
-    out = {}
-    for it in items:
-        it = it.split(":", 1)[1] if it.lower().startswith("roles:") else it
-        for kv in it.split(","):
-            if "=" in kv:
-                k, v = kv.split("=", 1)
-                v = v.strip().lower()
-                out[k.strip().upper()] = v if v in SLOP_ROLES else "wide"
-    return out
+        def score(i):
+            tag = takes[i]["tags"](a, b) or {}
+            s = sum(need[r] * (0.15 + 0.85 * tag.get(r, 0.0)) for r in need) if tag else sum(need.values()) * 0.3
+            if prev and i == prev[2]:
+                # carrying on in the same take: fine while the shot stays under 8 s, else move on
+                s += 0.15 if b - prev[0] <= SLOP_MAX_S + 1e-6 else -10.0
+            elif prev and takes[i]["cam"] == takes[prev[2]]["cam"]:
+                s -= 0.25
+            s -= 0.8 * used[i] / total
+            return s + 0.05 * (zlib.crc32(("%d %.2f %d" % (i, a, seed)).encode()) % 100) / 100.0
+        i = max(pool, key=score)
+        used[i] += b - a
+        if prev and i == prev[2] and shots[-1][1] == a:
+            shots[-1][1] = b                     # the same take carries on: no cut here
+        else:
+            shots.append([a, b, i])
+    return [tuple(s) for s in shots]
 
 
 def xml_fps(el):
@@ -3958,64 +3970,129 @@ def url_to_path(u):
     return path
 
 
-def slop_cut(xml_path, roles, seed=0):
+# Mac only: kickoff_vision (Apple Vision, built by the updater) looks at frames of a clip and prints
+# one JSON line per frame: the labels it sees, how many people and faces, and how big they are
+VISION_HELPER = os.environ.get("KICKOFF_VISION") or os.path.expanduser(
+    "~/Library/Application Support/Kickoff/kickoff_vision")
+VISION_STEP = 1.0
+
+
+def look_at(path, a, b, step=VISION_STEP):
+    """Tagged frames of path from a to b seconds (source time): [{t, labels, people, ...}], cached
+    by file, size and time. [] when the helper isn't there or can't read the file."""
+    if not os.path.isfile(VISION_HELPER):
+        return []
+    try:
+        st = os.stat(path)
+    except OSError:
+        return []
+    key = hashlib.sha1(("%s|%d|%d|%.2f|%.2f|%.2f" % (path, st.st_size, int(st.st_mtime), a, b, step)).encode()).hexdigest()
+    cache = audio_cache_dir()
+    cfile = os.path.join(cache, "vision-%s.json" % key) if cache else None
+    if cfile and os.path.isfile(cfile):
+        try:
+            with open(cfile, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            pass
+    r = subprocess.run([VISION_HELPER, path, "%.3f" % a, "%.3f" % b, "%.3f" % step],
+                       capture_output=True, text=True)
+    frames = []
+    for line in r.stdout.splitlines():
+        try:
+            f = json.loads(line)
+        except ValueError:
+            continue
+        if "error" not in f:
+            frames.append(f)
+    if cfile and frames:
+        try:
+            with open(cfile, "w", encoding="utf-8") as fh:
+                json.dump(frames, fh)
+        except OSError:
+            pass
+    return frames
+
+
+def slop_cut(xml_path, seed=0):
     """Add '<project>_Slop Cut' next to the Edit sequence in the project XML (replacing an earlier
-    one). Returns (sequence name, shots, cameras used)."""
+    one): the Edit sequence's song with every synced take laid out (each camera's condensed tracks,
+    A Cam's first), cut at the shot lines, only the take picked for each shot enabled. Returns
+    (sequence name, shots, takes, analysis, how many takes were looked at)."""
     tree = ET.parse(xml_path)
     root = tree.getroot()
     project = root.findtext("project/name") or ""
     edit_name = seq_name("edit", project=project)
     parent_of = {c: p for p in root.iter() for c in p}
-    seqs = list(root.iter("sequence"))
-    by_id = {s.get("id"): s for s in seqs if s.find("media") is not None}
-    edit = next((s for s in seqs if s.findtext("name") == edit_name and s.find("media") is not None), None)
-    if edit is None:
-        edit = next((s for s in seqs if (s.findtext("name") or "").endswith("_Edit") and s.find("media") is not None), None)
+    seqs = [s for s in root.iter("sequence") if s.find("media") is not None]
+    by_id = {s.get("id"): s for s in seqs}
+    files = {f.get("id"): f for f in root.iter("file") if f.find("pathurl") is not None}
+    edit = next((s for s in seqs if s.findtext("name") == edit_name), None) or \
+        next((s for s in seqs if (s.findtext("name") or "").endswith("_Edit")), None)
     if edit is None:
         raise RuntimeError("there's no Edit sequence in %s" % os.path.basename(xml_path))
     fps = xml_fps(edit)
-    vtracks = edit.findall("media/video/track")
-    song_ci = next((ci for ci in edit.iterfind("media/audio/track/clipitem")), None)
+    song_ci = next(iter(edit.iterfind("media/audio/track/clipitem")), None)
     if song_ci is None:
         raise RuntimeError("the Edit sequence has no song on it, so there's nothing to cut to")
-    fid = song_ci.find("file").get("id")
-    fel = next(f for f in root.iter("file") if f.get("id") == fid and f.find("pathurl") is not None)
-    song_path = url_to_path(fel.findtext("pathurl"))
+    song_path = url_to_path(files[song_ci.find("file").get("id")].findtext("pathurl"))
     if not os.path.exists(song_path):
         raise RuntimeError("can't find the song at %s" % song_path)
     song_frame = int(song_ci.findtext("start"))
     to_s = lambda f: (f - song_frame) / fps
-    # each video track holds one camera's nest; where that camera has takes, from its own sequence
-    cams, track_cam = {}, {}
-    letters_known = set(roles)
-    for i, tr in enumerate(vtracks):
+
+    # every take, from each camera's nested (condensed) sequence: (camera, its track, the clipitem)
+    lanes, takes = [], []
+    for tr in edit.findall("media/video/track"):
         ci = tr.find("clipitem")
         if ci is None or ci.find("sequence") is None:
             continue
         nest = by_id.get(ci.find("sequence").get("id"))
-        nname = ci.findtext("name") or ""
-        letter = next((L for L in sorted(letters_known, key=len, reverse=True)
-                       if nname == seq_name("condensed", L)), None)
-        if letter is None:
-            m = re.match(r"^([A-Z]{1,2})\b", nname)
-            letter = m.group(1) if m else chr(ord("A") + i)
-        spans = []
-        if nest is not None:
-            for nci in nest.iterfind("media/video/track/clipitem"):
-                a, b = to_s(int(nci.findtext("start"))), to_s(int(nci.findtext("end")))
-                spans.append((a, b))
-        track_cam[i] = letter
-        cams[letter] = (roles.get(letter, "wide"), spans)
-    if not cams:
-        raise RuntimeError("the Edit sequence has no camera nests to cut")
+        if nest is None:
+            continue
+        cam = re.sub(r"_.*$", "", ci.findtext("name") or "")
+        for ntr in nest.findall("media/video/track"):
+            items = ntr.findall("clipitem")
+            if not items:
+                continue
+            lanes.append((cam, items))
+            for it in items:
+                a, b = to_s(int(it.findtext("start"))), to_s(int(it.findtext("end")))
+                if b > 0 and it.find("file") is not None:
+                    takes.append(dict(cam=cam, item=it, a=a, b=b, spans=[(a, b)]))
+    if not takes:
+        raise RuntimeError("the Edit sequence has no synced takes to cut")
     event("stage", text="Listening to the song")
     an = song_analysis(song_path)
-    cams = {L: (r, [(max(0.0, a), min(an["dur"], b)) for a, b in sp if b > 0 and a < an["dur"]])
-            for L, (r, sp) in cams.items()}
-    event("stage", text="Cutting the Slop Cut")
-    shots = plan_cuts(an, cams, seed)
+    takes = [t for t in takes if t["a"] < an["dur"]]
 
-    # the copy: same tracks and song, each nest cut at every shot line, enabled only where it's on
+    # what each take shows, a frame a second over the part that plays during the song
+    looked = 0
+    if os.path.isfile(VISION_HELPER):
+        for n, t in enumerate(takes, 1):
+            event("stage", text="Looking at take %d of %d" % (n, len(takes)))
+            it = t["item"]
+            s0, s1 = int(it.findtext("start")), int(it.findtext("end"))
+            i0, i1 = int(it.findtext("in")), int(it.findtext("out"))
+            k = (i1 - i0) / max(1, s1 - s0)                        # source frames per timeline frame
+            src = lambda song_t: (i0 + (song_t * fps + song_frame - s0) * k) / fps
+            a, b = max(0.0, t["a"]), min(an["dur"], t["b"])
+            path = url_to_path(files[it.find("file").get("id")].findtext("pathurl")) \
+                if it.find("file").get("id") in files else None
+            frames = look_at(path, src(a), src(b)) if path else []
+            if frames:
+                looked += 1
+            t["frames"] = [((f["t"] * fps - i0) / k + s0 - song_frame) / fps for f in frames]
+            t["roles"] = [frame_roles(f) for f in frames]
+    for t in takes:
+        def tags(a, b, t=t):
+            rs = [r for x, r in zip(t.get("frames", []), t.get("roles", [])) if a - 0.5 <= x <= b + 0.5]
+            return {k: float(np.mean([r[k] for r in rs])) for k in rs[0]} if rs else None
+        t["tags"] = tags
+    event("stage", text="Cutting the Slop Cut")
+    shots = plan_takes(an, takes, seed)
+
+    # the new sequence: the Edit sequence's settings and song, its camera nests swapped for the takes
     name = "%s_%s" % (project, SLOP_NAME) if project else SLOP_NAME
     holder = parent_of[edit]
     for old in [s for s in holder.findall("sequence") if s.findtext("name") == name]:
@@ -4025,53 +4102,65 @@ def slop_cut(xml_path, roles, seed=0):
     new.find("name").text = name
     if new.find("uuid") is not None:
         new.find("uuid").text = "kickoff-slop-%s" % datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    video = new.find("media/video")
+    for tr in video.findall("track"):
+        video.remove(tr)
     n = 0
     for ci in new.iter("clipitem"):
         n += 1
         ci.set("id", "clipitem-slop-%d" % n)
-    end_frame = int(new.findtext("duration"))
-    lines = [song_frame + int(round(a * fps)) for a, _, _ in shots] + [song_frame + int(round(shots[-1][1] * fps))]
-    pieces = [(0, lines[0], None)] + [(lines[k], lines[k + 1], shots[k][2]) for k in range(len(shots))]
-    for i, tr in enumerate(new.findall("media/video/track")):
-        ci = tr.find("clipitem")
-        if ci is None or ci.find("sequence") is None or i not in track_cam:
-            continue
-        nframes = int(ci.findtext("end")) - int(ci.findtext("start"))
-        segs = pieces + ([(lines[-1], max(lines[-1], nframes), None)] if nframes > lines[-1] else [])
-        k = list(tr).index(ci)
-        tr.remove(ci)
-        for a, b, L in segs:
-            a, b = max(0, a), min(nframes, b)
-            if b <= a:
-                continue
-            seg = copy.deepcopy(ci)
-            n += 1
-            seg.set("id", "clipitem-slop-%d" % n)
-            seg.find("enabled").text = "TRUE" if L == track_cam[i] else "FALSE"
-            for tag, v in (("start", a), ("end", b), ("in", a), ("out", b)):
-                seg.find(tag).text = str(v)
-            tr.insert(k, seg)
-            k += 1
-    new.find("duration").text = str(end_frame)
+    lines = sorted({song_frame + int(round(a * fps)) for a, _, _ in shots} |
+                   {song_frame + int(round(shots[-1][1] * fps))})
+    on = {}                                   # take index -> [(start, end) frames it's enabled]
+    for a, b, i in shots:
+        if i is not None:
+            on.setdefault(i, []).append((song_frame + int(round(a * fps)), song_frame + int(round(b * fps))))
+    index = {id(t["item"]): i for i, t in enumerate(takes)}
+    last = 0
+    for cam, items in lanes:
+        tr = ET.SubElement(video, "track")
+        for it in items:
+            s0, s1 = int(it.findtext("start")), int(it.findtext("end"))
+            i0, i1 = int(it.findtext("in")), int(it.findtext("out"))
+            k = (i1 - i0) / max(1, s1 - s0)
+            i = index.get(id(it))
+            cuts = [s0] + [x for x in lines if s0 < x < s1] + [s1]
+            for a, b in zip(cuts[:-1], cuts[1:]):
+                seg = copy.deepcopy(it)
+                for ln in seg.findall("link"):
+                    seg.remove(ln)
+                n += 1
+                seg.set("id", "clipitem-slop-%d" % n)
+                live = i is not None and any(x <= a and b <= y for x, y in on.get(i, []))
+                seg.find("enabled").text = "TRUE" if live else "FALSE"
+                seg.find("start").text, seg.find("end").text = str(a), str(b)
+                seg.find("in").text = str(i0 + int(round((a - s0) * k)))
+                seg.find("out").text = str(i0 + int(round((b - s0) * k)))
+                tr.append(seg)
+            last = max(last, s1)
+        ET.SubElement(tr, "enabled").text = "TRUE"
+        ET.SubElement(tr, "locked").text = "FALSE"
+    new.find("duration").text = str(max(int(new.findtext("duration")), last))
     holder.insert(list(holder).index(edit) + 1, new)
     write_xml(root, xml_path)
-    used = collections.Counter(L for _, _, L in shots if L)
-    return name, shots, used, an
+    return name, shots, takes, an, looked
 
 
 def slop_main(args):
     xml = next((p for p in args.paths if p.lower().endswith(".xml")), None)
     if not xml or not os.path.isfile(xml):
         sys.exit("error: give the project XML to cut a Slop Cut in")
-    roles = parse_roles([p for p in args.paths if p != xml] + ([args.roles] if args.roles else []))
     event("stage", text="Reading the project")
     try:
-        name, shots, used, an = slop_cut(os.path.abspath(xml), roles)
+        name, shots, takes, an, looked = slop_cut(os.path.abspath(xml))
     except (RuntimeError, ET.ParseError, OSError) as e:
         sys.exit("error: %s" % e)
-    log("Added %s to %s: %d shots at %.0f BPM." % (name, os.path.basename(xml), len(shots), an["bpm"]))
+    used = collections.Counter(takes[i]["cam"] for _, _, i in shots if i is not None)
+    log("Added %s to %s: %d shots at %.0f BPM, %d of %d takes looked at." % (
+        name, os.path.basename(xml), len(shots), an["bpm"], looked, len(takes)))
     event("slop", xml=os.path.abspath(xml), name=name, shots=len(shots), bpm=round(an["bpm"]),
-          cameras=dict(used), seconds={L: round(sum(b - a for a, b, M in shots if M == L), 1) for L in used})
+          cameras=dict(used), takes=len({i for _, _, i in shots if i is not None}), looked=looked,
+          seen=bool(looked))
     return 0
 
 
@@ -4133,12 +4222,10 @@ def main(argv=None):
                          "narrative with no sound files, the cameras synced to each other; setup: "
                          "bins, Breakups and an empty Edit sequence only (commercials); auto (default): music "
                          "when a song is found and clips line up with it; slop: add a Slop Cut (a rough edit) to "
-                         "a finished project XML, given as the path, with --roles")
+                         "a finished project XML, given as the path")
     ap.add_argument("--sync-by", choices=["auto", "timecode", "audio"], default=None,
                     help="auto (default): timecode when the clip and the audio both carry it, else the "
                          "sound; audio: ignore timecode; timecode: only timecode")
-    ap.add_argument("--roles", help="Slop Cut: who each camera is on, e.g. A=drums,B=vocals,C=wide "
-                                    "(drums, bass, guitar, vocals, keys or wide)")
     ap.add_argument("--rebuild", action="store_true",
                     help="build the whole project again even if this folder was run before (by default a "
                          "second run only adds the cards that are new since then)")

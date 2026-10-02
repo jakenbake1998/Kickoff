@@ -568,14 +568,6 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   .slophead h3{margin:0}
   .slop .tipbox{bottom:auto;top:calc(100% + 10px);left:-150px;width:340px}
   .slop .tipbox::after{top:auto;bottom:100%;left:154px;border-top-color:transparent;border-bottom-color:#262a31}
-  .slopcams{display:grid;gap:8px;margin-top:14px}
-  .sloprow{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}
-  .sloprow .n{display:flex;align-items:center;gap:8px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
-  .sloprow .chip{width:10px;height:10px;border-radius:3px;flex:none}
-  .roles{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:2px}
-  .roles button{padding:5px 9px;font-size:12.5px;font-weight:600;border:0;border-radius:7px;background:none;color:var(--muted)}
-  .roles button:hover{color:var(--ink)}
-  .roles button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
   .slopbusy{display:flex;align-items:center;gap:12px;margin:18px 0 4px;color:var(--muted)}
   .slopbusy .spin{width:18px;height:18px;border-radius:50%;border:2.5px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite;flex:none}
   .slopdone{margin:16px 0 0;line-height:1.45}
@@ -819,9 +811,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         <span class="tip"><button type="button" class="tipi" aria-label="What's a Slop Cut?" aria-describedby="slopTip">i</button>
           <span class="tipbox" id="slopTip" role="tooltip"><span class="trip" aria-hidden="true"></span><span class="th">What&rsquo;s a Slop Cut?</span>
             Our editors haven&rsquo;t slept since 2019. They live on cold brew, cut on the beat, and never ask for notes. Drummer on the fills, singer on the lines, the wide when the song turns. Then you&rsquo;re done. Ship it, deliver, send. Adi&oacute;s, amigos! &#x1F57A;<br><br>
-            <b>Real talk:</b> it&rsquo;s a copy of your Edit sequence, cut up. Shots it isn&rsquo;t using are disabled, not deleted, so every angle is still there to switch on.</span></span></div>
-      <p class="hint" id="slopSub">Who&rsquo;s each camera on?</p>
-      <div class="slopcams" id="slopCams"></div>
+            <b>Real talk:</b> Kickoff looks at a frame a second of every take with your Mac&rsquo;s built-in image recognition (drums, guitars, mics, close-ups, wides) and cuts to whoever the song is about. Takes it isn&rsquo;t using are disabled, not deleted.</span></span></div>
+      <p class="hint" id="slopSub">The editors look at every take to see who&rsquo;s playing, then cut it on the beat. Every take stays in the sequence, switched off where it isn&rsquo;t used.</p>
       <div class="slopbusy" id="slopBusy" hidden><span class="spin"></span><span id="slopStage">The editors are on it</span></div>
       <p class="slopdone" id="slopDone" hidden></p>
       <div class="askbtns"><button class="quiet" id="bSlopCancel">Cancel</button><button class="pri" id="bSlopGo">Cut it for me</button></div>
@@ -2839,54 +2830,17 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   });
 
   // ---- Slop Cut: a rough edit cut on the beat, added next to the Edit sequence in the same XML
-  var SLOP_ROLES = [["drums", "Drums"], ["bass", "Bass"], ["guitar", "Guitar"], ["vocals", "Vocals"], ["keys", "Keys"], ["wide", "Wide"]];
-  var slop = null;                 // {xml, roles} while the Slop Cut window is open; .busy while it cuts
-  function slopSaved() {
-    try { return JSON.parse(localStorage.getItem("kickoff.slopRoles") || "{}") || {}; } catch (err) { return {}; }
-  }
+  var slop = null;                 // {xml} while the Slop Cut window is open; .busy while it cuts
   function slopOpen() {
     var e = state.result;
     if (!e || !e.xml || running()) return;
-    var saved = slopSaved();
-    slop = { xml: e.xml, roles: {} };
-    var box = $("slopCams");
-    box.innerHTML = "";
-    e.cameras.filter(function (c) { return c.synced; }).forEach(function (c) {
-      slop.roles[c.letter] = saved[c.letter] || "wide";
-      var row = document.createElement("div");
-      row.className = "sloprow";
-      var n = document.createElement("span");
-      n.className = "n";
-      n.title = c.name;
-      n.innerHTML = '<span class="chip"></span>';
-      n.firstChild.style.background = "var(" + (CAM_COLORS[c.label] || "--muted") + ")";
-      n.appendChild(document.createTextNode(c.name));
-      var seg = document.createElement("div");
-      seg.className = "roles";
-      seg.setAttribute("role", "group");
-      seg.setAttribute("aria-label", "Who " + c.letter + " Cam is on");
-      SLOP_ROLES.forEach(function (r) {
-        var b = document.createElement("button");
-        b.type = "button";
-        b.textContent = r[1];
-        b.setAttribute("aria-pressed", String(slop.roles[c.letter] === r[0]));
-        b.addEventListener("click", function () {
-          if (slop.busy) return;
-          slop.roles[c.letter] = r[0];
-          Array.prototype.forEach.call(seg.children, function (x) { x.setAttribute("aria-pressed", String(x === b)); });
-        });
-        seg.appendChild(b);
-      });
-      row.append(n, seg);
-      box.appendChild(row);
-    });
+    slop = { xml: e.xml };
     slopView("pick");
     show("slopWrap", true);
     $("bSlopGo").focus();
   }
   function slopView(v, text) {
     show("slopSub", v === "pick");
-    show("slopCams", v === "pick");
     show("slopBusy", v === "busy");
     var d = $("slopDone");
     d.hidden = v !== "done" && v !== "error";
@@ -2901,21 +2855,19 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (!slop) return;
     if (slop.done) { show("slopWrap", false); $("bOpen").click(); slop = null; return; }
     if (slop.failed) { slop.failed = false; slopView("pick"); return; }
-    try { localStorage.setItem("kickoff.slopRoles", JSON.stringify(Object.assign(slopSaved(), slop.roles))); } catch (err) {}
-    var roles = Object.keys(slop.roles).map(function (k) { return k + "=" + slop.roles[k]; }).join(",");
     slop.busy = true; slop.err = ""; slop.result = null;
     $("slopStage").textContent = "The editors are on it";
     slopView("busy");
-    post({ cmd: "run", paths: [slop.xml, "roles:" + roles], mode: "slop", xmlDir: xmlDir || "drive", xmlName: "" });
+    post({ cmd: "run", paths: [slop.xml], mode: "slop", xmlDir: xmlDir || "drive", xmlName: "" });
   }
   function slopExit(code) {
     slop.busy = false;
     var r = slop.result;
     if (code === 0 && r) {
       slop.done = true;
-      var n = Object.keys(r.cameras || {}).length;
       slopView("done", "&#x2713; <b>" + esc(r.name) + "</b> is in your Edit bin, right under the Edit sequence: "
-        + plural(r.shots, "shot") + " on " + plural(n, "camera") + ", cut at " + r.bpm + " BPM.");
+        + plural(r.shots, "shot") + " from " + plural(r.takes || 0, "take") + ", cut at " + r.bpm + " BPM."
+        + (r.seen ? "" : "<br><span style=\"color:var(--warn)\">The shot finder isn&rsquo;t on this Mac yet, so this one is cut by the music only. Relaunch Kickoff twice and cut again.</span>"));
     } else {
       slop.failed = true;
       slopView("error", esc(slop.err || "The editors walked off the job. Try again, or run a fresh sync first."));
@@ -2957,8 +2909,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     started: function (paths) { if (slop && slop.busy) return; started(paths); },
     event: function (e) {
       if (!(slop && slop.busy)) return onEvent(e);
-      if (e.event === "stage") $("slopStage").textContent = e.text === "Listening to the song" ? "Listening to the song"
-        : e.text === "Cutting the Slop Cut" ? "Cutting on the beat" : "The editors are on it";
+      if (e.event === "stage") $("slopStage").textContent = e.text === "Cutting the Slop Cut" ? "Cutting on the beat"
+        : /^Reading/.test(e.text) ? "The editors are on it" : e.text;
       else if (e.event === "slop") slop.result = e;
     },
     log: function (line) {
