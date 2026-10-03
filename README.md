@@ -169,6 +169,14 @@ How it picks:
 Sync placement isn't touched. Running it again replaces the earlier Slop Cut. From the command line:
 `python3 musicsync.py --mode slop "PROJECT.xml"`, then `python3 tests/check_slop.py "PROJECT.xml"`.
 
+### A Slop Cut from your own XML
+
+The little tab in the home page's bottom-right corner (it lights up when you hover) makes a Slop Cut
+from any synced sequence: in Premiere, File > Export > Final Cut Pro XML, then Choose XML. The song is
+the sequence's longest audio clip; every video clip on its tracks (and inside its nests) is a take.
+The Slop Cut lands in "<your file> - Slop Cut.xml" next to yours, which is never changed
+(`musicsync.py --mode slopimport FILE.xml`; check: `tests/check_slop_import.py PROJECT.xml`).
+
 ## Slow Motion sequence
 
 Every clip shot faster than 30 fps (60p, 120p...) from every camera also goes in `<project>_Slow Motion`

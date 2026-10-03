@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.45"
+VERSION = "0.5.46"
 
 # ---------------------------------------------------------------- constants
 
@@ -4106,54 +4106,128 @@ def look_at(path, a, b, step=VISION_STEP):
     return frames
 
 
-def slop_cut(xml_path, seed=0):
-    """Add '<project>_Slop Cut' next to the Edit sequence in the project XML (replacing an earlier
-    one): the Edit sequence's song with every synced take laid out (each camera's condensed tracks,
-    A Cam's first), cut at the shot lines, only the take picked for each shot enabled. Returns
-    (sequence name, shots, takes, analysis, how many takes were looked at)."""
+def slop_base(root, project):
+    """(sequence to cut from, its song clipitem). A Kickoff project: its Edit sequence and the song on
+    its A1. Anyone's XML (a synced sequence exported from Premiere): the sequence with the most video
+    clips under it (through nests) that has a song: its longest audio clip, preferring an audio-only file."""
+    seqs = [s for s in root.iter("sequence") if s.find("media") is not None]
+    by_id = {s.get("id"): s for s in seqs}
+    files = {f.get("id"): f for f in root.iter("file") if f.find("pathurl") is not None}
+    edit_name = seq_name("edit", project=project)
+    edit = next((s for s in seqs if s.findtext("name") == edit_name), None) or \
+        next((s for s in seqs if (s.findtext("name") or "").endswith("_Edit")
+              and any(ci.find("sequence") is not None for ci in s.iterfind("media/video/track/clipitem"))), None)
+    if edit is not None:
+        return edit, next(iter(edit.iterfind("media/audio/track/clipitem")), None)
+
+    def count(seq, depth=0):
+        n = 0
+        for ci in seq.iterfind("media/video/track/clipitem"):
+            if ci.find("sequence") is not None and depth < 4:
+                inner = by_id.get(ci.find("sequence").get("id"))
+                n += count(inner, depth + 1) if inner is not None else 0
+            elif ci.find("file") is not None:
+                n += 1
+        return n
+
+    def song_of(seq):
+        best = None
+        for ci in seq.iterfind("media/audio/track/clipitem"):
+            f = ci.find("file")
+            if f is None or f.get("id") not in files or int(ci.findtext("start") or -1) < 0:
+                continue
+            audio_only = files[f.get("id")].find("media/video") is None
+            key = (audio_only, int(ci.findtext("end")) - int(ci.findtext("start")))
+            if best is None or key > best[0]:
+                best = (key, ci)
+        return best[1] if best else None
+    nested = {ci.find("sequence").get("id") for s in seqs for ci in s.iter("clipitem") if ci.find("sequence") is not None}
+    ranked = sorted(seqs, key=lambda s: (song_of(s) is not None, count(s), s.get("id") not in nested), reverse=True)
+    if not ranked or song_of(ranked[0]) is None or not count(ranked[0]):
+        return (ranked[0] if ranked else None), None
+    return ranked[0], song_of(ranked[0])
+
+
+def cam_of(path, fallback):
+    """Camera letter from a "C Cam ..." folder in the path (folder names are authoritative)."""
+    for part in reversed(os.path.dirname(path or "").split("/")):
+        m = re.match(r"^([A-Za-z])[ _-]?Cam\b", part, re.I)
+        if m:
+            return m.group(1).upper()
+    return fallback
+
+
+def slop_cut(xml_path, seed=0, out_path=None):
+    """Add a Slop Cut sequence next to the sequence it's cut from (replacing an earlier one): its song
+    with every synced take laid out, cut at the shot lines, only the take picked for each shot
+    enabled. A Kickoff project: '<project>_Slop Cut' next to the Edit sequence, each camera's
+    condensed tracks laid out (A Cam's first), written back in place. Anyone's synced sequence XML:
+    '<sequence>_Slop Cut', its video tracks (and the tracks inside its nests) laid out, written to
+    out_path so the original is never touched. Returns (sequence name, shots, takes, analysis, how
+    many takes were looked at)."""
     tree = ET.parse(xml_path)
     root = tree.getroot()
     project = root.findtext("project/name") or ""
-    edit_name = seq_name("edit", project=project)
     parent_of = {c: p for p in root.iter() for c in p}
     seqs = [s for s in root.iter("sequence") if s.find("media") is not None]
     by_id = {s.get("id"): s for s in seqs}
     files = {f.get("id"): f for f in root.iter("file") if f.find("pathurl") is not None}
-    edit = next((s for s in seqs if s.findtext("name") == edit_name), None) or \
-        next((s for s in seqs if (s.findtext("name") or "").endswith("_Edit")), None)
+    edit, song_ci = slop_base(root, project)
     if edit is None:
-        raise RuntimeError("there's no Edit sequence in %s" % os.path.basename(xml_path))
+        raise RuntimeError("there's no sequence in %s" % os.path.basename(xml_path))
+    kickoff = (edit.findtext("name") or "").endswith("_Edit") and project != ""
     fps = xml_fps(edit)
-    song_ci = next(iter(edit.iterfind("media/audio/track/clipitem")), None)
     if song_ci is None:
-        raise RuntimeError("the Edit sequence has no song on it, so there's nothing to cut to")
+        raise RuntimeError("%s has no song on it, so there's nothing to cut to" % (edit.findtext("name") or "The sequence"))
     song_path = url_to_path(files[song_ci.find("file").get("id")].findtext("pathurl"))
     if not os.path.exists(song_path):
         raise RuntimeError("can't find the song at %s" % song_path)
-    song_frame = int(song_ci.findtext("start"))
+    song_frame = int(song_ci.findtext("start")) - int(song_ci.findtext("in") or 0)   # where the song's 0:00 is
     to_s = lambda f: (f - song_frame) / fps
+    path_of = lambda it: url_to_path(files[it.find("file").get("id")].findtext("pathurl")) \
+        if it.find("file") is not None and it.find("file").get("id") in files else None
 
-    # every take, from each camera's nested (condensed) sequence: (camera, its track, the clipitem)
+    # every take: from each camera's nested sequence (its tracks), or a clip right on a track.
+    # lanes = [(camera, [clipitems])], each one track of the Slop Cut; a nest's clips are shifted to
+    # where the nest sits in the sequence
     lanes, takes = [], []
-    for tr in edit.findall("media/video/track"):
-        ci = tr.find("clipitem")
-        if ci is None or ci.find("sequence") is None:
-            continue
-        nest = by_id.get(ci.find("sequence").get("id"))
-        if nest is None:
-            continue
-        cam = re.sub(r"_.*$", "", ci.findtext("name") or "")
-        for ntr in nest.findall("media/video/track"):
-            items = ntr.findall("clipitem")
-            if not items:
+
+    def shifted(it, off):
+        if not off:
+            return it
+        c = copy.deepcopy(it)
+        for k in ("start", "end"):
+            c.find(k).text = str(int(c.findtext(k)) + off)
+        return c
+    for vt, tr in enumerate(edit.findall("media/video/track"), 1):
+        direct = []
+        for ci in tr.findall("clipitem"):
+            if int(ci.findtext("start") or -1) < 0 or (ci.findtext("enabled") or "TRUE") == "FALSE":
                 continue
-            lanes.append((cam, items))
-            for it in items:
-                a, b = to_s(int(it.findtext("start"))), to_s(int(it.findtext("end")))
-                if b > 0 and it.find("file") is not None:
-                    takes.append(dict(cam=cam, item=it, a=a, b=b, spans=[(a, b)]))
+            if ci.find("sequence") is not None:
+                nest = by_id.get(ci.find("sequence").get("id"))
+                if nest is None:
+                    continue
+                off = int(ci.findtext("start")) - int(ci.findtext("in") or 0)
+                cam = re.sub(r"_.*$", "", ci.findtext("name") or "") if kickoff else None
+                for ntr in nest.findall("media/video/track"):
+                    items = [shifted(it, off) for it in ntr.findall("clipitem")
+                             if it.find("file") is not None and int(it.findtext("start") or -1) >= 0]
+                    if items:
+                        lanes.append((cam, items))
+            elif ci.find("file") is not None:
+                direct.append(ci)
+        if direct:
+            lanes.append((None, direct))
+    for k, (cam, items) in enumerate(lanes):
+        cam = cam or cam_of(path_of(items[0]), "V%d" % (k + 1))
+        lanes[k] = (cam, items)
+        for it in items:
+            a, b = to_s(int(it.findtext("start"))), to_s(int(it.findtext("end")))
+            if b > 0:
+                takes.append(dict(cam=cam, item=it, a=a, b=b, spans=[(a, b)]))
     if not takes:
-        raise RuntimeError("the Edit sequence has no synced takes to cut")
+        raise RuntimeError("%s has no synced takes to cut" % (edit.findtext("name") or "The sequence"))
     event("stage", text="Listening to the song")
     an = song_analysis(song_path)
     takes = [t for t in takes if t["a"] < an["dur"]]
@@ -4169,8 +4243,7 @@ def slop_cut(xml_path, seed=0):
             k = (i1 - i0) / max(1, s1 - s0)                        # source frames per timeline frame
             src = lambda song_t: (i0 + (song_t * fps + song_frame - s0) * k) / fps
             a, b = max(0.0, t["a"]), min(an["dur"], t["b"])
-            path = url_to_path(files[it.find("file").get("id")].findtext("pathurl")) \
-                if it.find("file").get("id") in files else None
+            path = path_of(it)
             frames = look_at(path, src(a), src(b)) if path else []
             if frames:
                 looked += 1
@@ -4185,7 +4258,8 @@ def slop_cut(xml_path, seed=0):
     shots = plan_takes(an, takes, seed)
 
     # the new sequence: the Edit sequence's settings and song, its camera nests swapped for the takes
-    name = "%s_%s" % (project, SLOP_NAME) if project else SLOP_NAME
+    base = project if kickoff else (edit.findtext("name") or project)
+    name = "%s_%s" % (base, SLOP_NAME) if base else SLOP_NAME
     holder = parent_of[edit]
     for old in [s for s in holder.findall("sequence") if s.findtext("name") == name]:
         holder.remove(old)
@@ -4201,6 +4275,9 @@ def slop_cut(xml_path, seed=0):
     for ci in new.iter("clipitem"):
         n += 1
         ci.set("id", "clipitem-slop-%d" % n)
+        for ln in ci.findall("link"):        # links point at clips of the sequence it was copied from
+            ci.remove(ln)
+    by_ref(new)
     lines = sorted({song_frame + int(round(a * fps)) for a, _, _ in shots} |
                    {song_frame + int(round(shots[-1][1] * fps))})
     on = {}                                   # take index -> [(start, end) frames it's enabled]
@@ -4228,14 +4305,25 @@ def slop_cut(xml_path, seed=0):
                 seg.find("start").text, seg.find("end").text = str(a), str(b)
                 seg.find("in").text = str(i0 + int(round((a - s0) * k)))
                 seg.find("out").text = str(i0 + int(round((b - s0) * k)))
+                by_ref(seg)
                 tr.append(seg)
             last = max(last, s1)
         ET.SubElement(tr, "enabled").text = "TRUE"
         ET.SubElement(tr, "locked").text = "FALSE"
     new.find("duration").text = str(max(int(new.findtext("duration")), last))
     holder.insert(list(holder).index(edit) + 1, new)
-    write_xml(root, xml_path)
+    write_xml(root, out_path or xml_path)
     return name, shots, takes, an, looked
+
+
+def by_ref(el):
+    """Files and nested sequences inside a copied clip become references (id only): the full ones
+    are already written earlier in the XML, where the clips were copied from."""
+    for tag in ("file", "sequence"):
+        for x in el.iter(tag):
+            if x is not el and len(x):
+                for k in list(x):
+                    x.remove(k)
 
 
 def slop_main(args):
@@ -4243,13 +4331,18 @@ def slop_main(args):
     if not xml or not os.path.isfile(xml):
         sys.exit("error: give the project XML to cut a Slop Cut in")
     event("stage", text="Reading the project")
+    out = None
+    if args.mode == "slopimport":       # someone's own XML: the Slop Cut goes in a copy next to it
+        stem = re.sub(r"(?i)( - Slop Cut)?\.xml$", "", os.path.abspath(xml))
+        out = stem + " - Slop Cut.xml"
     try:
-        name, shots, takes, an, looked = slop_cut(os.path.abspath(xml))
+        name, shots, takes, an, looked = slop_cut(os.path.abspath(xml), out_path=out)
     except (RuntimeError, ET.ParseError, OSError) as e:
         sys.exit("error: %s" % e)
     used = collections.Counter(takes[i]["cam"] for _, _, i in shots if i is not None)
     log("Added %s to %s: %d shots at %.0f BPM, %d of %d takes looked at." % (
         name, os.path.basename(xml), len(shots), an["bpm"], looked, len(takes)))
+    xml = out or xml
     event("slop", xml=os.path.abspath(xml), name=name, shots=len(shots), bpm=round(an["bpm"]),
           cameras=dict(used), takes=len({i for _, _, i in shots if i is not None}), looked=looked,
           seen=bool(looked))
@@ -4308,7 +4401,7 @@ def main(argv=None):
                     help="keep placed stretches whose picture is a flat color (see drop_blank)")
     ap.add_argument("--no-cache", action="store_true",
                     help="don't keep decoded camera audio for the next run (see audio_cache_dir)")
-    ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras", "slop"], default="auto",
+    ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras", "slop", "slopimport"], default="auto",
                     help="music: sync to the song (music video); narrative: sync each clip to the sound "
                          "recordist's audio files (timecode, else scratch audio) in one Sync sequence; cameras: "
                          "narrative with no sound files, the cameras synced to each other; setup: "
@@ -4338,7 +4431,7 @@ def main(argv=None):
             else ("timecode" if SETTINGS["timecode_music"] else "audio")
     global EVENTS
     EVENTS = args.events
-    if args.mode == "slop":
+    if args.mode in ("slop", "slopimport"):
         return slop_main(args)
     if args.sync_size == "first":
         args.sync_size = None

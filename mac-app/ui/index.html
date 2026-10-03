@@ -610,6 +610,21 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   @keyframes slopTrip{to{transform:rotate(360deg);filter:hue-rotate(360deg)}}
   @keyframes slopWobble{from{background-position:0 0;transform:scale(1)}to{background-position:40px -30px;transform:scale(1.15)}}
   @media (prefers-reduced-motion:reduce){#bSlop,#bSlop .spark,.slop .tipbox::before,.slop .tipbox .trip{animation:none}}
+  /* the Slop Cut corner tab: a sliver in the corner that lights up on hover (for a sync XML of your own) */
+  #slopTab{position:fixed;right:0;bottom:8px;z-index:30;display:flex;align-items:center;gap:8px;height:34px;padding:0 10px 0 9px;
+    border:1px solid var(--line);border-right:0;border-radius:10px 0 0 10px;background:var(--panel,#1b1e23);color:var(--muted);
+    font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;max-width:34px;overflow:hidden;white-space:nowrap;
+    transition:max-width .25s ease,color .2s,box-shadow .25s,background .25s}
+  #slopTab .spark{flex:none;font-size:14px;width:14px;text-align:center}
+  #slopTab:hover,#slopTab:focus-visible{max-width:220px;color:#fff;outline:none;border-color:transparent;
+    background:linear-gradient(90deg,#ff2bd6,#8b5cff,#22d3ee,#ff2bd6);background-size:300% 100%;animation:slopFlow 3s linear infinite;
+    box-shadow:0 0 14px 3px #ff2bd6,0 0 34px 10px rgba(139,92,255,.7),0 0 60px 20px rgba(34,211,238,.35)}
+  #slopTab:hover .spark,#slopTab:focus-visible .spark{animation:slopSpin 2.4s linear infinite}
+  .slopfile[hidden],#slopTab[hidden]{display:none}
+  .slopfile{display:flex;align-items:center;gap:10px;margin:14px 0 2px}
+  .slopfile span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:13px}
+  .slopfile span.has{color:var(--ink)}
+  @media (prefers-reduced-motion:reduce){#slopTab,#slopTab .spark{animation:none!important}}
 </style>
 </head>
 <body>
@@ -813,6 +828,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
             Our editors haven&rsquo;t slept since 2019. They live on cold brew, cut on the beat, and never ask for notes. Drummer on the fills, singer on the lines, the wide when the song turns. Then you&rsquo;re done. Ship it, deliver, send. Adi&oacute;s, amigos! &#x1F57A;<br><br>
             <b>Real talk:</b> Kickoff looks at a frame a second of every take with your Mac&rsquo;s built-in image recognition (drums, guitars, mics, close-ups, wides) and cuts to whoever the song is about. Takes it isn&rsquo;t using are disabled, not deleted.</span></span></div>
       <p class="hint" id="slopSub">The editors look at every take to see who&rsquo;s playing, then cut it on the beat. Every take stays in the sequence, switched off where it isn&rsquo;t used.</p>
+      <div class="slopfile" id="slopFile" hidden><button class="quiet" type="button" id="bSlopXml">Choose XML</button><span id="slopXmlName">Your synced sequence, exported from Premiere (File &gt; Export &gt; Final Cut Pro XML)</span></div>
       <div class="slopbusy" id="slopBusy" hidden><span class="spin"></span><span id="slopStage">The editors are on it</span></div>
       <p class="slopdone" id="slopDone" hidden></p>
       <div class="askbtns"><button class="quiet" id="bSlopCancel">Cancel</button><button class="pri" id="bSlopGo">Cut it for me</button></div>
@@ -824,6 +840,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <button class="newrun" id="bNew2"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New run</button>
   </div>
   </section>
+  <button type="button" id="slopTab" hidden title="Make a Slop Cut from your own sync XML"><span class="spark" aria-hidden="true">&#x2728;</span>Make a Slop Cut</button>
   <div class="foot" id="foot"><span id="ver"></span><span id="upd"></span></div>
 </main>
 
@@ -2840,8 +2857,25 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     show("slopWrap", true);
     $("bSlopGo").focus();
   }
+  function slopImport() {             // the corner tab: a Slop Cut from any synced sequence XML
+    if (running() || (slop && slop.busy)) return;
+    slop = { xml: "", imported: true };
+    $("slopXmlName").textContent = "Your synced sequence, exported from Premiere (File > Export > Final Cut Pro XML)";
+    $("slopXmlName").className = "";
+    slopView("pick");
+    show("slopWrap", true);
+    $("bSlopXml").focus();
+  }
+  function slopPicked(path) {
+    if (!slop || !slop.imported || slop.busy) return;
+    slop.xml = path; slop.done = slop.failed = false;
+    $("slopXmlName").textContent = path.split("/").pop();
+    $("slopXmlName").className = "has";
+    slopView("pick");
+  }
   function slopView(v, text) {
     show("slopSub", v === "pick");
+    show("slopFile", v === "pick" && !!(slop && slop.imported));
     show("slopBusy", v === "busy");
     var d = $("slopDone");
     d.hidden = v !== "done" && v !== "error";
@@ -2850,28 +2884,35 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("bSlopCancel").textContent = v === "pick" ? "Cancel" : "Close";
     $("bSlopCancel").hidden = v === "busy";
     $("bSlopGo").hidden = v === "busy";
-    $("bSlopGo").textContent = v === "done" ? "Open in Premiere" : v === "error" ? "Try again" : "Cut it for me";
+    $("bSlopGo").textContent = v === "done" ? (slop && slop.imported ? "Show in Finder" : "Open in Premiere")
+      : v === "error" ? "Try again" : "Cut it for me";
+    $("bSlopGo").disabled = v === "pick" && !!(slop && slop.imported && !slop.xml);
   }
   function slopGo() {
     if (!slop) return;
+    if (slop.done && slop.imported) { post({ cmd: "reveal", path: slop.result.xml }); show("slopWrap", false); slop = null; return; }
     if (slop.done) { show("slopWrap", false); $("bOpen").click(); slop = null; return; }
+    if (!slop.xml) return;
     if (slop.failed) { slop.failed = false; slopView("pick"); return; }
     slop.busy = true; slop.err = ""; slop.result = null;
     $("slopStage").textContent = "The editors are on it";
     slopView("busy");
-    post({ cmd: "run", paths: [slop.xml], mode: "slop", xmlDir: xmlDir || "drive", xmlName: "" });
+    post({ cmd: "run", paths: [slop.xml], mode: slop.imported ? "slopimport" : "slop", xmlDir: xmlDir || "drive", xmlName: "" });
   }
   function slopExit(code) {
     slop.busy = false;
     var r = slop.result;
     if (code === 0 && r) {
       slop.done = true;
-      slopView("done", "&#x2713; <b>" + esc(r.name) + "</b> is in your Edit bin, right under the Edit sequence: "
+      slopView("done", "&#x2713; <b>" + esc(r.name) + "</b> " + (slop.imported
+        ? "is in <b>" + esc(r.xml.split("/").pop()) + "</b>, next to your XML (yours is untouched). Import it into Premiere. "
+        : "is in your Edit bin, right under the Edit sequence: ")
         + plural(r.shots, "shot") + " from " + plural(r.takes || 0, "take") + ", cut at " + r.bpm + " BPM."
         + (r.seen ? "" : "<br><span style=\"color:var(--warn)\">The shot finder isn&rsquo;t on this Mac yet, so this one is cut by the music only. Relaunch Kickoff twice and cut again.</span>"));
     } else {
       slop.failed = true;
-      slopView("error", esc(slop.err || "The editors walked off the job. Try again, or run a fresh sync first."));
+      slopView("error", esc(slop.err || (slop.imported ? "The editors walked off the job. Try again, or pick a sequence with the song and the synced takes on it."
+        : "The editors walked off the job. Try again, or run a fresh sync first.")));
     }
   }
   // clicking it blows it up: a flash, a shock ring and a burst of sparkles, then the window opens
@@ -2900,6 +2941,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     setTimeout(function () { fx.remove(); btn.classList.remove("boom"); }, 1500);
   }
   $("bSlop").addEventListener("click", slopBoom);
+  $("slopTab").addEventListener("click", slopImport);
+  $("bSlopXml").addEventListener("click", function () { if (slop && !slop.busy) post({ cmd: "pick", target: "xml" }); });
+  setInterval(function () {          // the corner tab shows on the home page only, when nothing is running
+    var home = !$("vRun").hidden && !running() && $("btnsDone").hidden && $("btnsErr").hidden && $("slopWrap").hidden;
+    if ($("slopTab").hidden === home) $("slopTab").hidden = !home;
+  }, 400);
   $("bSlopGo").addEventListener("click", slopGo);
   $("bSlopCancel").addEventListener("click", function () { if (slop && !slop.busy) { show("slopWrap", false); slop = null; } });
   document.addEventListener("keydown", function (ev) {
@@ -2924,7 +2971,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     drop: drop,
     folderTree: importTemplate,
     picked: function (paths, target, row) {
-      if (target === "export") setXmlDir(paths[0]);
+      if (target === "xml") slopPicked(paths[0]);
+      else if (target === "export") setXmlDir(paths[0]);
       else if (target === "prproj") setPrDir(paths[0]);
       else add(paths, target, row);
     },
