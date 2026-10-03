@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.48"
+VERSION = "0.5.49"
 
 # ---------------------------------------------------------------- constants
 
@@ -538,7 +538,9 @@ def probe(clip: Clip):
         clip.audio_offset = float(a.get("start_time") or 0) - vstart
         for k, val in (a.get("tags") or {}).items():
             tags.setdefault("audio_" + k.lower(), val)
-    clip.timecode = tags.get("timecode", "")
+    # Sony XAVC (FX3, FX6...) keeps its timecode on a metadata stream ("rtmd"), not on the video
+    clip.timecode = tags.get("timecode") or next(
+        ((st.get("tags") or {}).get("timecode") for st in streams if (st.get("tags") or {}).get("timecode")), "")
 
     # camera identity from container metadata (manufacturer agnostic)
     model_keys = ["com.apple.quicktime.model", "model", "com.android.model", "product_name",
@@ -2723,12 +2725,37 @@ def add_rate(parent, fps):
 
 
 def add_timecode(parent, fps, frame, string=None):
+    """A timecode block. With a file's own label (string), the frame count is worked out from it, so an
+    app that links media by timecode (DaVinci Resolve) finds the clip."""
+    drop = bool(string) and ";" in string
+    if string:
+        frame = tc_frames(string, fps)
+        if frame is None:
+            string, frame, drop = None, 0, False
+        elif not drop:
+            string = None                     # written back as a plain label ("17:31:30:060" -> ":60")
     tc = sub(parent, "timecode")
     add_rate(tc, fps)
     sub(tc, "string", string or fmt_frames(frame, fps))
     sub(tc, "frame", frame)
-    sub(tc, "displayformat", "NDF")
+    sub(tc, "displayformat", "DF" if drop else "NDF")
     return tc
+
+
+def tc_frames(tc, fps):
+    """Frame count of a timecode label at the nominal rate (23.976 counts 24, 119.88 counts 120), drop
+    frame (';', 29.97 and 59.94) counted the way a camera drops labels. None when it isn't a label."""
+    m = re.match(r"^(\d+)[:;.](\d+)[:;.](\d+)[:;.,](\d+)$", (tc or "").strip())
+    if not m or not fps:
+        return None
+    h, mi, s, f = (int(x) for x in m.groups())
+    base = max(1, int(round(fps)))
+    n = (h * 3600 + mi * 60 + s) * base + f
+    if ";" in tc and base in (30, 60):
+        d = base // 15                        # labels skipped each minute but every tenth
+        mins = h * 60 + mi
+        n -= d * (mins - mins // 10)
+    return n
 
 
 # Premiere label colour names, in the order cameras get them (A Iris, B Mango, C Rose, ...)
@@ -3539,13 +3566,40 @@ def build_camera_xml(letter, clips, seq_fps, preroll, master_media, args):
     return root
 
 
-def write_xml(root, path):
+def write_xml(root, path, resolve=False):
+    """The XML file. resolve=True also writes '<name> - Resolve.xml' beside it for DaVinci Resolve."""
     ET.indent(root, space="  ")
     body = ET.tostring(root, encoding="unicode")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n')
         fh.write(body)
         fh.write("\n")
+    if resolve:
+        rpath = os.path.splitext(path)[0] + " - Resolve.xml"
+        write_xml(resolve_copy(root), rpath)
+        log("Wrote %s (for DaVinci Resolve)" % rpath)
+
+
+def resolve_copy(root):
+    """The same project for DaVinci Resolve, which reads a nested sequence only where its full contents
+    are written (a reference by id comes in empty) and ignores a track's on/off switch. So every use of
+    a nest gets the whole sequence, and the clips on a switched-off track are switched off themselves."""
+    r = copy.deepcopy(root)
+    full = {s.get("id"): s for s in r.iter("sequence") if len(s)}
+    for _ in range(8):                         # nests inside nests fill on the next round
+        refs = [s for s in r.iter("sequence") if not len(s) and s.get("id") in full]
+        if not refs:
+            break
+        for s in refs:
+            for k in full[s.get("id")]:
+                s.append(copy.deepcopy(k))
+    for t in r.iter("track"):
+        if t.findtext("enabled") == "FALSE":
+            for ci in t.findall("clipitem"):
+                en = ci.find("enabled")
+                if en is not None:
+                    en.text = "FALSE"
+    return r
 
 
 # ---------------------------------------------------------------- reports
@@ -4386,7 +4440,7 @@ def slop_main(args):
     if not xml:                         # a folder was picked: the newest XML in it (not a Slop Cut we made)
         d = next((p for p in args.paths if os.path.isdir(p)), None)
         found = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".xml")
-                 and not f.startswith(".") and not f.lower().endswith(" - slop cut.xml")] if d else []
+                 and not f.startswith(".") and not f.lower().endswith((" - slop cut.xml", " - resolve.xml"))] if d else []
         xml = max(found, key=os.path.getmtime) if found else None
         if d and not xml:
             sys.exit("error: there's no XML in %s" % os.path.basename(d.rstrip("/")))
@@ -4740,7 +4794,7 @@ def main(argv=None):
     event("stage", text="Writing the Premiere project")
     proj_file = re.sub(r"[^\w .-]+", "_", project_name) + ".xml"
     write_xml(build_project(project_name, clips, cams, seq_fps, preroll, master_media, audio_bins, args),
-              os.path.join(args.xml_out, proj_file))
+              os.path.join(args.xml_out, proj_file), resolve=True)
     log("Wrote %s" % os.path.join(args.xml_out, proj_file))
     cam_files = {}
     for letter, cl in cams:
@@ -5089,7 +5143,7 @@ def narrative(args, project_name, audio_paths):
     event("stage", text="Writing the Premiere project")
     proj_file = re.sub(r"[^\w .-]+", "_", project_name) + ".xml"
     write_xml(build_project(project_name, clips, cams, seq_fps, 0.0, None, audio_bins, args),
-              os.path.join(args.xml_out, proj_file))
+              os.path.join(args.xml_out, proj_file), resolve=True)
     log("Wrote %s" % os.path.join(args.xml_out, proj_file))
 
     # the report: which file each clip went with, how, and where
@@ -5313,7 +5367,7 @@ def narrative_cameras(args, project_name, clips):
     event("stage", text="Writing the Premiere project")
     proj_file = re.sub(r"[^\w .-]+", "_", project_name) + ".xml"
     write_xml(build_project(project_name, clips, cams, seq_fps, 0.0, None, collections.defaultdict(list), args),
-              os.path.join(args.xml_out, proj_file))
+              os.path.join(args.xml_out, proj_file), resolve=True)
     log("Wrote %s" % os.path.join(args.xml_out, proj_file))
     report_path = os.path.join(args.out, "narrative_report.csv")
     with open(report_path, "w", newline="") as fh:

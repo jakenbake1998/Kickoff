@@ -177,6 +177,14 @@ picked) and BPM (only when the beat finder hears the tempo wrong). Fast and Fran
 Vocal shots need the singer's eyes: a take whose biggest face shows no eyes (back of the head, hard
 profile) isn't used for the singing. Engine: extra words `pace:fast genre:punk bpm:180`.
 
+### DaVinci Resolve
+
+Next to the project XML Kickoff writes `<project> - Resolve.xml` (File > Import > Timeline in Resolve).
+It's the same project with every nest written out in full where it's used (Resolve brings a nest
+referenced by id in empty) and the clips on a switched-off track switched off (Resolve ignores the
+track switch). Both files carry each clip's own timecode (Sony XAVC keeps it on its metadata stream),
+which is how Resolve links media.
+
 ### A Slop Cut from your own XML
 
 The little tab in the home page's bottom-right corner (it lights up when you hover) makes a Slop Cut
