@@ -1,8 +1,8 @@
 // kickoff_vision: looks at frames of a video with Apple Vision (built into macOS, runs on the Mac)
 // for the Slop Cut. Usage: kickoff_vision FILE START END STEP (seconds of the file). Prints one
 // JSON line per frame: t, the labels Vision sees that matter for a band (instruments, mics, stage),
-// how many people and faces, the tallest person and face as a share of the frame height, and
-// where the tallest person stands (0 left .. 1 right). A frame that can't be read prints "error".
+// how many people and faces, the tallest person and face as a share of the frame height, where
+// the tallest person stands (0 left .. 1 right), and whether the biggest face shows both eyes. A frame that can't be read prints "error".
 // Frames past the end of the clip are never read. kickoff_vision --images DIR looks at stills instead.
 // Built by kickoff-update.sh: xcrun swiftc -O -o kickoff_vision kickoff_vision.swift
 import AVFoundation
@@ -30,7 +30,8 @@ func look(_ img: CGImage, at t: Double) {
     let classify = VNClassifyImageRequest()
     let humans = VNDetectHumanRectanglesRequest()
     let faces = VNDetectFaceRectanglesRequest()
-    try? handler.perform([classify, humans, faces])
+    let marks = VNDetectFaceLandmarksRequest()
+    try? handler.perform([classify, humans, faces, marks])
     var labels: [String: Double] = [:]
     for o in classify.results ?? [] where o.confidence > 0.05 {
         let id = o.identifier.lowercased()
@@ -46,6 +47,15 @@ func look(_ img: CGImage, at t: Double) {
     if let p = people.max(by: { $0.boundingBox.height < $1.boundingBox.height }) {
         line["x"] = r3(Double(p.boundingBox.midX))
     }
+    // eyes: 1 when the biggest face looks toward the camera with both eyes found (not the back of a
+    // head or a hard profile), 0 otherwise
+    var eyes = 0
+    if let f = found.max(by: { $0.boundingBox.height < $1.boundingBox.height }) {
+        let yaw = abs(f.yaw?.doubleValue ?? 0)
+        let m = (marks.results ?? []).max(by: { $0.boundingBox.height < $1.boundingBox.height })
+        if m?.landmarks?.leftEye != nil && m?.landmarks?.rightEye != nil && yaw < 0.6 { eyes = 1 }
+    }
+    line["eyes"] = eyes
     emit(line)
 }
 

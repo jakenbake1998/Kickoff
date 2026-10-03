@@ -620,7 +620,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     background:linear-gradient(90deg,#ff2bd6,#8b5cff,#22d3ee,#ff2bd6);background-size:300% 100%;animation:slopFlow 3s linear infinite;
     box-shadow:0 0 14px 3px #ff2bd6,0 0 34px 10px rgba(139,92,255,.7),0 0 60px 20px rgba(34,211,238,.35)}
   #slopTab:hover .spark,#slopTab:focus-visible .spark{animation:slopSpin 2.4s linear infinite}
-  .slopfile[hidden],#slopTab[hidden]{display:none}
+  .slopfile[hidden],#slopTab[hidden],.slopopts[hidden]{display:none}
+  .slopopts{display:grid;grid-template-columns:auto 1fr;gap:9px 14px;align-items:center;margin:14px 0 2px;font-size:13px}
+  .slopopts .k{color:var(--muted);font-weight:600}
+  .slopopts .seg button{padding:5px 12px;font-size:12.5px}
+  .slopopts select,.slopopts input{font:inherit;font-size:13px;color:var(--ink);background:var(--panel);border:1px solid var(--line);
+    border-radius:8px;padding:5px 8px;width:max-content}
+  .slopopts input{width:78px}
   .slopfile{display:flex;align-items:center;gap:10px;margin:14px 0 2px}
   .slopfile span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:13px}
   .slopfile span.has{color:var(--ink)}
@@ -829,6 +835,14 @@ button:disabled{opacity:.45;cursor:default;filter:none}
             <b>Real talk:</b> Kickoff looks at a frame a second of every take with your Mac&rsquo;s built-in image recognition (drums, guitars, mics, close-ups, wides) and cuts to whoever the song is about. Takes it isn&rsquo;t using are disabled, not deleted.</span></span></div>
       <p class="hint" id="slopSub">The editors look at every take to see who&rsquo;s playing, then cut it on the beat. Every take stays in the sequence, switched off where it isn&rsquo;t used.</p>
       <div class="slopfile" id="slopFile" hidden><button class="quiet" type="button" id="bSlopXml">Choose XML</button><span id="slopXmlName">Your synced sequence, exported from Premiere (File &gt; Export &gt; Final Cut Pro XML)</span></div>
+      <div class="slopopts" id="slopOpts" hidden>
+        <span class="k">Pace</span>
+        <div class="seg" id="slopPace" role="group" aria-label="Pace"><button type="button" data-v="chill">Chill</button><button type="button" data-v="normal">Normal</button><button type="button" data-v="fast">Fast</button><button type="button" data-v="frantic">Frantic</button></div>
+        <label class="k" for="slopGenre">Genre</label>
+        <select id="slopGenre"><option value="auto">Auto</option><option value="punk">Punk / Rock</option><option value="pop">Pop</option><option value="hiphop">Hip-hop</option><option value="ballad">Ballad</option></select>
+        <label class="k" for="slopBpm">BPM</label>
+        <input id="slopBpm" type="number" min="40" max="300" step="0.1" placeholder="Auto" title="Only if Kickoff hears the tempo wrong">
+      </div>
       <div class="slopbusy" id="slopBusy" hidden><span class="spin"></span><span id="slopStage">The editors are on it</span></div>
       <p class="slopdone" id="slopDone" hidden></p>
       <div class="askbtns"><button class="quiet" id="bSlopCancel">Cancel</button><button class="pri" id="bSlopGo">Cut it for me</button></div>
@@ -2853,6 +2867,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     var e = state.result;
     if (!e || !e.xml || running()) return;
     slop = { xml: e.xml };
+    $("slopBpm").value = "";
     slopView("pick");
     show("slopWrap", true);
     $("bSlopGo").focus();
@@ -2860,6 +2875,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function slopImport() {             // the corner tab: a Slop Cut from any synced sequence XML
     if (running() || (slop && slop.busy)) return;
     slop = { xml: "", imported: true };
+    $("slopBpm").value = "";
     $("slopXmlName").textContent = "Your synced sequence, exported from Premiere (File > Export > Final Cut Pro XML)";
     $("slopXmlName").className = "";
     slopView("pick");
@@ -2876,6 +2892,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function slopView(v, text) {
     show("slopSub", v === "pick");
     show("slopFile", v === "pick" && !!(slop && slop.imported));
+    show("slopOpts", v === "pick");
     show("slopBusy", v === "busy");
     var d = $("slopDone");
     d.hidden = v !== "done" && v !== "error";
@@ -2897,7 +2914,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     slop.busy = true; slop.err = ""; slop.result = null;
     $("slopStage").textContent = "The editors are on it";
     slopView("busy");
-    post({ cmd: "run", paths: [slop.xml], mode: slop.imported ? "slopimport" : "slop", xmlDir: xmlDir || "drive", xmlName: "" });
+    var bpm = parseFloat($("slopBpm").value);
+    var opts = ["pace:" + slopOpt.pace, "genre:" + $("slopGenre").value].concat(bpm >= 40 && bpm <= 300 ? ["bpm:" + bpm] : []);
+    try { localStorage.setItem("kickoff-slop", JSON.stringify({ pace: slopOpt.pace, genre: $("slopGenre").value })); } catch (e) {}
+    post({ cmd: "run", paths: [slop.xml].concat(opts), mode: slop.imported ? "slopimport" : "slop", xmlDir: xmlDir || "drive", xmlName: "" });
   }
   function slopExit(code) {
     slop.busy = false;
@@ -2940,6 +2960,15 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     setTimeout(slopOpen, 520);
     setTimeout(function () { fx.remove(); btn.classList.remove("boom"); }, 1500);
   }
+  // the Slop Cut's options: pace and genre are remembered; the BPM is per song, so it starts empty
+  var slopOpt = { pace: "normal" };
+  try { var so = JSON.parse(localStorage.getItem("kickoff-slop") || "{}"); if (so.pace) slopOpt.pace = so.pace; if (so.genre) $("slopGenre").value = so.genre; } catch (e) {}
+  function slopPace(v) {
+    slopOpt.pace = v;
+    document.querySelectorAll("#slopPace button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.v === v)); });
+  }
+  slopPace(slopOpt.pace);
+  document.querySelectorAll("#slopPace button").forEach(function (b) { b.addEventListener("click", function () { slopPace(b.dataset.v); }); });
   $("bSlop").addEventListener("click", slopBoom);
   $("slopTab").addEventListener("click", slopImport);
   $("bSlopXml").addEventListener("click", function () { if (slop && !slop.busy) post({ cmd: "pick", target: "xml" }); });

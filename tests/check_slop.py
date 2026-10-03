@@ -4,14 +4,15 @@ synced take in the camera sequences the Edit nests is in it, whole (cut into pie
 dropped); no more than one take is on at a time, only while the song plays; and shots run 2 s or
 more (8 s at most, unless one take keeps playing because nothing else covers it).
 
-    python3 tests/check_slop.py PROJECT.xml [ORIGINAL.xml]
+    python3 tests/check_slop.py PROJECT.xml [ORIGINAL.xml] [SHORTEST_SHOT_S]
 """
 import collections
 import sys
 import xml.etree.ElementTree as ET
 
 
-def main(path, original=None):
+def main(path, original=None, shortest=2.0):
+    shortest = float(shortest)
     root = ET.parse(path).getroot()
     seqs = [s for s in root.iter("sequence") if s.find("media") is not None]
     by_id = {s.get("id"): s for s in seqs}
@@ -63,7 +64,7 @@ def main(path, original=None):
         if nxt:
             assert nxt[0] >= b, "two takes on at once at %.1f s" % ((nxt[0] - s0) / fps)
         L = (b - a) / fps
-        assert L >= 2 - 1e-3, "shot of %.2f s at %.1f s" % (L, (a - s0) / fps)
+        assert L >= shortest - 1e-3, "shot of %.2f s at %.1f s" % (L, (a - s0) / fps)
         if L > 8.05:
             print("  note: a %.1f s shot at %.1f s" % (L, (a - s0) / fps))
     lengths = sorted(round((b - a) / fps, 1) for a, b, _, _ in shots)
@@ -74,4 +75,4 @@ def main(path, original=None):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    main(*sys.argv[1:4])

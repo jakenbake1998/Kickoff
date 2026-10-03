@@ -169,6 +169,14 @@ How it picks:
 Sync placement isn't touched. Running it again replaces the earlier Slop Cut. From the command line:
 `python3 musicsync.py --mode slop "PROJECT.xml"`, then `python3 tests/check_slop.py "PROJECT.xml"`.
 
+### Slop Cut options
+
+Pace (Chill 3-12 s shots, Normal 2-8 s, Fast 1-5 s, Frantic 0.5-3 s), Genre (Punk / Rock: one notch faster
+plus a run of cuts, one a beat, whenever the drums go off; Ballad: one notch calmer; Pop and Hip-hop as
+picked) and BPM (only when the beat finder hears the tempo wrong). Fast and Frantic cut drum bursts too.
+Vocal shots need the singer's eyes: a take whose biggest face shows no eyes (back of the head, hard
+profile) isn't used for the singing. Engine: extra words `pace:fast genre:punk bpm:180`.
+
 ### A Slop Cut from your own XML
 
 The little tab in the home page's bottom-right corner (it lights up when you hover) makes a Slop Cut

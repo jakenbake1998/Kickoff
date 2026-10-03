@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.46"
+VERSION = "0.5.47"
 
 # ---------------------------------------------------------------- constants
 
@@ -3237,7 +3237,7 @@ def slowmo_entries(cams, fps):
     clips = [(letter, c) for letter, cl in cams for c in cl if is_slowmo(c)]
     if not clips:
         return None
-    pos = start = start_frames(fps)
+    pos = 0                          # the top of the sequence (it starts at 01:00:00:00)
     entries, markers = [], []
     for title, slow in (("Slow Motion", True), ("Copy - Regular Speed", False)):
         if markers:
@@ -3756,6 +3756,23 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
 SLOP_MIN_S, SLOP_MAX_S = 2.0, 8.0
 SLOP_SR, SLOP_HOP = 22050, 512             # 23.2 ms analysis frames
 SLOP_NAME = "Slop Cut"
+# Pace: (shortest shot s, longest shot s, shot lengths x). Genre: (pace notches, rapid cuts on drum bursts)
+SLOP_PACES = {"chill": (3.0, 12.0, 2.0), "normal": (SLOP_MIN_S, SLOP_MAX_S, 1.0), "fast": (1.0, 5.0, 0.5),
+              "frantic": (0.5, 3.0, 0.25)}
+SLOP_PACE_ORDER = ["chill", "normal", "fast", "frantic"]
+SLOP_GENRES = {"auto": (0, False), "punk": (1, True), "pop": (0, False), "hiphop": (0, False), "ballad": (-1, False)}
+
+
+def slop_style(pace="normal", genre="auto", bpm=None):
+    """How the Slop Cut cuts: the pace picked, nudged by the genre (punk/rock one notch faster with a
+    burst of quick cuts whenever the drums go off, a ballad one notch calmer), and the BPM if typed."""
+    pace = pace if pace in SLOP_PACES else "normal"
+    genre = genre if genre in SLOP_GENRES else "auto"
+    shift, bursts = SLOP_GENRES[genre]
+    i = max(0, min(len(SLOP_PACE_ORDER) - 1, SLOP_PACE_ORDER.index(pace) + shift))
+    lo, hi, scale = SLOP_PACES[SLOP_PACE_ORDER[i]]
+    return dict(pace=SLOP_PACE_ORDER[i], genre=genre, min_s=lo, max_s=hi, scale=scale,
+                bursts=bursts or i >= 2, bpm=bpm if bpm and 40 <= bpm <= 300 else None)
 
 
 def slop_audio(path):
@@ -3774,7 +3791,7 @@ def rank01(v):
     return np.argsort(np.argsort(v, kind="stable"), kind="stable") / (len(v) - 1.0)
 
 
-def track_beats(onset, fps):
+def track_beats(onset, fps, want_bpm=None):
     """Beat frames from an onset curve: tempo from its autocorrelation (leaning towards 120 BPM),
     then the beats by dynamic programming (Ellis 2007): each beat sits on a strong onset about one
     beat after the last."""
@@ -3786,6 +3803,8 @@ def track_beats(onset, fps):
     w = ac[lo:hi] * np.exp(-0.5 * (np.log2(bpm / 120.0) / 0.9) ** 2)
     k = int(np.argmax(w))
     period = float(lo + k)
+    if want_bpm:                                 # the tempo the editor typed in wins
+        period, k = 60.0 * fps / want_bpm, -1
     if 0 < k < len(w) - 1:                       # between whole frames: the peak of a parabola through 3
         d = w[k - 1] - 2 * w[k] + w[k + 1]
         if d < 0:
@@ -3813,7 +3832,7 @@ def track_beats(onset, fps):
     return np.array(beats[::-1]), 60.0 * fps / period
 
 
-def song_analysis(path):
+def song_analysis(path, bpm=None):
     """What happens in the song, beat by beat: beat and bar times, how hard each instrument
     group is playing, drum fills, and where sections change. Band splits of a harmonic/percussive
     separated spectrogram, not real stems: good for drums and bass, rougher for guitars vs keys."""
@@ -3836,7 +3855,7 @@ def song_analysis(path):
     lp = np.log1p(100 * Sp)
     onset = np.maximum(0, np.diff(lp, axis=1, prepend=lp[:, :1])).sum(axis=0)
     onset = ndimage.gaussian_filter1d(onset, 1)
-    beats, bpm = track_beats(onset, fps)
+    beats, bpm = track_beats(onset, fps, bpm)
     beat_t = beats / fps + 1024.0 / SLOP_SR              # a frame's time is the middle of its window
     if len(beat_t) < 8:                                   # no pulse to speak of: a cut every 2 s
         beat_t = np.arange(0, dur, 0.5)
@@ -3887,18 +3906,24 @@ def song_analysis(path):
         lead = busy[max(0, b - 2):b]
         if len(lead) and lead.mean() > 1.5 * usual:
             fills.append(b)
+    # drum bursts: beats where the drums go off (much busier than usual and up front), the singing
+    # and the rest backing off a little: a fill, a blast or a short drum solo
+    burst = (busy > 1.8 * usual) & (act["drums"] > 0.6) & (vox < 0.6)
     return dict(dur=dur, bpm=bpm, beats=beat_t, phase=phase, act=act, solo=solo, bass_lead=bass_lead,
-                sections=sections, fills=fills)
+                sections=sections, fills=fills, burst=burst)
 
 
-def shot_grid(an, seed=0):
+def shot_grid(an, seed=0, style=None):
     """Where the cuts go, in song seconds: on bar lines (beats when bars are too long), at every new
     section, into each drum fill and where the singing comes in. Shot lengths change with the song:
-    1 to 2 bars when it's loud, 2 to 8 when it's calm, always 2 to 8 s. Returns (times, fill shot
-    starts, section starts)."""
+    1 to 2 bars when it's loud, 2 to 8 when it's calm, always 2 to 8 s (the pace scales all of it).
+    With bursts on, every drum burst becomes a run of cuts, one a beat (two in Frantic). Returns
+    (times, fill shot starts, section starts, burst shot starts)."""
+    style = style or slop_style()
+    lo, hi, scale = style["min_s"], style["max_s"], style["scale"]
     beats, nb = an["beats"], len(an["beats"])
     bar_len = 4 * 60.0 / an["bpm"]
-    step = 1 if bar_len > SLOP_MAX_S else 4
+    step = 1 if bar_len > hi or scale < 1 else 4
     bars = list(range(an["phase"] % step, nb, step))
     t_of = lambda b: float(beats[b]) if b < nb else an["dur"]
     act = an["act"]
@@ -3910,14 +3935,14 @@ def shot_grid(an, seed=0):
         n += 1
         lively = float(act["loud"][min(b, nb - 1)])
         choices = (1, 2, 2, 4) if lively > 0.7 else (2, 4, 4, 8) if lively > 0.4 else (4, 8, 8)
-        want = choices[zlib.crc32(("%d %d" % (n, seed)).encode()) % len(choices)] * bar_len
-        nxt = [k for k in bars if SLOP_MIN_S - 1e-6 <= t_of(k) - t_of(b) <= SLOP_MAX_S + 1e-6]
+        want = choices[zlib.crc32(("%d %d" % (n, seed)).encode()) % len(choices)] * bar_len * scale
+        nxt = [k for k in bars if lo - 1e-6 <= t_of(k) - t_of(b) <= hi + 1e-6]
         forced = [k for k in nxt if k in marks and t_of(k) - t_of(b) <= want + 1e-6]
         if forced:
             k = forced[0]
             if k in an["fills"]:      # a drum shot that lasts 2 s or more and ends on the downbeat
-                f = max([j for j in range(b + 1, k) if t_of(k) - t_of(j) >= SLOP_MIN_S - 1e-6
-                         and t_of(j) - t_of(b) >= SLOP_MIN_S - 1e-6], default=None)
+                f = max([j for j in range(b + 1, k) if t_of(k) - t_of(j) >= lo - 1e-6
+                         and t_of(j) - t_of(b) >= lo - 1e-6], default=None)
                 if f is not None:
                     cuts += [f, k]
                     fill_starts.add(t_of(f))
@@ -3926,13 +3951,33 @@ def shot_grid(an, seed=0):
         elif nxt:
             k = min(nxt, key=lambda k: abs(t_of(k) - t_of(b) - want))
         else:
-            k = min([j for j in range(b + 1, nb + 1) if t_of(j) - t_of(b) >= SLOP_MIN_S - 1e-6], default=nb)
-        if k >= nb or an["dur"] - t_of(k) < SLOP_MIN_S:
+            k = min([j for j in range(b + 1, nb + 1) if t_of(j) - t_of(b) >= lo - 1e-6], default=nb)
+        if k >= nb or an["dur"] - t_of(k) < lo:
             break
         cuts.append(k)
         b = k
     times = [0.0] + [t_of(k) for k in cuts[1:]] + [an["dur"]]
-    return times, fill_starts, {t_of(k) for k in an["sections"]} | {0.0}
+    bursts = set()
+    if style["bursts"] and an.get("burst") is not None:
+        on = list(np.flatnonzero(an["burst"]))
+        runs, cur = [], []
+        for k in on:
+            if cur and k != cur[-1] + 1:
+                runs.append(cur)
+                cur = []
+            cur.append(k)
+        if cur:
+            runs.append(cur)
+        half = style["pace"] == "frantic" and an["bpm"] < 150
+        for run in (r for r in runs if len(r) >= 2):
+            t0, t1 = t_of(run[0]), t_of(run[-1] + 1)
+            sub = [t_of(k) for k in run]
+            if half:
+                sub += [(t_of(k) + t_of(k + 1)) / 2 for k in run]
+            times = [t for t in times if not (t0 - 0.3 < t < t1 + 0.3)] + sub + ([t1] if t1 < an["dur"] - 0.3 else [])
+            bursts |= set(sub)
+        times = sorted(set(times) | {0.0, an["dur"]})
+    return times, fill_starts, {t_of(k) for k in an["sections"]} | {0.0}, bursts
 
 
 # who a frame shows, from Apple Vision's labels (classification identifiers, matched by substring)
@@ -3952,19 +3997,25 @@ def frame_roles(f):
     r["bass"] = 0.8 * r["guitar"]                     # a bass reads as a guitar to Vision
     people, big, face = f.get("people", 0), f.get("big", 0.0), f.get("face", 0.0)
     instr = max(r["drums"], r["guitar"], r["keys"])
-    if face > 0.16 and instr < 0.3:                   # a close-up of a face, no instrument: the singer
+    eyes = f.get("eyes")                              # None: a shot finder too old to say
+    if face > 0.16 and instr < 0.3 and eyes != 0:     # a close-up of a face, no instrument: the singer
         r["vocals"] = max(r["vocals"], 0.7)
+    if eyes is not None:
+        if not eyes:                                  # no eyes to see (back of the head, a profile): not for the singing
+            r["vocals"] = min(r["vocals"], 0.05)
+        r["eyes"] = float(eyes)
     if people >= 3 or (people >= 2 and big < 0.55):
         r["wide"] = max(r["wide"], 0.8)
     return r
 
 
-def plan_takes(an, takes, seed=0):
+def plan_takes(an, takes, seed=0, style=None):
     """Shots in song seconds [(start, end, take index or None)]. takes: dicts with cam, spans [(a, b)
     in song seconds] and tags(a, b) -> {role: 0..1} or None (not looked at). Each shot goes to the
     take showing the player the music calls for; a take that keeps winning just keeps playing
     (up to 8 s), so the cuts don't fall into a steady pattern."""
-    times, fill_starts, starts = shot_grid(an, seed)
+    style = style or slop_style()
+    times, fill_starts, starts, bursts = shot_grid(an, seed, style)
     beats, nb, act = an["beats"], len(an["beats"]), an["act"]
 
     def covers(spans, a, b):
@@ -3975,7 +4026,7 @@ def plan_takes(an, takes, seed=0):
         i0 = min(int(np.searchsorted(beats, a)), nb - 1)
         i1 = min(max(i0 + 1, int(np.searchsorted(beats, b))), nb)
         m = lambda k: float(np.mean(act[k][i0:i1]))
-        need = {"drums": m("drums") + (2.0 if a in fill_starts else 0.0), "vocals": 1.3 * m("vocals"),
+        need = {"drums": m("drums") + (2.0 if a in fill_starts or a in bursts else 0.0), "vocals": 1.3 * m("vocals"),
                 "guitar": m("guitar") + (0.8 if an["solo"][i0:i1].mean() > 0.5 else 0.0),
                 "bass": 0.8 * m("bass") + (0.6 if an["bass_lead"][i0:i1].mean() > 0.5 else 0.0),
                 "keys": 0.6 * m("keys"), "wide": 0.5 + (0.8 if a in starts else 0.0)}
@@ -3991,9 +4042,12 @@ def plan_takes(an, takes, seed=0):
         def score(i):
             tag = takes[i]["tags"](a, b) or {}
             s = sum(need[r] * (0.15 + 0.85 * tag.get(r, 0.0)) for r in need) if tag else sum(need.values()) * 0.3
+            if tag and "eyes" in tag and need["vocals"] >= max(need.values()) and tag["eyes"] < 0.5:
+                s -= 0.6                         # the singing: only where the singer's eyes are seen
             if prev and i == prev[2]:
-                # carrying on in the same take: fine while the shot stays under 8 s, else move on
-                s += 0.15 if b - prev[0] <= SLOP_MAX_S + 1e-6 else -10.0
+                # carrying on in the same take: fine while the shot stays under 8 s, else move on;
+                # in a drum burst, every beat is a new angle
+                s += -3.0 if a in bursts else 0.15 if b - prev[0] <= style["max_s"] + 1e-6 else -10.0
             elif prev and takes[i]["cam"] == takes[prev[2]]["cam"]:
                 s -= 0.25
             s -= 0.8 * used[i] / total
@@ -4071,7 +4125,7 @@ def look_at(path, a, b, step=VISION_STEP):
         st = os.stat(path)
     except OSError:
         return []
-    key = hashlib.sha1(("%s|%d|%d|%.2f|%.2f|%.2f" % (path, st.st_size, int(st.st_mtime), a, b, step)).encode()).hexdigest()
+    key = hashlib.sha1(("v2|%s|%d|%d|%.2f|%.2f|%.2f" % (path, st.st_size, int(st.st_mtime), a, b, step)).encode()).hexdigest()
     cache = audio_cache_dir()
     cfile = os.path.join(cache, "vision-%s.json" % key) if cache else None
     if cfile and os.path.isfile(cfile):
@@ -4157,7 +4211,7 @@ def cam_of(path, fallback):
     return fallback
 
 
-def slop_cut(xml_path, seed=0, out_path=None):
+def slop_cut(xml_path, seed=0, out_path=None, style=None):
     """Add a Slop Cut sequence next to the sequence it's cut from (replacing an earlier one): its song
     with every synced take laid out, cut at the shot lines, only the take picked for each shot
     enabled. A Kickoff project: '<project>_Slop Cut' next to the Edit sequence, each camera's
@@ -4229,7 +4283,8 @@ def slop_cut(xml_path, seed=0, out_path=None):
     if not takes:
         raise RuntimeError("%s has no synced takes to cut" % (edit.findtext("name") or "The sequence"))
     event("stage", text="Listening to the song")
-    an = song_analysis(song_path)
+    style = style or slop_style()
+    an = song_analysis(song_path, style["bpm"])
     takes = [t for t in takes if t["a"] < an["dur"]]
 
     # what each take shows, a frame a second over the part that plays during the song
@@ -4255,7 +4310,7 @@ def slop_cut(xml_path, seed=0, out_path=None):
             return {k: float(np.mean([r[k] for r in rs])) for k in rs[0]} if rs else None
         t["tags"] = tags
     event("stage", text="Cutting the Slop Cut")
-    shots = plan_takes(an, takes, seed)
+    shots = plan_takes(an, takes, seed, style)
 
     # the new sequence: the Edit sequence's settings and song, its camera nests swapped for the takes
     base = project if kickoff else (edit.findtext("name") or project)
@@ -4331,19 +4386,26 @@ def slop_main(args):
     if not xml or not os.path.isfile(xml):
         sys.exit("error: give the project XML to cut a Slop Cut in")
     event("stage", text="Reading the project")
+    # the window's Slop Cut options come as extra words: pace:fast genre:punk bpm:180
+    opt = dict(p.split(":", 1) for p in args.paths if re.match(r"^(pace|genre|bpm):", p))
+    try:
+        bpm = float(opt.get("bpm") or 0) or None
+    except ValueError:
+        bpm = None
+    style = slop_style(opt.get("pace", "normal"), opt.get("genre", "auto"), bpm)
     out = None
     if args.mode == "slopimport":       # someone's own XML: the Slop Cut goes in a copy next to it
         stem = re.sub(r"(?i)( - Slop Cut)?\.xml$", "", os.path.abspath(xml))
         out = stem + " - Slop Cut.xml"
     try:
-        name, shots, takes, an, looked = slop_cut(os.path.abspath(xml), out_path=out)
+        name, shots, takes, an, looked = slop_cut(os.path.abspath(xml), out_path=out, style=style)
     except (RuntimeError, ET.ParseError, OSError) as e:
         sys.exit("error: %s" % e)
     used = collections.Counter(takes[i]["cam"] for _, _, i in shots if i is not None)
     log("Added %s to %s: %d shots at %.0f BPM, %d of %d takes looked at." % (
         name, os.path.basename(xml), len(shots), an["bpm"], looked, len(takes)))
     xml = out or xml
-    event("slop", xml=os.path.abspath(xml), name=name, shots=len(shots), bpm=round(an["bpm"]),
+    event("slop", xml=os.path.abspath(xml), name=name, pace=style["pace"], genre=style["genre"], shots=len(shots), bpm=round(an["bpm"]),
           cameras=dict(used), takes=len({i for _, _, i in shots if i is not None}), looked=looked,
           seen=bool(looked))
     return 0
