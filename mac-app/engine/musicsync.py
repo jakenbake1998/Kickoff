@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.44"
+VERSION = "0.5.45"
 
 # ---------------------------------------------------------------- constants
 
@@ -105,7 +105,7 @@ DEFAULT_SETTINGS = {
     "labels": {},                   # camera letter -> Premiere label name (unset: CAMERA_LABELS)
     "bins": DEFAULT_BINS,
     "names": {"breakup": "{cam}_Breakup", "synced": "{cam}_Synced", "condensed": "{cam}_Synced_Condensed",
-              "nested": "{project}_CamsNested", "edit": "{project}_Edit"},
+              "nested": "{project}_CamsNested", "edit": "{project}_Edit", "slowmo": "{project}_Slow Motion"},
     "unsynced": True,               # clips that didn't sync go on V1 after the song
     "unsynced_gap_s": 60,
     "place_repeats": True,          # a take that fits two identical choruses: first copy, marked
@@ -3219,6 +3219,48 @@ def stringout_entries(clips, fps, label):
     return entries, start_frames(fps)
 
 
+SLOWMO_MIN_FPS = 30.5      # a clip shot faster than this is slow motion (25 and 30 fps play as normal footage)
+
+
+def is_slowmo(c):
+    """Shot for slow motion: a high frame rate file (60p, 120p...) or S&Q (already conformed slow)."""
+    sq = c.capture_fps and c.fps and c.capture_fps > c.fps + 1
+    return bool(c.readable and c.fps and c.width and c.duration and (c.fps > SLOWMO_MIN_FPS or sq))
+
+
+def slowmo_entries(cams, fps):
+    """The Slow Motion sequence: every slow motion clip of every camera (camera order, then file
+    order) back to back on V1, slowed to play at the sequence rate (60 fps at 40%, 120 at 20%; an S&Q
+    file already plays slow, at 100%), under a "Slow Motion" marker. A minute after that, the same
+    clips in the same order at real speed, under "Copy - Regular Speed". Returns (entries, markers),
+    or None when there are no such clips. The clips still sync everywhere else as usual."""
+    clips = [(letter, c) for letter, cl in cams for c in cl if is_slowmo(c)]
+    if not clips:
+        return None
+    pos = start = start_frames(fps)
+    entries, markers = [], []
+    for title, slow in (("Slow Motion", True), ("Copy - Regular Speed", False)):
+        if markers:
+            pos += int(round(UNSYNCED_GAP_S * fps))
+        first = pos
+        for letter, c in clips:
+            sq = c.capture_fps and c.capture_fps > c.fps + 1
+            # entry speed stretches the timeline: 2.5 is a 60p clip at 40% in a 24p sequence (nominal
+            # rates, so 59.94 in 23.976 is exactly 40% too)
+            r = lambda v: round(v * 1001 / 1000) if abs(v * 1001 / 1000 - round(v * 1001 / 1000)) < 0.01 else v
+            sp = (r(c.fps) / r(fps) if not sq else 1.0) if slow else (r(c.fps) / r(c.capture_fps) if sq else 1.0)
+            if abs(sp - 1) < 0.01:
+                sp = 1.0
+            name = os.path.basename(c.path) + (" (%g%%)" % round(100 / sp) if sp != 1 else "")
+            entries.append(dict(media=Media.of_clip(c, fps), start=pos, vtrack=1, atrack=1, all_audio="raw",
+                                label=camera_label(letter), speed=sp, name=name))
+            pos += max(1, entry_span(entries[-1], fps)[1])
+        n = len(clips)
+        markers.append(dict(name=title, comment="%d clip%s shot at a high frame rate" % (n, "s"[n == 1:]),
+                            start=first, end=pos))
+    return entries, markers
+
+
 def bin_(parent, name, label=None):
     b = sub(parent, "bin")
     sub(b, "name", name)
@@ -3348,6 +3390,12 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         usable = [c for c in clips if c.readable and c.fps and c.width]
         (w, h) = args.sync_size or (first_format(usable, seq_fps)[0] if usable else (3840, 2160))
         xw.sequence(edit, seq_name("edit", project=name), seq_fps, w, h, start_frames(seq_fps), [])
+    slow = slowmo_entries(cams, seq_fps)
+    if slow:
+        (w, h) = args.sync_size or (3840, 2160)
+        entries, marks = slow
+        xw.sequence(edit, seq_name("slowmo", project=name), seq_fps, w, h, start_frames(seq_fps), entries,
+                    markers=marks)
     maybe_empty(edit, where["edit"][1], bool(len(edit)))
 
     # audio by folder: a bin removed in Settings sends its files on (SFX to Captured, then to Music)

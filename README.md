@@ -169,6 +169,14 @@ How it picks:
 Sync placement isn't touched. Running it again replaces the earlier Slop Cut. From the command line:
 `python3 musicsync.py --mode slop "PROJECT.xml"`, then `python3 tests/check_slop.py "PROJECT.xml"`.
 
+## Slow Motion sequence
+
+Every clip shot faster than 30 fps (60p, 120p...) from every camera also goes in `<project>_Slow Motion`
+(in the Edit bin), camera by camera in file order, slowed to play at the sequence rate: 60 fps at 40%,
+120 fps at 20%, 48 fps at 50%. An S&Q file already plays slow, so it's at 100%. That stretch has a
+"Slow Motion" marker. A minute later the same clips run again in the same order at real speed, under a
+"Copy - Regular Speed" marker. These clips still sync like any other; this sequence is extra.
+
 ## What gets set aside
 
 Nothing is guessed. Every clip that isn't placed gets a reason in the report:

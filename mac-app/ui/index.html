@@ -2222,7 +2222,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   var DEFAULTS = {
     sync_size: "3840x2160", start_hour: 1, track_order: "name", labels: {}, bins: DEFAULT_BINS,
     names: { breakup: "{cam}_Breakup", synced: "{cam}_Synced", condensed: "{cam}_Synced_Condensed",
-             nested: "{project}_CamsNested", edit: "{project}_Edit" },
+             nested: "{project}_CamsNested", edit: "{project}_Edit",
+             slowmo: "{project}_Slow Motion" },
     unsynced: true, unsynced_gap_s: 60, place_repeats: true, skip_folders: [],
     timecode_narrative: true, timecode_music: false,
     templates: [], template: -1          // the project template in use: -1 is Default (locked), else one of templates
@@ -2352,7 +2353,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         function (v) { settings.track_order = v; }));
       P.appendChild(g);
       g = group("Sequence names", "{cam} becomes the camera (A Cam), {project} the project name.");
-      [["breakup", "Breakup"], ["synced", "Synced"], ["condensed", "Synced Condensed"], ["nested", "All cameras nested"], ["edit", "Edit"]].forEach(function (n) {
+      [["breakup", "Breakup"], ["synced", "Synced"], ["condensed", "Synced Condensed"], ["nested", "All cameras nested"], ["edit", "Edit"], ["slowmo", "Slow Motion"]].forEach(function (n) {
         row(g, n[1], text(settings.names[n[0]], function (v) { settings.names[n[0]] = v.trim() || DEFAULTS.names[n[0]]; }, 260));
       });
       P.appendChild(g);
