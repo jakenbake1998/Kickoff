@@ -3897,7 +3897,10 @@ def frame_roles(f):
     """{role: 0..1} for one tagged frame."""
     labels = {k.lower(): v for k, v in (f.get("labels") or {}).items()}
     hit = lambda words: max([v for k, v in labels.items() if any(w in k for w in words)], default=0.0)
-    r = {k: min(1.0, 2.5 * hit(w)) for k, w in SHOT_WORDS.items()}
+    # instruments count from 0.3 up (a sword can read as a guitar at 0.2); Vision's "singer" and
+    # "microphone" stay low even with the singer at the mic, so they count from 0.08
+    r = {k: min(1.0, max(0.0, (hit(w) - 0.3) / 0.4)) for k, w in SHOT_WORDS.items()}
+    r["vocals"] = min(1.0, max(0.0, (hit(SHOT_WORDS["vocals"]) - 0.08) / 0.3))
     r["bass"] = 0.8 * r["guitar"]                     # a bass reads as a guitar to Vision
     people, big, face = f.get("people", 0), f.get("big", 0.0), f.get("face", 0.0)
     instr = max(r["drums"], r["guitar"], r["keys"])
@@ -3977,9 +3980,43 @@ VISION_HELPER = os.environ.get("KICKOFF_VISION") or os.path.expanduser(
 VISION_STEP = 1.0
 
 
+def proxy_of(path):
+    """A camera proxy for path (Proxies/<name>_Proxy.mov and the like, next to it or up to 3 folders up),
+    for files macOS can't play itself (ARRI MXF); proxies run in step with their originals."""
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    d = os.path.dirname(path)
+    for _ in range(4):
+        for sub in ("", "Proxies", "Proxy", "proxies", "proxy"):
+            folder = os.path.join(d, sub)
+            try:
+                names = os.listdir(folder)
+            except OSError:
+                continue
+            for n in names:
+                ns, ext = os.path.splitext(n)
+                if ext.lower() in (".mov", ".mp4") and ns.lower() in (stem + "_proxy", stem + "-proxy", stem + " proxy") \
+                        or (sub and ns.lower() == stem and ext.lower() in (".mov", ".mp4")):
+                    return os.path.join(folder, n)
+        d = os.path.dirname(d)
+    return None
+
+
+def _vision_lines(out):
+    frames = []
+    for line in out.splitlines():
+        try:
+            f = json.loads(line)
+        except ValueError:
+            continue
+        if "error" not in f:
+            frames.append(f)
+    return frames
+
+
 def look_at(path, a, b, step=VISION_STEP):
     """Tagged frames of path from a to b seconds (source time): [{t, labels, people, ...}], cached
-    by file, size and time. [] when the helper isn't there or can't read the file."""
+    by file, size and time. A file macOS can't play is looked at through its proxy, else through
+    stills ffmpeg pulls out. [] when the helper isn't there or nothing can be read."""
     if not os.path.isfile(VISION_HELPER):
         return []
     try:
@@ -3995,16 +4032,23 @@ def look_at(path, a, b, step=VISION_STEP):
                 return json.load(fh)
         except (OSError, ValueError):
             pass
-    r = subprocess.run([VISION_HELPER, path, "%.3f" % a, "%.3f" % b, "%.3f" % step],
-                       capture_output=True, text=True)
+    tries = [path] + [p for p in [proxy_of(path)] if p]
     frames = []
-    for line in r.stdout.splitlines():
-        try:
-            f = json.loads(line)
-        except ValueError:
-            continue
-        if "error" not in f:
-            frames.append(f)
+    for p in tries:
+        r = subprocess.run([VISION_HELPER, p, "%.3f" % a, "%.3f" % b, "%.3f" % step], capture_output=True, text=True)
+        frames = _vision_lines(r.stdout)
+        if frames:
+            break
+    if not frames:                       # stills through ffmpeg, which reads what macOS can't
+        with tempfile.TemporaryDirectory(prefix="kickoff-stills-") as tmp:
+            subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-ss", "%.3f" % a, "-i", path, "-t", "%.3f" % max(step, b - a),
+                            "-vf", "fps=%g,scale=640:-2" % (1.0 / step), "-q:v", "4", os.path.join(tmp, "%05d.jpg")],
+                           capture_output=True)
+            for n in sorted(os.listdir(tmp)):
+                k = int(os.path.splitext(n)[0]) - 1
+                os.rename(os.path.join(tmp, n), os.path.join(tmp, "%.3f.jpg" % (a + k * step)))
+            r = subprocess.run([VISION_HELPER, "--images", tmp], capture_output=True, text=True)
+            frames = _vision_lines(r.stdout)
     if cfile and frames:
         try:
             with open(cfile, "w", encoding="utf-8") as fh:
