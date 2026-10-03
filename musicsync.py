@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.47"
+VERSION = "0.5.48"
 
 # ---------------------------------------------------------------- constants
 
@@ -4383,6 +4383,13 @@ def by_ref(el):
 
 def slop_main(args):
     xml = next((p for p in args.paths if p.lower().endswith(".xml")), None)
+    if not xml:                         # a folder was picked: the newest XML in it (not a Slop Cut we made)
+        d = next((p for p in args.paths if os.path.isdir(p)), None)
+        found = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".xml")
+                 and not f.startswith(".") and not f.lower().endswith(" - slop cut.xml")] if d else []
+        xml = max(found, key=os.path.getmtime) if found else None
+        if d and not xml:
+            sys.exit("error: there's no XML in %s" % os.path.basename(d.rstrip("/")))
     if not xml or not os.path.isfile(xml):
         sys.exit("error: give the project XML to cut a Slop Cut in")
     event("stage", text="Reading the project")

@@ -295,19 +295,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func pick(target: String, row: Int) {
         guard proc?.isRunning != true else { NSSound.beep(); return }
         let panel = NSOpenPanel()
-        panel.canChooseDirectories = target != "song" && target != "xml"
+        panel.canChooseDirectories = target != "song"
         let folderOnly = target == "export" || target == "prproj" || target == "template"
         panel.canChooseFiles = !folderOnly
         // exactly the files usable() keeps, so nothing that can be chosen is dropped afterwards
         let audioTypes = audioExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
         let videoTypes = videoExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
         if target == "song" { panel.allowedContentTypes = audioTypes }
-        else if target == "xml" { panel.allowedContentTypes = [UTType(filenameExtension: "xml") ?? .xml] }
+        else if target == "xml" { panel.allowedContentTypes = [UTType.folder, UTType.xml, UTType.data] }
         else if panel.canChooseFiles { panel.allowedContentTypes = [UTType.folder] + audioTypes + videoTypes }
         panel.allowsMultipleSelection = target == "footage" || target == "any"
         panel.canCreateDirectories = folderOnly && target != "template"
         panel.prompt = target == "xml" ? "Choose" : target == "export" ? "Export Here" : target == "prproj" ? "Save Here" : target == "template" ? "Import" : "Add"
-        panel.message = target == "xml" ? "Choose your synced sequence XML (in Premiere: File > Export > Final Cut Pro XML)"
+        panel.message = target == "xml" ? "Choose your synced sequence XML, or the folder it's in (in Premiere: File > Export > Final Cut Pro XML)"
             : target == "song" ? "Choose the song"
             : target == "footage" ? "Choose the footage: the shoot folder, a day, cards or clips"
             : target == "export" ? "Choose the folder the XML goes in"
