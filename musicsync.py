@@ -4474,17 +4474,23 @@ time.sleep(1)
 pm = resolve.GetProjectManager()
 name = plan["name"]
 drp = plan["drp"]
-if pm.LoadProject(name) and os.path.exists(drp) and os.path.getmtime(drp) >= plan["xml_mtime"]:
+names = set(pm.GetProjectListInCurrentFolder() or [])
+if name in names and os.path.exists(drp) and os.path.getmtime(drp) >= plan["xml_mtime"] and pm.LoadProject(name):
     say(stage="Opening the project in Resolve")
     resolve.OpenPage("edit")
     say(result={"project": name, "drp": drp, "reused": True})
     bye(0)
 n, proj = 1, None
 while proj is None and n < 50:
-    proj = pm.CreateProject(name if n == 1 else "%s %d" % (name, n))
+    pn = name if n == 1 else "%s %d" % (name, n)
+    if pn not in names:
+        proj = pm.CreateProject(pn)
+        if proj is None:
+            break
     n += 1
 if proj is None:
-    say(error="Resolve wouldn't make a new project. Close any dialog in Resolve and try again."); bye(2)
+    say(error="Resolve has a window open that's waiting on you (often \"Save changes to Untitled Project?\"). "
+              "Click Don't Save in Resolve, then click Open in Resolve again."); bye(2)
 pname = proj.GetName()
 say(stage="Setting up the Resolve project")
 for k, v in (("timelineFrameRate", plan["fps"]), ("timelinePlaybackFrameRate", plan["fps"]),
