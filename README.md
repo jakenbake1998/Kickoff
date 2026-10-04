@@ -179,6 +179,17 @@ profile) isn't used for the singing. Engine: extra words `pace:fast genre:punk b
 
 ### DaVinci Resolve
 
+**Open in Resolve** (end screen, next to Open in Premiere) builds the project in DaVinci Resolve Studio
+and saves `<project>.drp` next to the XML. Engine: `musicsync.py --mode resolve PROJECT.xml` (any
+Premiere XML works too). Resolve makes one timeline per XML import, so each sequence goes in on its own
+(nests and files written in full) into its bin, linked to the clips already in the media pool. Clips
+Resolve won't link from XML are placed from the media pool at their spots; a slowed clip that plays
+at the timeline rate (120 fps at 20%) gets a conformed copy in Footage/Slow-mo. 119.88 fps timecode
+is written the way Resolve reads it (half the camera's 120 count), a clip that runs to its file's last
+frame ends one frame early, and switched-off tracks are switched off. Needs Resolve Studio with
+Preferences > System > General > External scripting using: Local.
+
+
 Next to the project XML Kickoff writes `<project> - Resolve.xml` (File > Import > Timeline in Resolve).
 It's the same project with every nest written out in full where it's used (Resolve brings a nest
 referenced by id in empty) and the clips on a switched-off track switched off (Resolve ignores the

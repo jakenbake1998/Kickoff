@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.49"
+VERSION = "0.5.50"
 
 # ---------------------------------------------------------------- constants
 
@@ -4435,6 +4435,397 @@ def by_ref(el):
                     x.remove(k)
 
 
+RESOLVE_DRIVER = r'''
+# Kickoff's DaVinci Resolve builder. Run by musicsync.py --mode resolve with a plan file; talks to
+# Resolve Studio through its scripting API. Prints one JSON line per step. Exits with os._exit so
+# Resolve's library doesn't crash Python on the way out (macOS "Python quit unexpectedly").
+import json, os, subprocess, sys, time
+
+def say(**k):
+    sys.stdout.write(json.dumps(k) + "\n"); sys.stdout.flush()
+
+def bye(code):
+    sys.stdout.flush(); sys.stderr.flush(); os._exit(code)
+
+API = os.environ.get("RESOLVE_SCRIPT_API") or "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+LIB = os.environ.get("RESOLVE_SCRIPT_LIB") or "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
+os.environ["RESOLVE_SCRIPT_API"], os.environ["RESOLVE_SCRIPT_LIB"] = API, LIB
+sys.path.append(os.path.join(API, "Modules"))
+try:
+    import DaVinciResolveScript as dvr
+except Exception as e:
+    say(nolib=str(e)); bye(3)
+
+plan = json.load(open(sys.argv[1]))
+resolve = dvr.scriptapp("Resolve")
+if not resolve:
+    say(stage="Opening DaVinci Resolve")
+    subprocess.call(["open", "-a", "DaVinci Resolve"])
+    for _ in range(90):
+        time.sleep(2)
+        resolve = dvr.scriptapp("Resolve")
+        if resolve and resolve.GetProjectManager():
+            break
+if not resolve:
+    say(error="Kickoff couldn't talk to DaVinci Resolve. It needs Resolve Studio (the free version blocks this), "
+              "with Preferences > System > General > External scripting using set to Local.")
+    bye(2)
+time.sleep(1)
+pm = resolve.GetProjectManager()
+name = plan["name"]
+drp = plan["drp"]
+if pm.LoadProject(name) and os.path.exists(drp) and os.path.getmtime(drp) >= plan["xml_mtime"]:
+    say(stage="Opening the project in Resolve")
+    resolve.OpenPage("edit")
+    say(result={"project": name, "drp": drp, "reused": True})
+    bye(0)
+n, proj = 1, None
+while proj is None and n < 50:
+    proj = pm.CreateProject(name if n == 1 else "%s %d" % (name, n))
+    n += 1
+if proj is None:
+    say(error="Resolve wouldn't make a new project. Close any dialog in Resolve and try again."); bye(2)
+pname = proj.GetName()
+say(stage="Setting up the Resolve project")
+for k, v in (("timelineFrameRate", plan["fps"]), ("timelinePlaybackFrameRate", plan["fps"]),
+             ("timelineResolutionWidth", str(plan["width"])), ("timelineResolutionHeight", str(plan["height"]))):
+    proj.SetSetting(k, v)
+mp = proj.GetMediaPool()
+root = mp.GetRootFolder()
+folders, media_folders, by_path = {(): root}, [], {}
+
+def folder(path):
+    path = tuple(path)
+    if path not in folders:
+        parent = folder(path[:-1])
+        f = next((s for s in (parent.GetSubFolderList() or []) if s.GetName() == path[-1]), None)
+        folders[path] = f or mp.AddSubFolder(parent, path[-1])
+    return folders[path]
+
+say(stage="Bringing the footage into Resolve")
+for b in plan["bins"]:
+    f = folder(b["path"])
+    if b["media"]:
+        mp.SetCurrentFolder(f)
+        for it in mp.ImportMedia(b["media"]) or []:
+            by_path[it.GetClipProperty("File Path")] = it
+        media_folders.append(f)
+missing_media = [p for b in plan["bins"] for p in b["media"] if p not in by_path]
+
+def item_for(path):
+    it = by_path.get(path)
+    if it is None:
+        mp.SetCurrentFolder(folder(["Kickoff extras"]))
+        got = mp.ImportMedia([path]) or []
+        if got:
+            it = by_path[path] = got[0]
+    return it
+
+conformed = {}
+def conformed_item(path, fps):           # a second copy of a high frame rate clip, played at the timeline rate
+    if path in conformed:
+        return conformed[path]
+    mp.SetCurrentFolder(folder(plan["slowmo_bin"]))
+    got = mp.ImportMedia([path]) or []
+    orig = by_path.get(path)
+    it = got[0] if got and (orig is None or got[0].GetUniqueId() != orig.GetUniqueId()) else None
+    if it is not None and not it.SetClipProperty("FPS", fps):
+        it = None
+    conformed[path] = it
+    return it
+
+report, placed, offline = [], 0, 0
+for s in plan["sequences"]:
+    say(stage="Adding %s" % s["name"])
+    mp.SetCurrentFolder(folder(s["bin"]))
+    tl = mp.ImportTimelineFromFile(s["xml"], {"timelineName": s["name"], "importSourceClips": False,
+                                              "sourceClipsFolders": media_folders})
+    if not tl:
+        report.append({"name": s["name"], "ok": False}); continue
+    proj.SetCurrentTimeline(tl)
+    t0 = tl.GetStartFrame()
+    fixed = bad = 0
+    for kind, tracks in (("video", s["video"]), ("audio", s["audio"])):
+        for ti, tr in enumerate(tracks, 1):
+            if not tr["on"]:
+                tl.SetTrackEnable(kind, ti, False)
+            have = tl.GetItemListInTrack(kind, ti) or [] if ti <= tl.GetTrackCount(kind) else []
+            for c in tr["clips"]:
+                if c.get("nest") or not c.get("path"):
+                    continue
+                hit = next((x for x in have if abs(x.GetStart() - t0 - c["start"]) <= 1), None)
+                mpi = hit.GetMediaPoolItem() if hit else None
+                if mpi is not None and os.path.basename(mpi.GetClipProperty("File Path") or "") == os.path.basename(c["path"]):
+                    if not c["on"] and hit.GetClipEnabled():
+                        hit.SetClipEnabled(False)
+                    continue
+                if hit:
+                    tl.DeleteClips([hit], False)
+                    have = [x for x in have if x is not hit]
+                sp = c.get("speed", 100.0)
+                if abs(sp - 100.0) < 0.01:
+                    it, a, b = item_for(c["path"]), c["in"] * c["ffps"] / s["fps"], c["out"] * c["ffps"] / s["fps"]
+                elif abs(s["fps"] / c["ffps"] * 100 - sp) < 0.5:
+                    # played a frame a timeline frame; in/out are source time at the timeline rate
+                    # (Kickoff) or already the conformed frames (Premiere, where out-in = the length)
+                    a = c["in"] if c["out"] - c["in"] == c["end"] - c["start"] else c["in"] * c["ffps"] / s["fps"]
+                    it, b = conformed_item(c["path"], plan["fps"]), a + c["end"] - c["start"]
+                else:
+                    it = None
+                if it is None:
+                    bad += 1; continue
+                got = mp.AppendToTimeline([{"mediaPoolItem": it, "startFrame": int(round(a)), "endFrame": int(round(b)) - 1,
+                                            "mediaType": 1 if kind == "video" else 2, "trackIndex": ti,
+                                            "recordFrame": t0 + c["start"]}]) or []
+                if got:
+                    fixed += 1
+                    if not c["on"]:
+                        for g in got:
+                            g.SetClipEnabled(False)
+                else:
+                    bad += 1
+    placed += fixed; offline += bad
+    report.append({"name": s["name"], "ok": True, "placed": fixed, "offline": bad})
+
+say(stage="Saving the Resolve project")
+pm.SaveProject()
+ok = pm.ExportProject(pname, drp, False)
+s_first = next((s for s in plan["sequences"] if s.get("open")), None)
+if s_first:
+    for i in range(1, proj.GetTimelineCount() + 1):
+        t = proj.GetTimelineByIndex(i)
+        if t and t.GetName() == s_first["name"]:
+            proj.SetCurrentTimeline(t)
+resolve.OpenPage("edit")
+say(result={"project": pname, "drp": drp if ok else "", "timelines": report, "placed": placed, "offline": offline,
+            "missing_media": missing_media})
+bye(0)
+'''
+
+
+RESOLVE_FPS = {23.976: "23.976", 24: "24", 25: "25", 29.97: "29.97", 30: "30", 47.952: "47.952", 48: "48",
+               50: "50", 59.94: "59.94", 60: "60"}
+
+
+def resolve_prep(xml_path, work):
+    """Lay a Premiere XML (Kickoff's, or one exported from Premiere) out for DaVinci Resolve: Resolve
+    makes one timeline per XML, so every sequence gets its own file (nests and files written in full),
+    plus a plan of the bins, their media and every clip's spot, for the builder to check and patch."""
+    root = ET.parse(xml_path).getroot()
+    proj = root.find("project")
+    if proj is None:
+        raise RuntimeError("that XML has no project in it")
+    pname = proj.findtext("name") or os.path.splitext(os.path.basename(xml_path))[0]
+    top = {}                                     # sequence id -> the ids of the sequences it nests
+    for s in root.iter("sequence"):
+        if len(s) and s.get("id"):
+            top.setdefault(s.get("id"), {n.get("id") for ci in s.iter("clipitem")
+                                         for n in ci.findall("sequence") if n.get("id")})
+    full = resolve_copy(root)                    # every nest in full, clips on switched-off tracks off
+    files = {}
+    for f in full.iter("file"):
+        if len(f) and f.get("id") not in files:
+            files[f.get("id")] = f
+
+    def fpath(f):
+        d = files.get(f.get("id")) if f is not None else None
+        u = d.findtext("pathurl") if d is not None else None
+        return os.path.normpath(url_to_path(u)) if u else None
+
+    bins, seqs = [], []
+    def walk(el, path):
+        ch = el.find("children")
+        for c in (ch if ch is not None else []):
+            if c.tag == "bin":
+                name = c.findtext("name") or "Bin"
+                media = []
+                for clip in (c.find("children") if c.find("children") is not None else []):
+                    if clip.tag == "clip":
+                        p = next((fpath(f) for f in clip.iter("file") if fpath(f)), None)
+                        if p and "_empty-bin-placeholders" not in p and p not in media:
+                            media.append(p)
+                bins.append({"path": path + [name], "media": media})
+                walk(c, path + [name])
+            elif c.tag == "sequence" and len(c):
+                seqs.append((path, c))
+    walk(full.find("project"), [])
+
+    os.makedirs(work, exist_ok=True)
+    ids = {s.get("id") for _, s in seqs}
+    order, placed = [], set()
+    while len(order) < len(seqs):               # nested sequences before the ones that use them
+        left = [x for x in seqs if x not in order]
+        ready = [x for x in left if not ((top.get(x[1].get("id"), set()) & ids) - placed - {x[1].get("id")})]
+        nxt = (ready or left)[0]
+        order.append(nxt)
+        placed.add(nxt[1].get("id"))
+
+    rates = collections.Counter()
+    plan_seqs = []
+    for k, (path, s) in enumerate(order, 1):
+        s = copy.deepcopy(s)
+        sfps = xml_fps(s)
+        fmt = s.find("media/video/format/samplecharacteristics")
+        w = int(fmt.findtext("width") or 3840) if fmt is not None else 3840
+        h = int(fmt.findtext("height") or 2160) if fmt is not None else 2160
+        rates[(snap_fps(sfps) or 23.976, w, h)] += 1
+        seen = set()
+        for f in s.iter("file"):                 # each file's first use carries its whole definition
+            if not len(f) and f.get("id") not in seen and f.get("id") in files:
+                for kid in files[f.get("id")]:
+                    f.append(copy.deepcopy(kid))
+            seen.add(f.get("id"))
+            if len(f):
+                resolve_tc(f, real_tc(fpath(f)))
+        tracks = {}
+        for kind in ("video", "audio"):
+            tracks[kind] = []
+            for t in s.findall("media/%s/track" % kind):
+                clips = []
+                for ci in list(t.findall("clipitem")):
+                    f = ci.find("file")
+                    p = fpath(f) if f is not None else None
+                    nest = ci.find("sequence") is not None
+                    if not p and not nest:       # a generator (Premiere's Black Video slug) stops Resolve's import
+                        t.remove(ci)
+                        continue
+                    sp = next((float(x.findtext("value") or 100) for x in ci.iter("parameter")
+                               if x.findtext("parameterid") == "speed"), 100.0)
+                    st, en, a, b = (int(ci.findtext(x) or 0) for x in ("start", "end", "in", "out"))
+                    d = files.get(f.get("id")) if f is not None else None
+                    ffps = xml_fps(d) if d is not None and d.find("rate") is not None else sfps
+                    if round(ffps) == 119:               # Premiere writes 119.88 fps as a plain 119
+                        ffps = 119.88
+                    if d is not None and d.find("media/video") is None:
+                        ffps = sfps                      # a sound file counts frames at the timeline's rate
+                    if p and abs(sp - 100) < 0.01 and d is not None and d.findtext("duration"):
+                        # a clip that runs to the file's very last frame: Resolve may count one frame
+                        # less and call the file missing, so it ends a frame early
+                        last = int(int(d.findtext("duration")) * sfps / ffps + 1e-6)
+                        if b >= last and en - st > 1:
+                            b, en = b - 1, en - 1
+                            ci.find("out").text, ci.find("end").text = str(b), str(en)
+                    clips.append({"start": st, "end": en, "in": a, "out": b, "path": p, "nest": nest,
+                                  "ffps": ffps, "speed": sp, "on": (ci.findtext("enabled") or "TRUE") != "FALSE"})
+                tracks[kind].append({"on": (t.findtext("enabled") or "TRUE") != "FALSE", "clips": clips})
+        name = s.findtext("name") or "Sequence %d" % k
+        out = os.path.join(work, "%02d %s.xml" % (k, re.sub(r'[/:\\\\]+', "_", name)))
+        x = ET.Element("xmeml", version="4")
+        x.append(s)
+        write_xml(x, out)
+        plan_seqs.append({"name": name, "bin": path, "xml": out, "fps": sfps, "video": tracks["video"],
+                          "audio": tracks["audio"], "open": bool(re.search(r"(?i)_edit$", name))})
+    (fps, w, h), _ = rates.most_common(1)[0] if rates else ((23.976, 3840, 2160), 0)
+    if not any(s["open"] for s in plan_seqs) and plan_seqs:
+        plan_seqs[-1]["open"] = True
+    foot = next((b["path"] for b in bins if b["path"] and b["path"][0].lower() == "footage"), ["Footage"])
+    return {"name": pname, "fps": RESOLVE_FPS.get(round(fps, 3) if fps % 1 else int(fps), "%g" % fps),
+            "width": w, "height": h, "bins": bins, "sequences": plan_seqs,
+            "slowmo_bin": foot[:1] + ["Slow-mo (conformed %s)" % RESOLVE_FPS.get(round(fps, 3) if fps % 1 else int(fps), "%g" % fps)],
+            "drp": os.path.splitext(os.path.abspath(xml_path))[0] + ".drp", "xml_mtime": os.path.getmtime(xml_path)}
+
+
+_REAL_TC = {}
+
+
+def real_tc(path):
+    """The file's own timecode label (any stream: Sony keeps it on a metadata stream), or None.
+    Premiere's XML export makes up the timecode of 119.88 fps clips."""
+    if not path or not os.path.isfile(path):
+        return None
+    if path not in _REAL_TC:
+        r = run(["ffprobe", "-v", "error", "-show_entries", "format_tags=timecode:stream_tags=timecode", "-of", "json", path])
+        try:
+            j = json.loads((r.stdout or b"{}").decode(errors="replace"))
+        except ValueError:
+            j = {}
+        tags = [(j.get("format") or {}).get("tags") or {}] + [st.get("tags") or {} for st in j.get("streams") or []]
+        _REAL_TC[path] = next((t["timecode"] for t in tags if t.get("timecode")), None)
+    return _REAL_TC[path]
+
+
+def resolve_tc(f, label=None):
+    """The file's real timecode (label), and for a 119.88/120 fps file the way Resolve labels it: at
+    half the camera's 120 count (17:31:30:60 reads 17:31:30:30), with no frame count, which is how
+    Resolve's own XML writes it and the only way it links."""
+    tc = f.find("timecode")
+    if tc is None or f.find("rate") is None:
+        return
+    if label and tc_frames(label, xml_fps(f)) is not None and tc.find("string") is not None:
+        tc.find("string").text = label
+        if tc.find("frame") is not None:
+            tc.find("frame").text = str(tc_frames(label, xml_fps(f) if f.findtext("rate/timebase") != "119" else 119.88))
+    if f.findtext("rate/timebase") not in ("119", "120"):
+        return
+    for r in [f.find("rate"), tc.find("rate")] + list(f.iter("samplecharacteristics")):
+        r = r.find("rate") if r is not None and r.tag == "samplecharacteristics" else r
+        if r is not None and r.findtext("timebase") in ("119", "120"):
+            r.find("timebase").text, r.find("ntsc").text = "120", "TRUE"
+    m = re.match(r"^(\d+)[:;.](\d+)[:;.](\d+)[:;.,](\d+)$", (tc.findtext("string") or "").strip())
+    if m and tc.find("frame") is not None:
+        h, mi, s_, fr = (int(v) for v in m.groups())
+        tc.find("string").text = "%02d:%02d:%02d:%02d" % (h, mi, s_, fr // 2)
+        tc.remove(tc.find("frame"))
+
+
+def resolve_main(args):
+    """--mode resolve PROJECT.xml: build the project in DaVinci Resolve Studio and save a .drp next to
+    the XML. The window's "Open in Resolve" button runs this."""
+    xml = next((p for p in args.paths if p.lower().endswith(".xml") and os.path.isfile(p)), None)
+    if not xml:
+        sys.exit("error: give the project XML to open in Resolve")
+    event("stage", text="Getting the project ready for Resolve")
+    work = os.path.join(tempfile.gettempdir(), "kickoff-resolve", hashlib.md5(os.path.abspath(xml).encode()).hexdigest()[:10])
+    shutil.rmtree(work, ignore_errors=True)
+    try:
+        plan = resolve_prep(os.path.abspath(xml), work)
+    except (RuntimeError, ET.ParseError, OSError) as e:
+        sys.exit("error: %s" % e)
+    with open(os.path.join(work, "plan.json"), "w") as fh:
+        json.dump(plan, fh)
+    with open(os.path.join(work, "build.py"), "w") as fh:
+        fh.write(RESOLVE_DRIVER)
+    log("%d sequences and %d bins ready for Resolve" % (len(plan["sequences"]), len(plan["bins"])))
+    # Resolve's scripting library loads in a plain Python 3 (the engine's own, else the Mac's)
+    pys = [sys.executable] + [p for p in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3")
+                              if os.path.exists(p) and p != sys.executable]
+    result = err = None
+    for py in pys:
+        pr = subprocess.Popen([py, os.path.join(work, "build.py"), os.path.join(work, "plan.json")],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        nolib = False
+        for line in pr.stdout:
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if "stage" in msg:
+                event("stage", text=msg["stage"])
+            elif "nolib" in msg:
+                nolib = True
+            elif "error" in msg:
+                err = msg["error"]
+            elif "result" in msg:
+                result = msg["result"]
+        pr.wait()
+        if not nolib:
+            break
+    if result is None:
+        sys.exit("error: %s" % (err or "Kickoff couldn't find DaVinci Resolve Studio on this Mac."))
+    if result.get("reused"):
+        log("%s was already in Resolve, so Kickoff opened it" % result["project"])
+    else:
+        for t in result.get("timelines", []):
+            log("  %s: %s" % (t["name"], "in" if t.get("ok") else "Resolve wouldn't take it") +
+                (", %d clips placed by hand" % t["placed"] if t.get("placed") else "") +
+                (", %d clips still offline" % t["offline"] if t.get("offline") else ""))
+        for p in result.get("missing_media", []):
+            log("  Resolve couldn't bring in %s" % p)
+        log("Made %s in Resolve%s" % (result["project"], " and saved %s" % result["drp"] if result.get("drp") else ""))
+    event("resolve", project=result["project"], drp=result.get("drp", ""), reused=bool(result.get("reused")),
+          offline=result.get("offline", 0), timelines=len(result.get("timelines", [])))
+
+
 def slop_main(args):
     xml = next((p for p in args.paths if p.lower().endswith(".xml")), None)
     if not xml:                         # a folder was picked: the newest XML in it (not a Slop Cut we made)
@@ -4524,7 +4915,7 @@ def main(argv=None):
                     help="keep placed stretches whose picture is a flat color (see drop_blank)")
     ap.add_argument("--no-cache", action="store_true",
                     help="don't keep decoded camera audio for the next run (see audio_cache_dir)")
-    ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras", "slop", "slopimport"], default="auto",
+    ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras", "slop", "slopimport", "resolve"], default="auto",
                     help="music: sync to the song (music video); narrative: sync each clip to the sound "
                          "recordist's audio files (timecode, else scratch audio) in one Sync sequence; cameras: "
                          "narrative with no sound files, the cameras synced to each other; setup: "
@@ -4556,6 +4947,8 @@ def main(argv=None):
     EVENTS = args.events
     if args.mode in ("slop", "slopimport"):
         return slop_main(args)
+    if args.mode == "resolve":
+        return resolve_main(args)
     if args.sync_size == "first":
         args.sync_size = None
     else:

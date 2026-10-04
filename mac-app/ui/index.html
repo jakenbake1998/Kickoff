@@ -327,6 +327,10 @@ button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);
 
 .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:auto;padding-top:4px}
 #btnsStart{flex-direction:column;align-items:center;gap:6px}
+#bResolve{display:inline-flex;align-items:center;gap:8px}
+.rspin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite;flex:none}
+.rspin[hidden]{display:none}
+#bResolve .ok{color:var(--good,#5fd38d)}
 .linkbtn{background:none;border:0;padding:2px 6px;color:var(--muted);font:500 13px var(--body);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 .linkbtn:hover{color:var(--ink)}
 .finder{position:relative}
@@ -806,6 +810,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   </div>
   <div class="btns" id="btnsDone" hidden>
     <button class="pri" id="bOpen">Open in Premiere</button>
+    <button id="bResolve" hidden><span class="rspin" id="rSpin" hidden></span><span id="bResolveText">Open in Resolve</span></button>
     <button id="bSlop" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/></svg>Make a Slop Cut <span class="spark" aria-hidden="true">&#x2728;</span></button>
     <div class="finder">
       <button id="bFinder" aria-haspopup="menu" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Show in Finder<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
@@ -1726,6 +1731,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function finish(e) {
     record(e.nothing_new ? "nothing" : "done", e);
     $("bSlop").hidden = true;
+    $("bResolve").hidden = true;
     $("aside").classList.remove("moves");
     $("bOpen").textContent = "Open in Premiere";
     $("bRetry").hidden = false;
@@ -1900,6 +1906,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     show("btnsRun", false);
     show("btnsDone", true);
     $("bSlop").hidden = !(e.synced && e.mode !== "narrative" && !e.add && e.xml);
+    $("bResolve").hidden = !(e.xml && !e.add);
+    resolveView(false);
     $("bOpen").focus();
   }
 
@@ -2985,20 +2993,61 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (ev.key === "Escape" && !$("slopWrap").hidden) $("bSlopCancel").click();
   });
 
+  // Open in Resolve: Kickoff builds the project in DaVinci Resolve Studio and saves a .drp beside the XML
+  var rsv = null;                  // {busy, result, err} while Kickoff builds the Resolve project
+  function resolveView(busy, html, tip) {
+    $("rSpin").hidden = !busy;
+    $("bResolve").disabled = busy;
+    $("bResolveText").innerHTML = html || "Open in Resolve";
+    $("bResolve").title = tip || "Build this project in DaVinci Resolve Studio and save a .drp next to the XML";
+  }
+  $("bResolve").addEventListener("click", function () {
+    if (running() || rsv || (slop && slop.busy) || !state.result || !state.result.xml) return;
+    rsv = { busy: true, err: "", result: null };
+    show("error", false);
+    resolveView(true, "Building in Resolve", "Opening Resolve");
+    post({ cmd: "run", paths: [state.result.xml], mode: "resolve", xmlDir: xmlDir || "drive", xmlName: "" });
+  });
+  function resolveExit(code) {
+    var r = rsv.result;
+    if (code === 0 && r) {
+      resolveView(false, '<span class="ok">&#x2713;</span> Open in Resolve', r.project + " is open in Resolve"
+        + (r.drp ? ". Saved as " + r.drp.split("/").pop() + " next to the XML." : ".")
+        + (r.offline ? " " + plural(r.offline, "clip") + " couldn't be placed (see Details)." : ""));
+    } else {
+      resolveView(false);
+      $("errTitle").textContent = "Couldn\u2019t open it in Resolve";
+      $("errText").textContent = rsv.err || "Make sure DaVinci Resolve Studio is installed, then try again.";
+      show("error", true);
+    }
+    rsv = null;
+  }
+
   window.Kickoff = {
-    started: function (paths) { if (slop && slop.busy) return; started(paths); },
+    started: function (paths) { if ((slop && slop.busy) || rsv) return; started(paths); },
     event: function (e) {
+      if (rsv) {
+        if (e.event === "stage") resolveView(true, "Building in Resolve", e.text);
+        else if (e.event === "resolve") rsv.result = e;
+        return;
+      }
       if (!(slop && slop.busy)) return onEvent(e);
       if (e.event === "stage") $("slopStage").textContent = e.text === "Cutting the Slop Cut" ? "Cutting on the beat"
         : /^Reading/.test(e.text) ? "The editors are on it" : e.text;
       else if (e.event === "slop") slop.result = e;
     },
     log: function (line) {
+      if (rsv) {
+        var rm = /^error:\s*(.*)/.exec(line);
+        if (rm) rsv.err = rm[1].charAt(0).toUpperCase() + rm[1].slice(1);
+        $("log").textContent += line + "\n";
+        return;
+      }
       if (!(slop && slop.busy)) return onLog(line);
       var m = /^error:\s*(.*)/.exec(line);
       if (m) slop.err = m[1].charAt(0).toUpperCase() + m[1].slice(1);
     },
-    exit: function (code) { if (slop && slop.busy) return slopExit(code); onExit(code); },
+    exit: function (code) { if (rsv) return resolveExit(code); if (slop && slop.busy) return slopExit(code); onExit(code); },
     add: function (paths) { add(paths); },
     drop: drop,
     folderTree: importTemplate,
