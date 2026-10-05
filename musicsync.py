@@ -41,7 +41,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.54"
+VERSION = "0.5.55"
 
 # ---------------------------------------------------------------- constants
 
@@ -4508,7 +4508,14 @@ def prproj_to_xml(src, out):
         vs, aus = ref(m.find("VideoStream")), [ref(a) for a in m.findall("AudioStream")]
         fticks = num(vs, "FrameRate") if vs is not None else 0
         fps = PR_TICKS / fticks if fticks else 0.0
-        return path, fps, vs is not None, len([a for a in aus if a is not None])
+        nch = 0
+        for a in aus:
+            if a is not None:
+                try:   # a stereo stream lists two channels in its layout
+                    nch += max(1, len(json.loads(a.findtext("AudioChannelLayout") or "[]")))
+                except ValueError:
+                    nch += 1
+        return path, fps, vs is not None, nch
 
     def file_el(parent, m, seq_fps):
         key = id(m)
@@ -4525,7 +4532,8 @@ def prproj_to_xml(src, out):
         rate_el(f, fps)
         tc = ET.SubElement(f, "timecode")
         rate_el(tc, fps)
-        start = num(m, "Start") * fps / PR_TICKS
+        alt = (m.findtext("UseAlternateStart") or "").strip() == "true" and m.find("AlternateStart") is not None
+        start = num(m, "AlternateStart" if alt else "Start") * fps / PR_TICKS   # alternate = timecode set in Premiere
         ET.SubElement(tc, "frame").text = str(int(round(start)))
         ET.SubElement(tc, "displayformat").text = "NDF"
         md = ET.SubElement(f, "media")
@@ -4706,9 +4714,9 @@ def fcpxml_to_xml(src, out):
         if not fd:
             return default
         fps = 1.0 / fd
-        for std in (23.976, 29.97, 59.94, 119.88, 47.952):
-            if abs(fps - std) < 0.01:
-                return std
+        for std in (24, 30, 60, 120, 48):
+            if abs(fps - std * 1000 / 1001) < 0.01:
+                return std * 1000 / 1001   # exact NTSC rate, or long source timecodes land a frame early
         return round(fps, 3)
 
     def asset_path(a):
@@ -5108,6 +5116,9 @@ def premiere_polish(xm):
             md = ET.SubElement(f, "media")
         has_v = md.find("video") is not None
         has_a = md.find("audio") is not None
+        md_ch = md.findtext("audio/channelcount") if has_a else None
+        if md_ch and len(md.findall("audio")) > 1:
+            md_ch = len(md.findall("audio"))
         for x in list(md):
             md.remove(x)
         if has_v:
@@ -5119,14 +5130,19 @@ def premiere_polish(xm):
             ET.SubElement(sc, "pixelaspectratio").text = "square"
             ET.SubElement(sc, "fielddominance").text = "none"
         if has_a or not has_v:
-            for ch in range(1, max(1, facts.get("ch") or 2) + 1):
+            nch = max(1, facts.get("ch") or int(md_ch or 2))
+            for ch in range(1, nch + 1):
                 au = ET.SubElement(md, "audio")
                 sc = ET.SubElement(au, "samplecharacteristics")
                 ET.SubElement(sc, "depth").text = "16"
                 ET.SubElement(sc, "samplerate").text = str(facts.get("sr") or 48000)
                 ET.SubElement(au, "channelcount").text = "1"
+                if nch == 2:   # Premiere's stereo shape: one block per channel, labelled as a pair
+                    ET.SubElement(au, "layout").text = "stereo"
                 ac = ET.SubElement(au, "audiochannel")
                 ET.SubElement(ac, "sourcechannel").text = str(ch)
+                if nch == 2:
+                    ET.SubElement(ac, "channellabel").text = "left" if ch == 1 else "right"
         order(f, ["name", "pathurl", "rate", "duration", "timecode", "media"])
     n = 0
     for sq in xm.iter("sequence"):
@@ -5166,6 +5182,18 @@ def premiere_polish(xm):
                     ET.SubElement(t, "enabled").text = "TRUE"
                 if t.find("locked") is None:
                     ET.SubElement(t, "locked").text = "FALSE"
+                if kind == "audio" and not t.get("premiereTrackType"):
+                    chs = set()
+                    for ci in t.findall("clipitem"):
+                        f = ci.find("file")
+                        full = files.get(f.get("id")) if f is not None else None
+                        chs.add(len(full.findall("media/audio")) if full is not None else 0)
+                    if chs == {2}:   # a stereo track, so Premiere plays both channels of a stereo file
+                        t.attrib.update({"PannerCurrentValue": "0.5", "PannerName": "Balance",
+                                         "currentExplodedTrackIndex": "0", "totalExplodedTrackCount": "1",
+                                         "premiereTrackType": "Stereo"})
+                        if t.find("outputchannelindex") is None:
+                            ET.SubElement(t, "outputchannelindex").text = "1"
                 for ci in t.findall("clipitem"):
                     n += 1
                     f = ci.find("file")
