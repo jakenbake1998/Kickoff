@@ -421,6 +421,12 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .dest .seg button.on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
 .dest .seg button:disabled{opacity:.5;cursor:default}
 #destPr .dest{margin-top:8px}
+.dest .prrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.dest .chk{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--ink);cursor:pointer}
+.dest .chk input{accent-color:var(--accent);width:15px;height:15px;margin:0}
+.dest .pickdir{margin:0;border:1px solid var(--line);border-radius:9px;background:transparent;color:var(--muted);padding:6px 13px;font-size:13px}
+.dest .pickdir.on{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.dest .pickdir:disabled{opacity:.4;cursor:default}
 .dest .path{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .tabs button{padding:5px 12px;font-size:12.5px}
@@ -461,6 +467,38 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .resside{flex:1 1 300px;min-width:0;display:grid;gap:12px}
 .resside:not(:has(> :not([hidden]))){display:none}
 .hbtns{display:flex;gap:8px;margin-left:auto}
+.convov{position:fixed;inset:0;z-index:50;background:rgba(8,9,11,.62);display:grid;place-items:center;padding:24px}
+.convov[hidden]{display:none}
+.convcard{width:min(560px,100%);background:var(--bg);border:1px solid var(--line);border-radius:16px;padding:20px 22px 22px;
+  display:grid;gap:16px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+.convhead{display:flex;align-items:center;justify-content:space-between}
+.convhead h2{margin:0;font:700 20px/1 var(--display)}
+.convx{border:0;background:none;color:var(--muted);font-size:22px;line-height:1;padding:2px 8px}
+.convx:hover{color:var(--ink)}
+.convdrop{display:grid;justify-items:center;gap:6px;padding:22px 16px;border:1.5px dashed var(--line);border-radius:12px;
+  background:var(--panel);color:var(--muted);text-align:center;width:100%}
+.convdrop:hover,.convdrop.over{border-color:var(--accent);color:var(--ink)}
+.convdrop.has{border-style:solid}
+.convdrop .cdmain{font-weight:700;font-size:15px;color:var(--ink);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.convdrop .cdsub{font-size:12.5px;font-weight:500}
+.convto{display:grid;gap:8px}
+.convto .k{font-size:13px;color:var(--muted);font-weight:600}
+.convfmts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.convfmts button{display:grid;gap:2px;padding:10px 8px;text-align:center;border-radius:10px}
+.convfmts button b{font-size:14px}
+.convfmts button small{font-size:11.5px;color:var(--muted);font-weight:500}
+.convfmts button[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--panel))}
+.convfmts button[aria-pressed="true"] b{color:var(--accent)}
+.convfmts button:disabled{opacity:.35;cursor:default}
+.convnote{margin:-4px 0 0;font-size:12.5px;color:var(--muted);min-height:18px}
+.convgo .pri{width:100%;padding:13px;font-size:15px}
+.convbusy{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--muted);padding:12px}
+.convbusy[hidden],.convdone[hidden],.convfail[hidden],.convgo[hidden]{display:none}
+.convdone{display:grid;gap:8px}
+.convok{margin:0;font-weight:700;color:var(--good)}
+.convleft{margin:0;font-size:12.5px;color:var(--muted)}
+.convbtns{display:flex;gap:8px;flex-wrap:wrap}
+.convfail{margin:0;font-size:13px;color:var(--bad)}
 .hbtns .histbtn{margin-left:0}
 .custom{justify-self:start;margin:6px 0 0!important;padding:6px 12px!important;font-size:12.5px;color:var(--accent)!important;border:1px solid color-mix(in srgb,var(--accent) 50%,transparent)!important;background:none}
 .custom:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
@@ -650,6 +688,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <div><h1>Kickoff</h1><div class="tag">Drop a shoot folder. Get a Premiere project.</div></div>
   </div>
   <div class="hbtns">
+  <button class="histbtn" id="bConv" title="Turn an XML, FCPXML, DaVinci or Premiere project into another of those"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3l4 4-4 4"/><path d="M3 7h18"/><path d="M7 21l-4-4 4-4"/><path d="M21 17H3"/></svg>Convert</button>
   <button class="histbtn" id="bSet" aria-pressed="false" title="Bins, sequence size and names, label colors"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
   <button class="histbtn" id="bHist" aria-pressed="false" title="Every run so far"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>History</button>
   </div>
@@ -798,6 +837,34 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   <div class="list" id="aside" hidden></div>
   </div>
   </div>
+  <div class="convov" id="convOv" hidden>
+    <div class="convcard" role="dialog" aria-modal="true" aria-labelledby="convH">
+      <div class="convhead"><h2 id="convH">Convert</h2><button class="convx" id="convX" aria-label="Close">&times;</button></div>
+      <button class="convdrop" id="convDrop" type="button">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 12v6M9 15l3 3 3-3"/></svg>
+        <span class="cdmain" id="convFile">Drop a project file here</span>
+        <span class="cdsub" id="convKind">XML, FCPXML, DaVinci .drp or Premiere .prproj. Or click to choose.</span>
+      </button>
+      <div class="convto">
+        <span class="k">Convert to</span>
+        <div class="convfmts" id="convFmts">
+          <button type="button" data-to="xml"><b>XML</b><small>Premiere, Resolve</small></button>
+          <button type="button" data-to="fcpxml"><b>FCPXML</b><small>Final Cut, Resolve</small></button>
+          <button type="button" data-to="drp"><b>DaVinci</b><small>.drp project</small></button>
+          <button type="button" data-to="prproj"><b>Premiere</b><small>.prproj project</small></button>
+        </div>
+      </div>
+      <p class="convnote" id="convNote"></p>
+      <div class="convgo" id="convGoRow"><button class="pri" id="convGo" disabled>Convert</button></div>
+      <div class="convbusy" id="convBusy" hidden><span class="rspin"></span><span id="convStage">Converting</span></div>
+      <div class="convdone" id="convDone" hidden>
+        <p class="convok" id="convOk"></p>
+        <p class="convleft" id="convLeft"></p>
+        <div class="convbtns"><button class="pri" id="convOpen">Open</button><button id="convShow">Show in Finder</button><button class="quiet" id="convAgain">Convert another</button></div>
+      </div>
+      <p class="convfail" id="convFail" hidden></p>
+    </div>
+  </div>
   <div class="error" id="error" hidden><b id="errTitle">Kickoff hit an error</b><p id="errText"></p></div>
 
   <div class="batch" id="batch" hidden></div>
@@ -916,24 +983,48 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   var state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
   var queue = [];                  // Other projects: folders waiting for Start
   var jobs = [{ song: null, footage: [] }];   // Music video: each song and the footage it syncs to
+  // both start at their defaults every time Kickoff opens (Jake: a new project shouldn't inherit the last
+  // one's folders); a folder picked holds until Kickoff is closed
   var xmlDir = "";                 // "" = the top of the drive the footage is on
-  try { xmlDir = localStorage.getItem("kickoff-xml-dir") || ""; } catch (e) {}
   function setXmlDir(d) {
     xmlDir = d || "";
-    try { localStorage.setItem("kickoff-xml-dir", xmlDir); } catch (e) {}
     renderDests();
     optSummary();
   }
   var prDir = "";                  // "" = next to the XML (a Premiere folder beside a folder named XML)
-  try { prDir = localStorage.getItem("kickoff-prproj-dir") || ""; } catch (e) {}
+  var prNext = true;               // the "Next to the XML" box: on, the folder choice is greyed out
   function setPrDir(d) {
     prDir = d || "";
-    try { localStorage.setItem("kickoff-prproj-dir", prDir); } catch (e) {}
     renderDests();
     optSummary();
   }
   // "Export XML to" / "Premiere project saves to": the default or a folder, both always showing
+  function prControl() {            // the Premiere project: a "Next to the XML" box, else a folder
+    var box = el("div", { class: "dest" });
+    box.appendChild(el("span", { class: "k" }, "Premiere project saves to"));
+    var row = el("div", { class: "prrow" });
+    var lab = el("label", { class: "chk" });
+    var cb = el("input", { type: "checkbox" });
+    cb.checked = prNext;
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(" Next to the XML"));
+    lab.title = "When the XML folder is called XML, a Premiere folder beside it";
+    var pick = el("button", { type: "button", class: "pickdir" + (!prNext && prDir ? " on" : "") },
+      !prNext && prDir ? esc(base(prDir)) : "Choose a folder…");
+    pick.disabled = prNext || running();
+    pick.title = prNext ? "Uncheck Next to the XML to pick a folder" : "Pick a folder";
+    if (running()) { cb.disabled = true; lab.title = "Available when the run finishes"; }
+    cb.addEventListener("change", function () {
+      prNext = cb.checked;
+      if (prNext) setPrDir("");
+      else { renderDests(); optSummary(); post({ cmd: "pick", target: "prproj" }); }
+    });
+    pick.addEventListener("click", function () { if (!running() && !prNext) post({ cmd: "pick", target: "prproj" }); });
+    row.appendChild(lab); row.appendChild(pick); box.appendChild(row);
+    if (!prNext && prDir) { var pth = el("span", { class: "path" }, esc(prDir)); pth.title = prDir; box.appendChild(pth); }
+    return box;
+  }
   function destControl(which) {
+    if (which === "prproj") return prControl();
     var xml = which === "export", dir = xml ? xmlDir : prDir;
     var box = el("div", { class: "dest" });
     box.appendChild(el("span", { class: "k" }, xml ? "Export XML to" : "Premiere project saves to"));
@@ -960,7 +1051,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if ($("vSet") && !$("vSet").hidden && pane === "files") renderSettings();
   }
   function projectDirFor(xml) {     // where Open in Premiere makes the project for this XML
-    if (prDir) return prDir;
+    if (prDir && !prNext) return prDir;
     var d = parent(xml);
     return base(d).toLowerCase() === "xml" ? parent(d) + "/Premiere" : d;
   }
@@ -974,7 +1065,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     // the chosen folder with the one above it ("Project Files > XML"): a folder named XML alone read as "XML goes to XML"
     var shown = xmlDir ? [base(parent(xmlDir)), base(xmlDir)].filter(Boolean).join(" > ") : "";
     $("optSum").textContent = (xmlDir ? "XML saves to " + shown : "XML saves to the top of the footage drive") +
-      (prDir ? ", project to " + [base(parent(prDir)), base(prDir)].filter(Boolean).join(" > ") : "") +
+      (prDir && !prNext ? ", project to " + [base(parent(prDir)), base(prDir)].filter(Boolean).join(" > ") : "") +
       ($("rebuild").checked ? ", starting over" : "");
   }
   var batch = null;                // the runs Start began: { runs: [{paths, mode, name}], i, ids }
@@ -1099,6 +1190,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     folders.forEach(function (f) { if (jobs[r].footage.indexOf(f) < 0) jobs[r].footage.push(f); });
   }
   function drop(paths, x, y) {
+    if (!$("convOv").hidden) { $("convDrop").classList.remove("over"); if (paths.length) convSet(paths[0]); return; }
+    var edits = paths.filter(convKind);              // an edit file dropped on the window opens Convert with it
+    paths = paths.filter(function (p) { return !convKind(p); });
+    if (!paths.length) { if (edits.length) { convOpen(true); convSet(edits[0]); } return; }
     var el = document.elementFromPoint(x, y), box = el && el.closest ? el.closest(".box") : null;
     $("tplImport").classList.remove("over");
     if (el && el.closest && el.closest("#tplImport")) { post({ cmd: "scanFolder", path: paths[0] }); return; }
@@ -3023,9 +3118,95 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     rsv = null;
   }
 
+  // the Convert window: one edit file into another format (--mode convert-<format>), saved next to it
+  var conv = { src: "", kind: "", to: "", busy: false, result: null, err: "" };
+  var CONV_NAMES = { xml: "XML", fcpxml: "FCPXML", drp: "DaVinci project", prproj: "Premiere project" };
+  function convKind(p) {
+    var x = (p.split(".").pop() || "").toLowerCase();
+    return x === "fcpxmld" ? "fcpxml" : CONV_NAMES[x] ? x : "";
+  }
+  function convRender() {
+    var f = conv.src;
+    $("convDrop").classList.toggle("has", !!f);
+    $("convFile").textContent = f ? base(f) : "Drop a project file here";
+    $("convKind").textContent = f ? (CONV_NAMES[conv.kind] || "Not a file Kickoff can convert") + ". Click to pick another."
+      : "XML, FCPXML, DaVinci .drp or Premiere .prproj. Or click to choose.";
+    document.querySelectorAll("#convFmts button").forEach(function (b) {
+      b.disabled = conv.busy || !conv.kind || b.dataset.to === conv.kind;
+      b.setAttribute("aria-pressed", b.dataset.to === conv.to && !b.disabled ? "true" : "false");
+    });
+    var resolve = conv.kind === "fcpxml" || conv.kind === "drp" || conv.to === "drp" || conv.to === "fcpxml";
+    $("convNote").textContent = !conv.to ? "" : conv.kind === "prproj" && conv.to !== "drp" && conv.to !== "fcpxml"
+      ? "Cuts, nests and audio come over. Effects, titles and transitions stay in Premiere."
+      : resolve ? "Uses DaVinci Resolve Studio in the background. Have it open with no window waiting on you."
+      : conv.to === "prproj" ? "Makes a Premiere project next to the file and opens it in Premiere." : "";
+    $("convGo").disabled = conv.busy || !conv.kind || !conv.to || running();
+    $("convGoRow").hidden = conv.busy || !!conv.result;
+    $("convBusy").hidden = !conv.busy;
+    $("convDrop").disabled = conv.busy;
+  }
+  function convOpen(show) {
+    $("convOv").hidden = !show;
+    if (show) { if (!conv.busy) { conv.result = null; $("convDone").hidden = true; $("convFail").hidden = true; } convRender(); }
+  }
+  function convSet(p) {
+    if (conv.busy) return;
+    conv.src = p; conv.kind = convKind(p); conv.result = null;
+    if (conv.to === conv.kind) conv.to = "";
+    $("convDone").hidden = true; $("convFail").hidden = true;
+    convRender();
+  }
+  $("bConv").addEventListener("click", function () { convOpen(true); });
+  $("convX").addEventListener("click", function () { convOpen(false); });
+  $("convOv").addEventListener("click", function (ev) { if (ev.target === $("convOv") && !conv.busy) convOpen(false); });
+  $("convDrop").addEventListener("click", function () { if (!conv.busy) post({ cmd: "pick", target: "convert" }); });
+  document.querySelectorAll("#convFmts button").forEach(function (b) {
+    b.addEventListener("click", function () { conv.to = b.dataset.to; convRender(); });
+  });
+  $("convGo").addEventListener("click", function () {
+    if (!conv.kind || !conv.to || conv.busy || running()) return;
+    conv.busy = true; conv.result = null; conv.err = "";
+    $("convStage").textContent = "Converting";
+    $("convDone").hidden = true; $("convFail").hidden = true;
+    convRender();
+    post({ cmd: "run", paths: [conv.src], mode: "convert-" + conv.to, xmlDir: "drive", xmlName: "" });
+  });
+  function convExit(code) {
+    conv.busy = false;
+    var r = conv.result;
+    if (code === 0 && r && r.outputs && r.outputs.length) {
+      var many = r.outputs.length > 1;
+      $("convOk").textContent = "\u2713 " + (r.to === "prproj" ? "Ready for Premiere"
+        : many ? "Saved " + r.outputs.length + " " + CONV_NAMES[r.to] + " files, one per timeline"
+        : "Saved " + base(r.outputs[0])) + " next to the original";
+      $("convLeft").textContent = (r.notes && r.notes.length ? "Left out: " + r.notes.join(", ") + ". " : "") +
+        (r.offline ? r.offline + " clips came in offline." : "");
+      $("convOpen").hidden = r.to === "xml" || r.to === "fcpxml";
+      $("convOpen").textContent = r.to === "drp" ? "Open in Resolve" : "Open in Premiere";
+      $("convDone").hidden = false;
+    } else {
+      conv.result = null;
+      $("convFail").textContent = conv.err || "Kickoff couldn't convert that file.";
+      $("convFail").hidden = false;
+    }
+    convRender();
+  }
+  $("convOpen").addEventListener("click", function () {
+    var r = conv.result; if (!r) return;
+    if (r.to === "prproj") post({ cmd: "premiere", path: r.premiere, projectDir: r.dir });
+    else post({ cmd: "report", path: r.outputs[0] });
+  });
+  $("convShow").addEventListener("click", function () { if (conv.result) post({ cmd: "reveal", path: conv.result.outputs[0] }); });
+  $("convAgain").addEventListener("click", function () { conv.src = ""; conv.kind = ""; conv.to = ""; conv.result = null; $("convDone").hidden = true; convRender(); });
+
   window.Kickoff = {
-    started: function (paths) { if ((slop && slop.busy) || rsv) return; started(paths); },
+    started: function (paths) { if ((slop && slop.busy) || rsv || conv.busy) return; started(paths); },
     event: function (e) {
+      if (conv.busy) {
+        if (e.event === "stage") $("convStage").textContent = e.text;
+        else if (e.event === "convert") conv.result = e;
+        return;
+      }
       if (rsv) {
         if (e.event === "stage") resolveView(true, "Building in Resolve", e.text);
         else if (e.event === "resolve") rsv.result = e;
@@ -3037,6 +3218,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       else if (e.event === "slop") slop.result = e;
     },
     log: function (line) {
+      if (conv.busy) {
+        var cm = /^error:\s*(.*)/.exec(line);
+        if (cm) conv.err = cm[1].charAt(0).toUpperCase() + cm[1].slice(1);
+        return;
+      }
       if (rsv) {
         var rm = /^error:\s*(.*)/.exec(line);
         if (rm) rsv.err = rm[1].charAt(0).toUpperCase() + rm[1].slice(1);
@@ -3047,12 +3233,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       var m = /^error:\s*(.*)/.exec(line);
       if (m) slop.err = m[1].charAt(0).toUpperCase() + m[1].slice(1);
     },
-    exit: function (code) { if (rsv) return resolveExit(code); if (slop && slop.busy) return slopExit(code); onExit(code); },
+    exit: function (code) { if (conv.busy) return convExit(code); if (rsv) return resolveExit(code); if (slop && slop.busy) return slopExit(code); onExit(code); },
     add: function (paths) { add(paths); },
     drop: drop,
     folderTree: importTemplate,
     picked: function (paths, target, row) {
-      if (target === "xml") slopPicked(paths[0]);
+      if (target === "convert") convSet(paths[0]);
+      else if (target === "xml") slopPicked(paths[0]);
       else if (target === "export") setXmlDir(paths[0]);
       else if (target === "prproj") setPrDir(paths[0]);
       else add(paths, target, row);
@@ -3060,6 +3247,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     settings: function (obj) { adopt(obj); renderTree(); if (!$("vSet").hidden) renderSettings(); },
     history: function (list) { history = Array.isArray(list) ? list : []; renderHistory(); },
     dragging: function (on, x, y) {
+      if (!$("convOv").hidden) { $("convDrop").classList.toggle("over", !!on); return; }
       if (running()) return;
       if (on && (!$("vHist").hidden || !$("vSet").hidden)) showView(mode);
       document.querySelectorAll(".box.over").forEach(function (b) { b.classList.remove("over"); });

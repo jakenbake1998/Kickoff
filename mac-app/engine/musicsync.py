@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.52"
+VERSION = "0.5.53"
 
 # ---------------------------------------------------------------- constants
 
@@ -4435,7 +4435,248 @@ def by_ref(el):
                     x.remove(k)
 
 
-RESOLVE_DRIVER = r'''
+# ---------------------------------------------------------------- Premiere project files
+
+PR_TICKS = 254016000000                          # Premiere's time unit: ticks per second
+
+
+def prproj_to_xml(src, out):
+    """Read a Premiere project (.prproj, gzipped XML) and write it as an FCP7 XML: its bins, the
+    media in them and every sequence's clips (cuts, nests and on/off), which Resolve and Premiere
+    both open. Effects, titles, transitions, speed changes and multicam aren't carried; the
+    returned notes say what was left out."""
+    import gzip
+    with open(src, "rb") as fh:
+        data = fh.read()
+    if data[:2] == b"\x1f\x8b":
+        data = gzip.decompress(data)
+    try:
+        r = ET.fromstring(data)
+    except ET.ParseError:
+        raise RuntimeError("Kickoff couldn't read that Premiere project. In Premiere, use File > Export > "
+                           "Final Cut Pro XML and convert that instead")
+    objs = {}
+    for e in r:
+        k = e.get("ObjectID") or e.get("ObjectUID")
+        if k:
+            objs[k] = e
+    notes = collections.Counter()
+
+    def ref(e, tag=None):
+        """The object an element points to (ObjectRef / ObjectURef), or None."""
+        if e is None:
+            return None
+        k = e.get("ObjectRef") or e.get("ObjectURef")
+        return objs.get(k) if k else None
+
+    def num(e, path, default=0):
+        t = e.findtext(path) if e is not None else None
+        try:
+            return int(t)
+        except (TypeError, ValueError):
+            return default
+
+    def rate_el(parent, fps):
+        rt = ET.SubElement(parent, "rate")
+        ET.SubElement(rt, "timebase").text = str(int(round(fps)))
+        ET.SubElement(rt, "ntsc").text = "TRUE" if abs(fps - round(fps)) > 0.001 else "FALSE"
+
+    def clip_of(subclip):
+        """The VideoClip/AudioClip a SubClip uses: (clip element, its inner Clip block)."""
+        c = ref(subclip.find("Clip")) if subclip is not None else None
+        return (c, c.find("Clip")) if c is not None and c.find("Clip") is not None else (None, None)
+
+    def source_of(inner):
+        """('media', Media element) or ('sequence', Sequence element) for a clip's Source."""
+        s = ref(inner.find("Source"))
+        if s is None:
+            return None, None
+        ms = s.find("MediaSource")
+        if ms is not None:
+            return "media", ref(ms.find("Media"))
+        ss = s.find("SequenceSource")
+        if ss is not None:
+            return "sequence", ref(ss.find("Sequence"))
+        return None, None
+
+    files = {}                                   # media element -> <file> (first full, then by id)
+    seq_ids = {}                                 # sequence element -> id
+
+    def media_info(m):
+        path = os.path.normpath(m.findtext("ActualMediaFilePath") or m.findtext("FilePath") or "")
+        vs, aus = ref(m.find("VideoStream")), [ref(a) for a in m.findall("AudioStream")]
+        fticks = num(vs, "FrameRate") if vs is not None else 0
+        fps = PR_TICKS / fticks if fticks else 0.0
+        return path, fps, vs is not None, len([a for a in aus if a is not None])
+
+    def file_el(parent, m, seq_fps):
+        key = id(m)
+        if key in files:
+            ET.SubElement(parent, "file", id=files[key])
+            return
+        fid = "file-%d" % (len(files) + 1)
+        files[key] = fid
+        path, fps, has_v, n_a = media_info(m)
+        fps = fps or seq_fps
+        f = ET.SubElement(parent, "file", id=fid)
+        ET.SubElement(f, "name").text = os.path.basename(path)
+        ET.SubElement(f, "pathurl").text = path_to_url(path, [])
+        rate_el(f, fps)
+        tc = ET.SubElement(f, "timecode")
+        rate_el(tc, fps)
+        start = num(m, "Start") * fps / PR_TICKS
+        ET.SubElement(tc, "frame").text = str(int(round(start)))
+        ET.SubElement(tc, "displayformat").text = "NDF"
+        md = ET.SubElement(f, "media")
+        if has_v:
+            v = ET.SubElement(md, "video")
+            sc = ET.SubElement(v, "samplecharacteristics")
+            rate_el(sc, fps)
+        if n_a or not has_v:
+            a = ET.SubElement(md, "audio")
+            ET.SubElement(a, "channelcount").text = str(max(1, n_a))
+
+    def seq_id(s):
+        if id(s) not in seq_ids:
+            seq_ids[id(s)] = "sequence-%d" % (len(seq_ids) + 1)
+        return seq_ids[id(s)]
+
+    def build_sequence(s):
+        groups = {}
+        for tg in s.iter("TrackGroup"):
+            g = ref(tg.find("Second"))
+            if g is not None:
+                groups[g.tag] = g
+        vg = groups.get("VideoTrackGroup")
+        fticks = num(vg.find("TrackGroup") if vg is not None else None, "FrameRate") or 10594584000
+        fps = PR_TICKS / fticks
+        rect = (vg.findtext("FrameRect") if vg is not None else "") or "0,0,3840,2160"
+        w, h = [int(x) for x in rect.split(",")[2:4]]
+        el = ET.Element("sequence", id=seq_id(s))
+        ET.SubElement(el, "name").text = s.findtext("Name") or "Sequence"
+        rate_el(el, fps)
+        media = ET.SubElement(el, "media")
+        end_all = 0
+        tick = 0
+        for kind, gtag in (("video", "VideoTrackGroup"), ("audio", "AudioTrackGroup")):
+            g = groups.get(gtag)
+            km = ET.SubElement(media, kind)
+            if kind == "video":
+                fm = ET.SubElement(ET.SubElement(km, "format"), "samplecharacteristics")
+                rate_el(fm, fps)
+                ET.SubElement(fm, "width").text = str(w)
+                ET.SubElement(fm, "height").text = str(h)
+            tracks = g.find("TrackGroup/Tracks") if g is not None else None
+            for t in (tracks if tracks is not None else []):
+                tr = ref(t)
+                if tr is None:
+                    continue
+                ct = tr.find("ClipTrack")
+                te = ET.SubElement(km, "track")
+                if ct is not None and (ct.findtext("Track/IsMuted") == "true" or ct.findtext("Track/Muted") == "true"):
+                    ET.SubElement(te, "enabled").text = "FALSE"
+                items = ct.find("ClipItems/TrackItems") if ct is not None else None
+                if ct is not None and ct.find("TransitionItems/TrackItems") is not None and \
+                        len(ct.find("TransitionItems/TrackItems")):
+                    notes["transitions"] += len(ct.find("TransitionItems/TrackItems"))
+                for it in (items if items is not None else []):
+                    ti = ref(it)
+                    cti = ti.find("ClipTrackItem") if ti is not None else None
+                    if cti is None:
+                        notes["items it couldn't read"] += 1
+                        continue
+                    st = num(cti, "TrackItem/Start")
+                    en = num(cti, "TrackItem/End")
+                    clip, inner = clip_of(ref(cti.find("SubClip")))
+                    if inner is None:
+                        notes["titles or graphics"] += 1
+                        continue
+                    sk, src_el = source_of(inner)
+                    if src_el is None:
+                        notes["titles or graphics"] += 1
+                        continue
+                    speed = inner.findtext("PlaybackSpeed")
+                    if speed and abs(float(speed) - 1) > 1e-6:
+                        notes["speed changes"] += 1
+                    tick += 1
+                    s0, s1 = int(round(st / fticks)), int(round(en / fticks))
+                    i0 = int(round(num(inner, "InPoint") / fticks))
+                    i1 = i0 + (s1 - s0)
+                    ci = ET.SubElement(te, "clipitem", id="clipitem-%d" % tick)
+                    sub = ref(cti.find("SubClip"))
+                    nm = (sub.findtext("Name") if sub is not None else None) or "Clip"
+                    ET.SubElement(ci, "name").text = nm
+                    off = ti.findtext("ClipTrackItem/TrackItem/Disabled") == "true" or \
+                        cti.findtext("TrackItem/IsDisabled") == "true" or (sub is not None and sub.findtext("Disabled") == "true")
+                    ET.SubElement(ci, "enabled").text = "FALSE" if off else "TRUE"
+                    rate_el(ci, fps)
+                    ET.SubElement(ci, "start").text = str(s0)
+                    ET.SubElement(ci, "end").text = str(s1)
+                    ET.SubElement(ci, "in").text = str(i0)
+                    ET.SubElement(ci, "out").text = str(i1)
+                    if sk == "media":
+                        file_el(ci, src_el, fps)
+                        if kind == "audio":
+                            stt = ET.SubElement(ci, "sourcetrack")
+                            ET.SubElement(stt, "mediatype").text = "audio"
+                            ET.SubElement(stt, "trackindex").text = "1"
+                    else:
+                        ET.SubElement(ci, "sequence", id=seq_id(src_el))
+                    end_all = max(end_all, s1)
+        ET.SubElement(el, "duration").text = str(end_all)
+        tcel = ET.SubElement(el, "timecode")
+        rate_el(tcel, fps)
+        z = num(s, "Node/Properties/MZ.ZeroPoint")
+        ET.SubElement(tcel, "frame").text = str(int(round(z / fticks)))
+        ET.SubElement(tcel, "displayformat").text = "NDF"
+        return el
+
+    root_item = next((e for e in r if e.tag == "RootProjectItem"), None)
+    if root_item is None:
+        raise RuntimeError("that Premiere project has no bins in it")
+    xm = ET.Element("xmeml", version="4")
+    proj = ET.SubElement(xm, "project")
+    ET.SubElement(proj, "name").text = os.path.splitext(os.path.basename(src))[0]
+    built = []
+
+    def walk(item, parent):
+        cont = item.find("ProjectItemContainer/Items")
+        for k in (cont if cont is not None else []):
+            obj = ref(k)
+            if obj is None:
+                continue
+            name = obj.findtext("ProjectItem/Name") or "Item"
+            if obj.tag == "BinProjectItem":
+                b = ET.SubElement(parent, "bin")
+                ET.SubElement(b, "name").text = name
+                walk(obj, ET.SubElement(b, "children"))
+            elif obj.tag == "ClipProjectItem":
+                mc = ref(obj.find("MasterClip"))
+                first = ref(mc.find("Clips/Clip")) if mc is not None else None
+                inner = first.find("Clip") if first is not None else None
+                sk, src_el = source_of(inner) if inner is not None else (None, None)
+                if sk == "sequence":
+                    built.append((parent, src_el))
+                elif sk == "media":
+                    path, fps, has_v, _ = media_info(src_el)
+                    c = ET.SubElement(parent, "clip", id="masterclip-%d" % (len(files) + 1))
+                    ET.SubElement(c, "name").text = name
+                    rate_el(c, fps or 23.976)
+                    ci = ET.SubElement(ET.SubElement(ET.SubElement(c, "media"), "video" if has_v else "audio"),
+                                       "track")
+                    ci = ET.SubElement(ci, "clipitem", id="masterclip-item-%d" % (len(files) + 1))
+                    ET.SubElement(ci, "name").text = name
+                    file_el(ci, src_el, fps or 23.976)
+    walk(root_item, ET.SubElement(proj, "children"))
+    for parent, s in built:
+        parent.append(build_sequence(s))
+    if not built:
+        raise RuntimeError("that Premiere project has no sequences in it")
+    write_xml(xm, out)
+    return [("%d %s" % (n, k)) for k, n in notes.items()]
+
+
+RESOLVE_HEAD = r'''
 # Kickoff's DaVinci Resolve builder. Run by musicsync.py --mode resolve with a plan file; talks to
 # Resolve Studio through its scripting API. Prints one JSON line per step. Exits with os._exit so
 # Resolve's library doesn't crash Python on the way out (macOS "Python quit unexpectedly").
@@ -4472,7 +4713,34 @@ if not resolve:
     bye(2)
 time.sleep(1)
 pm = resolve.GetProjectManager()
-name = plan["name"]
+
+def export_timelines(proj, ex):
+    """Every timeline as FCP7 XML or FCPXML: ex = {"to", "dir", "base"}. One timeline is <base>.<ext>;
+    several go in a "<base> - <FORMAT>" folder, one file each. Returns the files written."""
+    keys = ["EXPORT_FCP_7_XML"] if ex["to"] == "xml" else \
+        ["EXPORT_FCPXML_1_11", "EXPORT_FCPXML_1_10", "EXPORT_FCPXML_1_9", "EXPORT_FCPXML_1_8"]
+    const = next((getattr(resolve, k) for k in keys if getattr(resolve, k, None) is not None), None)
+    if const is None:
+        return []
+    ext = ".xml" if ex["to"] == "xml" else ".fcpxml"
+    n = proj.GetTimelineCount() or 0
+    out, d = [], ex["dir"]
+    if n > 1:
+        d = os.path.join(d, "%s - %s" % (ex["base"], "XML" if ex["to"] == "xml" else "FCPXML"))
+        os.makedirs(d, exist_ok=True)
+    for i in range(1, n + 1):
+        t = proj.GetTimelineByIndex(i)
+        if not t:
+            continue
+        say(stage="Writing %s" % t.GetName())
+        nm = ex["base"] if n == 1 else "".join(c if c not in '/:' else "-" for c in t.GetName())
+        path = os.path.join(d, nm + ext)
+        if t.Export(path, const, getattr(resolve, "EXPORT_NONE", 0)):
+            out.append(path)
+    return out
+'''
+
+RESOLVE_DRIVER = RESOLVE_HEAD + r'''name = plan["name"]
 drp = plan["drp"]
 names = set(pm.GetProjectListInCurrentFolder() or [])
 if name in names and os.path.exists(drp) and os.path.getmtime(drp) >= plan["xml_mtime"] and pm.LoadProject(name):
@@ -4595,7 +4863,8 @@ for s in plan["sequences"]:
 
 say(stage="Saving the Resolve project")
 pm.SaveProject()
-ok = pm.ExportProject(pname, drp, False)
+ok = pm.ExportProject(pname, drp, False) if drp else False
+exported = export_timelines(proj, plan["export"]) if plan.get("export") else []
 s_first = next((s for s in plan["sequences"] if s.get("open")), None)
 if s_first:
     for i in range(1, proj.GetTimelineCount() + 1):
@@ -4604,9 +4873,53 @@ if s_first:
             proj.SetCurrentTimeline(t)
 resolve.OpenPage("edit")
 say(result={"project": pname, "drp": drp if ok else "", "timelines": report, "placed": placed, "offline": offline,
-            "missing_media": missing_media})
+            "missing_media": missing_media, "outputs": exported})
 bye(0)
 '''
+
+
+# --mode convert, for an FCPXML or a .drp: Resolve opens it and writes it back out in another format
+CONVERT_DRIVER = RESOLVE_HEAD + r"""names = set(pm.GetProjectListInCurrentFolder() or [])
+BLOCKED = ("Resolve has a window open that's waiting on you (often \"Save changes to Untitled Project?\"). "
+           "Click Don't Save in Resolve, then try again.")
+n, pname = 1, plan["name"]
+while pname in names:
+    n += 1
+    pname = "%s %d" % (plan["name"], n)
+if plan["kind"] == "drp":
+    say(stage="Opening the project in Resolve")
+    if not pm.ImportProject(plan["src"], pname):
+        say(error="Resolve couldn't open that .drp. It may be from a newer Resolve, or damaged."); bye(2)
+    proj = pm.LoadProject(pname)
+    if proj is None:
+        say(error=BLOCKED); bye(2)
+else:
+    proj = pm.CreateProject(pname)
+    if proj is None:
+        say(error=BLOCKED); bye(2)
+    say(stage="Bringing the edit into Resolve")
+    if not proj.GetMediaPool().ImportTimelineFromFile(plan["src"], {"importSourceClips": True}):
+        say(error="Resolve couldn't read that file."); bye(2)
+outputs, offline = [], 0
+for i in range(1, (proj.GetTimelineCount() or 0) + 1):
+    t = proj.GetTimelineByIndex(i)
+    for kind in ("video", "audio"):
+        for ti in range(1, (t.GetTrackCount(kind) or 0) + 1):
+            for it in t.GetItemListInTrack(kind, ti) or []:
+                mpi = it.GetMediaPoolItem() if hasattr(it, "GetMediaPoolItem") else None
+                if mpi is not None and not mpi.GetClipProperty("File Path"):
+                    offline += 1
+if plan["to"] == "drp":
+    say(stage="Saving the Resolve project")
+    pm.SaveProject()
+    if pm.ExportProject(pname, plan["drp"], False):
+        outputs.append(plan["drp"])
+else:
+    outputs = export_timelines(proj, plan["export"])
+resolve.OpenPage("edit")
+say(result={"project": pname, "outputs": outputs, "timelines": proj.GetTimelineCount() or 0, "offline": offline})
+bye(0)
+"""
 
 
 RESOLVE_FPS = {23.976: "23.976", 24: "24", 25: "25", 29.97: "29.97", 30: "30", 47.952: "47.952", 48: "48",
@@ -4799,24 +5112,14 @@ def resolve_tc(f, label=None):
         tc.remove(tc.find("frame"))
 
 
-def resolve_main(args):
-    """--mode resolve PROJECT.xml: build the project in DaVinci Resolve Studio and save a .drp next to
-    the XML. The window's "Open in Resolve" button runs this."""
-    xml = next((p for p in args.paths if p.lower().endswith(".xml") and os.path.isfile(p)), None)
-    if not xml:
-        sys.exit("error: give the project XML to open in Resolve")
-    event("stage", text="Getting the project ready for Resolve")
-    work = os.path.join(tempfile.gettempdir(), "kickoff-resolve", hashlib.md5(os.path.abspath(xml).encode()).hexdigest()[:10])
-    shutil.rmtree(work, ignore_errors=True)
-    try:
-        plan = resolve_prep(os.path.abspath(xml), work)
-    except (RuntimeError, ET.ParseError, OSError) as e:
-        sys.exit("error: %s" % e)
+def run_driver(driver, plan, work):
+    """Run a Resolve script (RESOLVE_DRIVER / CONVERT_DRIVER) on a plan; relays its steps as events.
+    Returns its result, or exits with its error."""
+    os.makedirs(work, exist_ok=True)
     with open(os.path.join(work, "plan.json"), "w") as fh:
         json.dump(plan, fh)
     with open(os.path.join(work, "build.py"), "w") as fh:
-        fh.write(RESOLVE_DRIVER)
-    log("%d sequences and %d bins ready for Resolve" % (len(plan["sequences"]), len(plan["bins"])))
+        fh.write(driver)
     # Resolve's scripting library loads in a plain Python 3 (the engine's own, else the Mac's)
     pys = [sys.executable] + [p for p in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3")
                               if os.path.exists(p) and p != sys.executable]
@@ -4843,6 +5146,25 @@ def resolve_main(args):
             break
     if result is None:
         sys.exit("error: %s" % (err or "Kickoff couldn't find DaVinci Resolve Studio on this Mac."))
+    return result
+
+
+def resolve_build(xml, drp=None, export=None):
+    """Build a Premiere XML in DaVinci Resolve Studio: saves a .drp (next to the XML unless drp is given;
+    "" for none) and, with export={"to","dir","base"}, writes every timeline back out as XML or FCPXML."""
+    event("stage", text="Getting the project ready for Resolve")
+    work = os.path.join(tempfile.gettempdir(), "kickoff-resolve", hashlib.md5(os.path.abspath(xml).encode()).hexdigest()[:10])
+    shutil.rmtree(work, ignore_errors=True)
+    try:
+        plan = resolve_prep(os.path.abspath(xml), work)
+    except (RuntimeError, ET.ParseError, OSError) as e:
+        sys.exit("error: %s" % e)
+    if drp is not None:
+        plan["drp"] = drp
+    if export:
+        plan["export"] = export
+    log("%d sequences and %d bins ready for Resolve" % (len(plan["sequences"]), len(plan["bins"])))
+    result = run_driver(RESOLVE_DRIVER, plan, work)
     if result.get("reused"):
         log("%s was already in Resolve, so Kickoff opened it" % result["project"])
     else:
@@ -4853,8 +5175,103 @@ def resolve_main(args):
         for p in result.get("missing_media", []):
             log("  Resolve couldn't bring in %s" % p)
         log("Made %s in Resolve%s" % (result["project"], " and saved %s" % result["drp"] if result.get("drp") else ""))
+    return result
+
+
+def resolve_main(args):
+    """--mode resolve PROJECT.xml: build the project in DaVinci Resolve Studio and save a .drp next to
+    the XML. The window's "Open in Resolve" button runs this."""
+    xml = next((p for p in args.paths if p.lower().endswith(".xml") and os.path.isfile(p)), None)
+    if not xml:
+        sys.exit("error: give the project XML to open in Resolve")
+    result = resolve_build(xml)
     event("resolve", project=result["project"], drp=result.get("drp", ""), reused=bool(result.get("reused")),
           offline=result.get("offline", 0), timelines=len(result.get("timelines", [])))
+
+
+CONVERT_EXT = {"xml": ".xml", "fcpxml": ".fcpxml", "drp": ".drp", "prproj": ".prproj"}
+
+
+def convert_kind(path):
+    """What an edit file is: xml (FCP7 / Premiere), fcpxml, drp or prproj; None for anything else."""
+    low = path.lower().rstrip("/")
+    if low.endswith(".fcpxmld") and os.path.isdir(path):
+        return "fcpxml"
+    ext = os.path.splitext(low)[1]
+    if ext == ".xml":
+        try:
+            with open(path, "rb") as fh:
+                head = fh.read(4000).decode("utf-8", "ignore").lower()
+        except OSError:
+            return None
+        return "fcpxml" if "<fcpxml" in head else "xml" if "<xmeml" in head else None
+    return {".fcpxml": "fcpxml", ".drp": "drp", ".prproj": "prproj"}.get(ext)
+
+
+def free_path(d, base, ext):
+    """d/base+ext, or "base 2", "base 3"... so nothing already there is overwritten."""
+    p, n = os.path.join(d, base + ext), 2
+    while os.path.exists(p):
+        p, n = os.path.join(d, "%s %d%s" % (base, n, ext)), n + 1
+    return p
+
+
+def convert_main(args):
+    """--mode convert --to FORMAT FILE: an edit (XML, FCPXML, .drp or .prproj) as another of those, saved
+    next to it. A .prproj is read by Kickoff itself; FCPXML and .drp go through Resolve Studio; to
+    .prproj means an XML the window opens in a new Premiere project."""
+    src = os.path.abspath(args.paths[0])
+    kind, to = convert_kind(src), args.to
+    if not kind:
+        sys.exit("error: Kickoff can convert a Premiere or Final Cut XML, an FCPXML, a .drp or a .prproj")
+    if not to or to == kind:
+        sys.exit("error: pick a different format to convert it to")
+    d = os.path.dirname(src)
+    base = os.path.splitext(os.path.basename(src.rstrip("/")))[0]
+    if kind == "fcpxml" and os.path.isdir(src):
+        src = os.path.join(src, "Info.fcpxml")
+    notes, outputs, offline = [], [], 0
+    work = os.path.join(tempfile.gettempdir(), "kickoff-convert", hashlib.md5(src.encode()).hexdigest()[:10])
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work, exist_ok=True)
+    xml = src if kind == "xml" else None
+    if kind == "prproj":
+        event("stage", text="Reading the Premiere project")
+        xml = free_path(d, base, ".xml") if to in ("xml", "prproj") else os.path.join(work, base + ".xml")
+        try:
+            notes = prproj_to_xml(src, xml)
+        except (RuntimeError, OSError, ValueError) as e:
+            sys.exit("error: %s" % e)
+        if to in ("xml", "prproj"):
+            outputs.append(xml)
+    elif kind in ("fcpxml", "drp") and to in ("xml", "prproj"):
+        plan = {"kind": kind, "src": src, "to": "xml", "name": base,
+                "export": {"to": "xml", "dir": d, "base": base}}
+        res = run_driver(CONVERT_DRIVER, plan, work)
+        outputs, offline = res.get("outputs", []), res.get("offline", 0)
+        if to == "prproj":
+            xml = outputs[0] if outputs else None
+    elif kind in ("fcpxml", "drp"):
+        plan = {"kind": kind, "src": src, "to": to, "name": base, "drp": free_path(d, base, ".drp"),
+                "export": {"to": to, "dir": d, "base": base}}
+        res = run_driver(CONVERT_DRIVER, plan, work)
+        outputs, offline = res.get("outputs", []), res.get("offline", 0)
+    if xml and to in ("drp", "fcpxml"):
+        res = resolve_build(xml, drp=free_path(d, base, ".drp") if to == "drp" else "",
+                            export={"to": to, "dir": d, "base": base} if to == "fcpxml" else None)
+        outputs = [res["drp"]] if to == "drp" and res.get("drp") else res.get("outputs", [])
+        offline = res.get("offline", 0)
+    elif kind == "xml" and to == "prproj":
+        outputs = [src]
+    if not outputs:
+        sys.exit("error: Resolve didn't write anything. Check that DaVinci Resolve Studio is open, with no window "
+                 "waiting on you")
+    for n in notes:
+        log("Left out: %s" % n)
+    for o in outputs:
+        log("Wrote %s" % o)
+    event("convert", to=to, outputs=outputs, notes=notes, offline=offline,
+          premiere=(outputs[0] if to == "prproj" else ""), dir=d)
 
 
 def slop_main(args):
@@ -4946,7 +5363,10 @@ def main(argv=None):
                     help="keep placed stretches whose picture is a flat color (see drop_blank)")
     ap.add_argument("--no-cache", action="store_true",
                     help="don't keep decoded camera audio for the next run (see audio_cache_dir)")
-    ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras", "slop", "slopimport", "resolve"], default="auto",
+    ap.add_argument("--to", choices=["xml", "fcpxml", "drp", "prproj"],
+                    help="--mode convert: the format to turn the file into")
+    ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras", "slop", "slopimport", "resolve", "convert", "convert-xml", "convert-fcpxml",
+                             "convert-drp", "convert-prproj"], default="auto",
                     help="music: sync to the song (music video); narrative: sync each clip to the sound "
                          "recordist's audio files (timecode, else scratch audio) in one Sync sequence; cameras: "
                          "narrative with no sound files, the cameras synced to each other; setup: "
@@ -4980,6 +5400,10 @@ def main(argv=None):
         return slop_main(args)
     if args.mode == "resolve":
         return resolve_main(args)
+    if args.mode.startswith("convert"):          # the window passes convert-<format> (its runner takes a mode only)
+        if "-" in args.mode:
+            args.to = args.mode.split("-", 1)[1]
+        return convert_main(args)
     if args.sync_size == "first":
         args.sync_size = None
     else:

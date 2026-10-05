@@ -17,6 +17,8 @@ let videoExtensions: Set<String> = ["mov", "mp4", "mxf", "m4v", "mts", "m2ts", "
                                     "insv", "360", "wmv", "webm"]
 
 // what the window takes: folders (a shoot, a day, a card) and audio files (the song)
+let editExtensions: Set<String> = ["xml", "fcpxml", "fcpxmld", "drp", "prproj"]
+
 func usable(_ urls: [URL]) -> [URL] {
     urls.filter { url in
         (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
@@ -39,7 +41,10 @@ final class DropWebView: WKWebView {
     private func items(_ info: NSDraggingInfo) -> [URL] {
         let objs = info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
                                                        options: [.urlReadingFileURLsOnly: true]) ?? []
-        return usable(objs.compactMap { $0 as? URL })
+        let urls = objs.compactMap { $0 as? URL }
+        // edit files (XML, FCPXML, .drp, .prproj) too, for the Convert window
+        let kept = usable(urls)
+        return kept + urls.filter { editExtensions.contains($0.pathExtension.lowercased()) && !kept.contains($0) }
     }
 
     // the page's own coordinates (top-left origin), so it can tell which box a drop landed on
@@ -303,11 +308,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let videoTypes = videoExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
         if target == "song" { panel.allowedContentTypes = audioTypes }
         else if target == "xml" { panel.allowedContentTypes = [UTType.folder, UTType.xml, UTType.data] }
+        else if target == "convert" { panel.canChooseDirectories = false; panel.allowedContentTypes = [UTType.xml, UTType.data, UTType.package] }
         else if panel.canChooseFiles { panel.allowedContentTypes = [UTType.folder] + audioTypes + videoTypes }
         panel.allowsMultipleSelection = target == "footage" || target == "any"
         panel.canCreateDirectories = folderOnly && target != "template"
-        panel.prompt = target == "xml" ? "Choose" : target == "export" ? "Export Here" : target == "prproj" ? "Save Here" : target == "template" ? "Import" : "Add"
-        panel.message = target == "xml" ? "Choose your synced sequence XML, or the folder it's in (in Premiere: File > Export > Final Cut Pro XML)"
+        panel.prompt = target == "xml" || target == "convert" ? "Choose" : target == "export" ? "Export Here" : target == "prproj" ? "Save Here" : target == "template" ? "Import" : "Add"
+        panel.message = target == "convert" ? "Choose an XML, FCPXML, DaVinci project (.drp) or Premiere project (.prproj)"
+            : target == "xml" ? "Choose your synced sequence XML, or the folder it's in (in Premiere: File > Export > Final Cut Pro XML)"
             : target == "song" ? "Choose the song"
             : target == "footage" ? "Choose the footage: the shoot folder, a day, cards or clips"
             : target == "export" ? "Choose the folder the XML goes in"
@@ -318,6 +325,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             guard let self = self, result == .OK else { return }
             if target == "template" {
                 if let u = panel.urls.first { self.scanFolder(u) }
+                return
+            }
+            if target == "convert" {                    // the Convert window: one edit file, as is
+                if let u = panel.urls.first { self.js("Kickoff.picked(\(self.json([u.path])), \"convert\", -1)") }
                 return
             }
             if target == "xml" {                        // the Slop Cut corner tab: one XML, as is
