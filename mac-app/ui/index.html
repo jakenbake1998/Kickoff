@@ -3135,10 +3135,11 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       b.disabled = conv.busy || !conv.kind || b.dataset.to === conv.kind;
       b.setAttribute("aria-pressed", b.dataset.to === conv.to && !b.disabled ? "true" : "false");
     });
-    var resolve = conv.kind === "fcpxml" || conv.kind === "drp" || conv.to === "drp" || conv.to === "fcpxml";
-    $("convNote").textContent = !conv.to ? "" : conv.kind === "prproj" && conv.to !== "drp" && conv.to !== "fcpxml"
-      ? "Cuts, nests and audio come over. Effects, titles and transitions stay in Premiere."
+    var resolve = conv.kind === "drp" || conv.to === "drp";
+    $("convNote").textContent = !conv.to ? ""
       : resolve ? "Uses DaVinci Resolve Studio in the background. Have it open with no window waiting on you."
+      : conv.kind === "prproj" ? "Cuts, nests and audio come over. Effects, titles and transitions stay behind."
+      : conv.kind === "fcpxml" ? "Cuts and audio come over, and missing media is found on your drives. Titles and effects stay behind."
       : conv.to === "prproj" ? "Makes a Premiere project next to the file and opens it in Premiere." : "";
     $("convGo").disabled = conv.busy || !conv.kind || !conv.to || running();
     $("convGoRow").hidden = conv.busy || !!conv.result;

@@ -31,6 +31,7 @@ import tempfile
 import threading
 import urllib.parse
 import warnings
+import zipfile
 import zlib
 import xml.etree.ElementTree as ET
 import dataclasses
@@ -4676,6 +4677,364 @@ def prproj_to_xml(src, out):
     return [("%d %s" % (n, k)) for k, n in notes.items()]
 
 
+def fcp_time(v):
+    """An FCPXML time ("1001/24000s", "5s", "0s") in seconds."""
+    if not v:
+        return 0.0
+    v = v.rstrip("s")
+    if "/" in v:
+        a, b = v.split("/", 1)
+        return float(a) / float(b)
+    return float(v)
+
+
+def fcpxml_to_xml(src, out):
+    """Read an FCPXML (Final Cut Pro 10 / Resolve) and write its projects as an FCP7 XML that Premiere
+    and Resolve open: every clip flattened onto video and audio tracks at its spot, compound clips
+    opened up, the active angle of multicam clips. Titles, generators, effects and speed changes stay
+    behind; the returned notes say what was left out."""
+    r = ET.parse(src).getroot()
+    res = r.find("resources")
+    formats = {f.get("id"): f for f in (res.findall("format") if res is not None else [])}
+    assets = {a.get("id"): a for a in (res.findall("asset") if res is not None else [])}
+    medias = {m.get("id"): m for m in (res.findall("media") if res is not None else [])}
+    notes = collections.Counter()
+
+    def fps_of(fmt_id, default=23.976):
+        f = formats.get(fmt_id)
+        fd = fcp_time(f.get("frameDuration")) if f is not None and f.get("frameDuration") else 0
+        if not fd:
+            return default
+        fps = 1.0 / fd
+        for std in (23.976, 29.97, 59.94, 119.88, 47.952):
+            if abs(fps - std) < 0.01:
+                return std
+        return round(fps, 3)
+
+    def asset_path(a):
+        mr = a.find("media-rep")
+        u = (mr.get("src") if mr is not None else None) or a.get("src") or ""
+        return os.path.normpath(url_to_path(u.replace("file://localhost", "file://"))) if u else ""
+
+    def flatten(children, tmap, window, lane0, items, kinds=("video", "audio"), muted=False, off_=False):
+        """children: elements whose offset/start are in a local time; tmap(t) gives the sequence time
+        of local time t; window = the visible (start, end) in sequence time."""
+        for e in children:
+            tag = e.tag
+            if tag in ("metadata", "adjust-volume", "adjust-transform", "adjust-crop", "filter-video",
+                       "filter-audio", "marker", "chapter-marker", "keyword", "rating", "note", "conform-rate",
+                       "timeMap", "mute", "audio-channel-source", "audio-role-source", "bookmark"):
+                continue
+            lane = e.get("lane")
+            # inside a connected clip, everything stays on that clip's lane
+            ln = lane0 if lane is None or lane0 != 0 else int(lane)
+            off, st, du = fcp_time(e.get("offset")), fcp_time(e.get("start")), fcp_time(e.get("duration"))
+            t0 = tmap(off)
+            w = (max(window[0], t0), min(window[1], t0 + du)) if du else window
+            if w[1] - w[0] <= 1e-9 and tag != "spine":
+                continue
+            emap = (lambda o, s: (lambda t: tmap(o + (t - s))))(off, st)
+            eoff = off_ or e.get("enabled") == "0"         # switched off: kept, but off
+            if e.find("timeMap") is not None:
+                notes["speed changes (played at normal speed)"] += 1
+            vol = e.find("adjust-volume")
+            emuted = muted or (vol is not None and (vol.get("amount") or "").startswith("-96"))
+            if tag in ("asset-clip", "video", "audio"):
+                a = assets.get(e.get("ref"))
+                if a is not None:
+                    se = e.get("srcEnable") or "all"
+                    has_v = a.get("hasVideo") == "1" and tag != "audio" and se in ("all", "video")
+                    has_a = a.get("hasAudio") == "1" and tag != "video" and se in ("all", "audio")
+                    for kind, ok in (("video", has_v), ("audio", has_a)):
+                        if ok and kind in kinds:
+                            src_in = st + (w[0] - t0) - fcp_time(a.get("start"))
+                            items.append({"kind": kind, "start": w[0], "end": w[1], "in": src_in, "asset": a,
+                                          "lane": ln, "on": not eoff and not (kind == "audio" and emuted),
+                                          "name": e.get("name") or a.get("name")})
+                # connected clips ride on this one, in its own local time
+                flatten(list(e), emap, window, ln, items, kinds, muted, off_)
+            elif tag in ("clip", "sync-clip", "gap", "spine", "ref-clip"):
+                inner = list(e)
+                if tag == "ref-clip":
+                    m = medias.get(e.get("ref"))
+                    sq = m.find("sequence") if m is not None else None
+                    inner = (list(sq.find("spine")) if sq is not None and sq.find("spine") is not None else []) + \
+                        [c for c in e if c.get("lane")]
+                if tag == "spine":            # a storyline: its own items run in the parent's time
+                    flatten(inner, emap if e.get("offset") else tmap, w, ln, items, kinds, emuted, eoff)
+                else:
+                    flatten(inner, emap, w, ln, items, kinds, emuted, eoff)
+            elif tag == "mc-clip":
+                m = medias.get(e.get("ref"))
+                mc = m.find("multicam") if m is not None else None
+                for src_el in e.findall("mc-source"):
+                    se = src_el.get("srcEnable") or "all"
+                    ang = next((x for x in (mc.findall("mc-angle") if mc is not None else [])
+                                if x.get("angleID") == src_el.get("angleID")), None)
+                    if ang is not None:
+                        ks = tuple(k for k in kinds if se == "all" or se == k)
+                        flatten(list(ang), emap, w, ln, items, ks, emuted, eoff)
+                flatten([c for c in e if c.get("lane")], emap, window, ln, items, kinds, muted, off_)
+            elif tag in ("title", "generator"):
+                notes["titles and generators"] += 1
+            elif tag == "transition":
+                notes["transitions"] += 1
+            else:
+                flatten(list(e), emap, w, ln, items, kinds, emuted, eoff)
+
+    xm = ET.Element("xmeml", version="4")
+    proj = ET.SubElement(xm, "project")
+    ET.SubElement(proj, "name").text = os.path.splitext(os.path.basename(src))[0]
+    kids = ET.SubElement(proj, "children")
+    file_ids, nseq = {}, 0
+
+    def rate_el(parent, fps):
+        rt = ET.SubElement(parent, "rate")
+        ET.SubElement(rt, "timebase").text = str(int(round(fps)))
+        ET.SubElement(rt, "ntsc").text = "TRUE" if abs(fps - round(fps)) > 0.001 else "FALSE"
+
+    for pr in r.iter("project"):
+        sq = pr.find("sequence")
+        if sq is None or sq.find("spine") is None:
+            continue
+        nseq += 1
+        fps = fps_of(sq.get("format"))
+        fmt = formats.get(sq.get("format"))
+        w, h = (int(fmt.get("width") or 3840), int(fmt.get("height") or 2160)) if fmt is not None else (3840, 2160)
+        tc0 = fcp_time(sq.get("tcStart"))
+        items = []
+        dur = fcp_time(sq.get("duration"))
+        flatten(list(sq.find("spine")), lambda t: t, (0.0, dur or 1e9), 0, items)
+        # tracks: lanes keep their order (primary storyline on V1, higher lanes above; audio by lane,
+        # nearest the picture first), a clip going down a track when it would overlap
+        el = ET.SubElement(kids, "sequence", id="sequence-%d" % nseq)
+        ET.SubElement(el, "name").text = pr.get("name") or "Sequence %d" % nseq
+        ET.SubElement(el, "duration").text = str(int(round(dur * fps)))
+        rate_el(el, fps)
+        tce = ET.SubElement(el, "timecode")
+        rate_el(tce, fps)
+        ET.SubElement(tce, "frame").text = str(int(round(tc0 * fps)))
+        ET.SubElement(tce, "displayformat").text = "NDF"
+        media = ET.SubElement(el, "media")
+        n = 0
+        for kind in ("video", "audio"):
+            km = ET.SubElement(media, kind)
+            if kind == "video":
+                fm = ET.SubElement(ET.SubElement(km, "format"), "samplecharacteristics")
+                rate_el(fm, fps)
+                ET.SubElement(fm, "width").text = str(w)
+                ET.SubElement(fm, "height").text = str(h)
+            mine = [i for i in items if i["kind"] == kind]
+            order = sorted(set(i["lane"] for i in mine))          # video: lower lanes lower down
+            if kind == "audio":
+                order = sorted(set(i["lane"] for i in mine), key=lambda l: (0 if l >= 0 else 1, abs(l)))
+            tracks = []                          # [(lane, [(s, e)], element)]
+            for lane in order:
+                for it in sorted((i for i in mine if i["lane"] == lane), key=lambda i: i["start"]):
+                    s0, s1 = int(round(it["start"] * fps)), int(round(it["end"] * fps))
+                    if s1 <= s0:
+                        continue
+                    tr = next((t for t in tracks if t[0] == lane and all(s1 <= a or s0 >= b for a, b in t[1])), None)
+                    if tr is None:
+                        tr = (lane, [], ET.SubElement(km, "track"))
+                        tracks.append(tr)
+                    tr[1].append((s0, s1))
+                    n += 1
+                    a = it["asset"]
+                    p = asset_path(a)
+                    afps = fps_of(a.get("format"), fps) if a.get("hasVideo") == "1" else fps
+                    ci = ET.SubElement(tr[2], "clipitem", id="clipitem-%d" % n)
+                    ET.SubElement(ci, "name").text = os.path.basename(p) or it["name"]
+                    ET.SubElement(ci, "enabled").text = "TRUE" if it["on"] else "FALSE"
+                    rate_el(ci, fps)
+                    i0 = int(round(it["in"] * fps))
+                    for k, v in (("start", s0), ("end", s1), ("in", i0), ("out", i0 + s1 - s0)):
+                        ET.SubElement(ci, k).text = str(v)
+                    if p in file_ids:
+                        ET.SubElement(ci, "file", id=file_ids[p])
+                    else:
+                        fid = file_ids[p] = "file-%d" % (len(file_ids) + 1)
+                        f = ET.SubElement(ci, "file", id=fid)
+                        ET.SubElement(f, "name").text = os.path.basename(p)
+                        ET.SubElement(f, "pathurl").text = path_to_url(p, [])
+                        rate_el(f, afps)
+                        ET.SubElement(f, "duration").text = str(int(round(fcp_time(a.get("duration")) * afps)))
+                        ft = ET.SubElement(f, "timecode")
+                        rate_el(ft, afps)
+                        ET.SubElement(ft, "frame").text = str(int(round(fcp_time(a.get("start")) * afps)))
+                        ET.SubElement(ft, "displayformat").text = "NDF"
+                        fmd = ET.SubElement(f, "media")
+                        if a.get("hasVideo") == "1":
+                            ET.SubElement(ET.SubElement(fmd, "video"), "samplecharacteristics")
+                        if a.get("hasAudio") == "1":
+                            ET.SubElement(ET.SubElement(fmd, "audio"), "channelcount").text = a.get("audioChannels") or "2"
+                    if kind == "audio":
+                        stt = ET.SubElement(ci, "sourcetrack")
+                        ET.SubElement(stt, "mediatype").text = "audio"
+                        ET.SubElement(stt, "trackindex").text = "1"
+    if not nseq:
+        raise RuntimeError("that FCPXML has no project (timeline) in it")
+    write_xml(xm, out)
+    return [("%d %s" % (v, k)) for k, v in notes.items()]
+
+
+def xml_to_fcpxml(xml, out):
+    """Write a Premiere / FCP7 XML's sequences as one FCPXML (1.10) for Final Cut Pro or Resolve: each
+    sequence a project, every clip a connected clip on its own lane (video tracks above, audio below)
+    so the cut stays exactly as it was; nested sequences become compound clips."""
+    root = resolve_copy(ET.parse(xml).getroot())
+    if root.find("project") is None:                 # a sequence exported on its own
+        pr = ET.Element("project")
+        ET.SubElement(pr, "name").text = os.path.splitext(os.path.basename(xml))[0]
+        ch = ET.SubElement(pr, "children")
+        for sq in root.findall("sequence"):
+            root.remove(sq)
+            ch.append(sq)
+        root.append(pr)
+    files = {}
+    for f in root.iter("file"):
+        if len(f) and f.get("id") not in files:
+            files[f.get("id")] = f
+    seqs = [s for s in root.iter("sequence") if len(s) and s.find("media") is not None]
+    by_id = {s.get("id"): s for s in seqs if s.get("id")}
+
+    def frac(frames, fps):
+        """frames at fps as an FCPXML time."""
+        num, den = (1001, int(round(fps)) * 1000) if abs(fps - round(fps)) > 0.001 else (1, int(round(fps)))
+        return "0s" if not frames else "%d/%ds" % (int(round(frames)) * num, den)
+
+    fx = ET.Element("fcpxml", version="1.10")
+    res = ET.SubElement(fx, "resources")
+    fmt_ids, asset_ids, media_ids = {}, {}, {}
+    nid = [0]
+
+    def new_id():
+        nid[0] += 1
+        return "r%d" % nid[0]
+
+    def fmt(fps, w, h):
+        k = (fps, w, h)
+        if k not in fmt_ids:
+            fmt_ids[k] = new_id()
+            num, den = (1001, int(round(fps)) * 1000) if abs(fps - round(fps)) > 0.001 else (1, int(round(fps)))
+            ET.SubElement(res, "format", id=fmt_ids[k], frameDuration="%d/%ds" % (num, den), width=str(w), height=str(h))
+        return fmt_ids[k]
+
+    def asset(fid, sfps):
+        d = files.get(fid)
+        if d is None or not d.findtext("pathurl"):
+            return None
+        if fid in asset_ids:
+            return asset_ids[fid]
+        p = os.path.normpath(url_to_path(d.findtext("pathurl")))
+        afps = xml_fps(d) if d.find("rate") is not None else sfps
+        has_v = d.find("media/video") is not None
+        has_a = d.find("media/audio") is not None or not has_v
+        tcf = int(d.findtext("timecode/frame") or 0)
+        dur = int(d.findtext("duration") or 0)
+        aid = asset_ids[fid] = new_id()
+        a = ET.Element("asset", id=aid, name=os.path.splitext(os.path.basename(p))[0], start=frac(tcf, afps),
+                       duration=frac(dur, afps) if dur else "0s", hasVideo="1" if has_v else "0",
+                       hasAudio="1" if has_a else "0")
+        if has_v:
+            a.set("format", fmt(afps, 3840, 2160))
+        if has_a:
+            a.set("audioSources", "1")
+            a.set("audioChannels", d.findtext("media/audio/channelcount") or "2")
+        ET.SubElement(a, "media-rep", kind="original-media", src=path_to_url(p, []).replace("file://localhost", "file://"))
+        res.append(a)
+        return aid
+
+    def spine_of(s, parent):
+        """The sequence's clips as connected clips on a gap the length of the sequence."""
+        sfps = xml_fps(s) if s.find("rate") is not None else 23.976
+        dur = int(s.findtext("duration") or 0)
+        ends = [int(c.findtext("end") or 0) for c in s.iter("clipitem")]
+        dur = max([dur] + ends)
+        sp = ET.SubElement(parent, "spine")
+        gap = ET.SubElement(sp, "gap", name="Gap", offset="0s", start="0s", duration=frac(dur, sfps))
+        for kind, sign in (("video", 1), ("audio", -1)):
+            for ti, t in enumerate(s.findall("media/%s/track" % kind), 1):
+                t_on = (t.findtext("enabled") or "TRUE") != "FALSE"
+                for ci in t.findall("clipitem"):
+                    st, en = int(ci.findtext("start") or -1), int(ci.findtext("end") or -1)
+                    i0 = int(ci.findtext("in") or 0)
+                    if st < 0 or en <= st:
+                        continue
+                    on = t_on and (ci.findtext("enabled") or "TRUE") != "FALSE"
+                    nest = ci.find("sequence")
+                    attrs = {"lane": str(sign * ti), "offset": frac(st, sfps), "duration": frac(en - st, sfps)}
+                    if nest is not None:
+                        ns = by_id.get(nest.get("id")) or (nest if len(nest) else None)
+                        if ns is None:
+                            continue
+                        mid = media_for(ns)
+                        el = ET.SubElement(gap, "ref-clip", ref=mid, name=ns.findtext("name") or "Nest",
+                                           start=frac(i0, sfps), **attrs)
+                        if kind == "audio":
+                            el.set("srcEnable", "audio")
+                        elif ns.find("media/audio/track") is not None:
+                            el.set("srcEnable", "video")
+                    else:
+                        f = ci.find("file")
+                        aid = asset(f.get("id"), sfps) if f is not None else None
+                        if aid is None:
+                            continue
+                        d = files[f.get("id")]
+                        tcf = int(d.findtext("timecode/frame") or 0)
+                        afps = xml_fps(d) if d.find("rate") is not None else sfps
+                        el = ET.SubElement(gap, "asset-clip", ref=aid, name=ci.findtext("name") or "",
+                                           start=frac(tcf * sfps / afps + i0, sfps), **attrs)
+                        el.set("srcEnable", kind)
+                    if not on:
+                        el.set("enabled", "0")
+        return sfps, dur
+
+    def media_for(ns):
+        k = ns.get("id") or id(ns)
+        if k in media_ids:
+            return media_ids[k]
+        mid = media_ids[k] = new_id()
+        m = ET.Element("media", id=mid, name=ns.findtext("name") or "Nest")
+        sfps = xml_fps(ns) if ns.find("rate") is not None else 23.976
+        w = int(ns.findtext("media/video/format/samplecharacteristics/width") or 3840)
+        h = int(ns.findtext("media/video/format/samplecharacteristics/height") or 2160)
+        sq = ET.SubElement(m, "sequence", format=fmt(sfps, w, h))
+        _, dur = spine_of(ns, sq)
+        sq.set("duration", frac(dur, sfps))
+        sq.set("tcStart", frac(int(ns.findtext("timecode/frame") or 0), sfps))
+        res.append(m)
+        return mid
+
+    lib = ET.SubElement(fx, "library")
+    ev = ET.SubElement(lib, "event", name=os.path.splitext(os.path.basename(xml))[0])
+    for s in seqs:
+        sfps = xml_fps(s) if s.find("rate") is not None else 23.976
+        w = int(s.findtext("media/video/format/samplecharacteristics/width") or 3840)
+        h = int(s.findtext("media/video/format/samplecharacteristics/height") or 2160)
+        pj = ET.SubElement(ev, "project", name=s.findtext("name") or "Sequence")
+        sq = ET.SubElement(pj, "sequence", format=fmt(sfps, w, h))
+        _, dur = spine_of(s, sq)
+        sq.set("duration", frac(dur, sfps))
+        sq.set("tcStart", frac(int(s.findtext("timecode/frame") or 0), sfps))
+        sq.set("tcFormat", "NDF")
+    # resources must come before they're used: formats, then assets, then compound clips (in order made)
+    order = {"format": 0, "asset": 1, "media": 2}
+    kids = sorted(list(res), key=lambda e: order.get(e.tag, 3))
+    for k in list(res):
+        res.remove(k)
+    for k in kids:
+        res.append(k)
+    ET.indent(fx, space="    ")
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n\n')
+        fh.write(ET.tostring(fx, encoding="unicode"))
+        fh.write("\n")
+    speed = sum(1 for ci in root.iter("clipitem") for x in ci.iter("parameter")
+                if x.findtext("parameterid") == "speed" and abs(float(x.findtext("value") or 100) - 100) > 0.01)
+    return ["%d speed changes (played at normal speed)" % speed] if speed else []
+
+
 RESOLVE_HEAD = r'''
 # Kickoff's DaVinci Resolve builder. Run by musicsync.py --mode resolve with a plan file; talks to
 # Resolve Studio through its scripting API. Prints one JSON line per step. Exits with os._exit so
@@ -4827,12 +5186,19 @@ for s in plan["sequences"]:
             for c in tr["clips"]:
                 if c.get("nest") or not c.get("path"):
                     continue
-                hit = next((x for x in have if abs(x.GetStart() - t0 - c["start"]) <= 1), None)
-                mpi = hit.GetMediaPoolItem() if hit else None
-                if mpi is not None and os.path.basename(mpi.GetClipProperty("File Path") or "") == os.path.basename(c["path"]):
+                # Resolve's frame may be one off: of the clips within a frame of the spot, the one from this
+                # file counts; another file's clip is only replaced when it sits exactly there (a 1-frame clip's
+                # neighbour starts a frame away and stays)
+                near = [x for x in have if abs(x.GetStart() - t0 - c["start"]) <= 1]
+                def same(x):
+                    m = x.GetMediaPoolItem()
+                    return m is not None and os.path.basename(m.GetClipProperty("File Path") or "") == os.path.basename(c["path"])
+                hit = next((x for x in near if same(x)), None)
+                if hit is not None:
                     if not c["on"] and hit.GetClipEnabled():
                         hit.SetClipEnabled(False)
                     continue
+                hit = next((x for x in near if x.GetStart() - t0 == c["start"]), None)
                 if hit:
                     tl.DeleteClips([hit], False)
                     have = [x for x in have if x is not hit]
@@ -4886,20 +5252,13 @@ n, pname = 1, plan["name"]
 while pname in names:
     n += 1
     pname = "%s %d" % (plan["name"], n)
-if plan["kind"] == "drp":
+if True:                                   # a .drp: Resolve opens a copy of it under a new name
     say(stage="Opening the project in Resolve")
     if not pm.ImportProject(plan["src"], pname):
         say(error="Resolve couldn't open that .drp. It may be from a newer Resolve, or damaged."); bye(2)
     proj = pm.LoadProject(pname)
     if proj is None:
         say(error=BLOCKED); bye(2)
-else:
-    proj = pm.CreateProject(pname)
-    if proj is None:
-        say(error=BLOCKED); bye(2)
-    say(stage="Bringing the edit into Resolve")
-    if not proj.GetMediaPool().ImportTimelineFromFile(plan["src"], {"importSourceClips": True}):
-        say(error="Resolve couldn't read that file."); bye(2)
 outputs, offline = [], 0
 for i in range(1, (proj.GetTimelineCount() or 0) + 1):
     t = proj.GetTimelineByIndex(i)
@@ -4907,7 +5266,9 @@ for i in range(1, (proj.GetTimelineCount() or 0) + 1):
         for ti in range(1, (t.GetTrackCount(kind) or 0) + 1):
             for it in t.GetItemListInTrack(kind, ti) or []:
                 mpi = it.GetMediaPoolItem() if hasattr(it, "GetMediaPoolItem") else None
-                if mpi is not None and not mpi.GetClipProperty("File Path"):
+                if mpi is not None and not mpi.GetClipProperty("File Path") and \
+                        "compound" not in (mpi.GetClipProperty("Type") or "").lower() and \
+                        "timeline" not in (mpi.GetClipProperty("Type") or "").lower():
                     offline += 1
 if plan["to"] == "drp":
     say(stage="Saving the Resolve project")
@@ -4916,8 +5277,13 @@ if plan["to"] == "drp":
         outputs.append(plan["drp"])
 else:
     outputs = export_timelines(proj, plan["export"])
+n_tl = proj.GetTimelineCount() or 0
+if plan["to"] != "drp":                  # the copy was only for reading it out: take it away again
+    pm.SaveProject()
+    if hasattr(pm, "CloseProject") and pm.CloseProject(proj) and hasattr(pm, "DeleteProject"):
+        pm.DeleteProject(pname)
 resolve.OpenPage("edit")
-say(result={"project": pname, "outputs": outputs, "timelines": proj.GetTimelineCount() or 0, "offline": offline})
+say(result={"project": pname, "outputs": outputs, "timelines": n_tl, "offline": offline})
 bye(0)
 """
 
@@ -5032,6 +5398,9 @@ def resolve_prep(xml_path, work):
                         if b >= last and en - st > 1:
                             b, en = b - 1, en - 1
                             ci.find("out").text, ci.find("end").text = str(b), str(en)
+                        elif b >= last and a > 0:        # a 1-frame clip there shows the frame before instead
+                            a, b = a - 1, b - 1
+                            ci.find("in").text, ci.find("out").text = str(a), str(b)
                     clips.append({"start": st, "end": en, "in": a, "out": b, "path": p, "nest": nest,
                                   "ffps": ffps, "speed": sp, "on": (ci.findtext("enabled") or "TRUE") != "FALSE"})
                 tracks[kind].append({"on": (t.findtext("enabled") or "TRUE") != "FALSE", "clips": clips})
@@ -5195,8 +5564,8 @@ CONVERT_EXT = {"xml": ".xml", "fcpxml": ".fcpxml", "drp": ".drp", "prproj": ".pr
 def convert_kind(path):
     """What an edit file is: xml (FCP7 / Premiere), fcpxml, drp or prproj; None for anything else."""
     low = path.lower().rstrip("/")
-    if low.endswith(".fcpxmld") and os.path.isdir(path):
-        return "fcpxml"
+    if low.endswith(".fcpxmld") and (os.path.isdir(path) or zipfile.is_zipfile(path)):
+        return "fcpxml"                          # a bundle, or one sent zipped
     ext = os.path.splitext(low)[1]
     if ext == ".xml":
         try:
@@ -5216,7 +5585,7 @@ def free_path(d, base, ext):
     return p
 
 
-def fcpxml_prep(src, out):
+def fcpxml_prep(src, out, near=None):
     """A copy of an FCPXML for Resolve: media that isn't where the file says (made on another Mac) is
     looked for by name near the FCPXML and on its drive, and a version newer than Resolve reads (1.11)
     is labelled 1.11. Returns notes for the report."""
@@ -5230,24 +5599,28 @@ def fcpxml_prep(src, out):
     missing = {}
     for u in srcs:
         p = url_to_path(u.replace("file://localhost", "file://"))
-        if not os.path.exists(p):
-            missing.setdefault(os.path.basename(p).lower(), []).append(u)
+        if not os.path.exists(p):           # matched by name without the extension: a camera's .MP4
+            missing.setdefault(os.path.splitext(os.path.basename(p))[0].lower(), []).append(u)   # can be FCP's .mov
     if missing:
-        here = os.path.dirname(os.path.abspath(src.rstrip("/")))
+        here = near or os.path.dirname(os.path.abspath(src.rstrip("/")))
         if here.endswith(".fcpxmld"):
             here = os.path.dirname(here)
         parts = here.split(os.sep)
         roots = [here]
         if len(parts) > 2 and parts[1] == "Volumes":
             roots.append(os.sep.join(parts[:3]))            # the whole drive it's on
+        if os.path.isdir("/Volumes"):                      # then every other drive plugged in
+            roots += [os.path.join("/Volumes", v) for v in sorted(os.listdir("/Volumes"))
+                      if not v.startswith(".") and os.path.join("/Volumes", v) not in roots
+                      and not os.path.islink(os.path.join("/Volumes", v))]
         found = {}
         for root in roots:
             for dp, dns, fns in os.walk(root):
                 dns[:] = [d for d in dns if not d.startswith(".") and not re.search(r"(?i)prox(y|ies)|render|cache", d)
                           and dp.count(os.sep) - root.count(os.sep) < 7]
                 for fn in fns:
-                    k = fn.lower()
-                    if k in missing and k not in found:
+                    k, ext = os.path.splitext(fn.lower())
+                    if k in missing and k not in found and ext in MEDIA_EXT | AUDIO_EXT:
                         found[k] = os.path.join(dp, fn)
                 if len(found) == len(missing):
                     break
@@ -5268,8 +5641,9 @@ def fcpxml_prep(src, out):
 
 def convert_main(args):
     """--mode convert --to FORMAT FILE: an edit (XML, FCPXML, .drp or .prproj) as another of those, saved
-    next to it. A .prproj is read by Kickoff itself; FCPXML and .drp go through Resolve Studio; to
-    .prproj means an XML the window opens in a new Premiere project."""
+    next to it. Kickoff reads and writes XML, FCPXML and .prproj itself; a .drp goes through Resolve
+    Studio (made from an XML, or read back out as one); to .prproj means an XML the window opens in a
+    new Premiere project."""
     src = os.path.abspath(args.paths[0])
     kind, to = convert_kind(src), args.to
     if not kind:
@@ -5278,51 +5652,85 @@ def convert_main(args):
         sys.exit("error: pick a different format to convert it to")
     d = os.path.dirname(src)
     base = os.path.splitext(os.path.basename(src.rstrip("/")))[0]
-    if kind == "fcpxml" and os.path.isdir(src):
-        src = os.path.join(src, "Info.fcpxml")
     notes, outputs, offline = [], [], 0
     work = os.path.join(tempfile.gettempdir(), "kickoff-convert", hashlib.md5(src.encode()).hexdigest()[:10])
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
+
+    def xml_out():                               # the XML: next to the file when it's what they asked for
+        return free_path(d, base, ".xml") if to in ("xml", "prproj") else os.path.join(work, base + ".xml")
+
     xml = src if kind == "xml" else None
-    if kind == "fcpxml":
-        event("stage", text="Finding the media")
-        fx = os.path.join(work, base + ".fcpxml")
-        notes = fcpxml_prep(src, fx)
-        src = fx
-    if kind == "prproj":
-        event("stage", text="Reading the Premiere project")
-        xml = free_path(d, base, ".xml") if to in ("xml", "prproj") else os.path.join(work, base + ".xml")
-        try:
+    try:
+        if kind == "fcpxml":
+            if os.path.isdir(src):
+                src = os.path.join(src, "Info.fcpxml")
+            elif zipfile.is_zipfile(src):        # a bundle sent zipped (as a download or attachment)
+                with zipfile.ZipFile(src) as z:
+                    inner = next((n for n in z.namelist() if n.lower().endswith(".fcpxml")
+                                  and "__macosx" not in n.lower()), None)
+                    if not inner:
+                        sys.exit("error: that zip has no FCPXML in it")
+                    z.extract(inner, work)
+                    src = os.path.join(work, inner)
+            event("stage", text="Finding the media")
+            fx = os.path.join(work, base + ".fcpxml")
+            notes = fcpxml_prep(src, fx, near=d)
+            event("stage", text="Reading the Final Cut project")
+            xml = xml_out()
+            notes += fcpxml_to_xml(fx, xml)
+            if to in ("xml", "prproj"):
+                outputs.append(xml)
+        elif kind == "prproj":
+            event("stage", text="Reading the Premiere project")
+            xml = xml_out()
             notes = prproj_to_xml(src, xml)
-        except (RuntimeError, OSError, ValueError) as e:
-            sys.exit("error: %s" % e)
-        if to in ("xml", "prproj"):
-            outputs.append(xml)
-    elif kind in ("fcpxml", "drp") and to in ("xml", "prproj"):
-        plan = {"kind": kind, "src": src, "to": "xml", "name": base,
-                "export": {"to": "xml", "dir": d, "base": base}}
-        res = run_driver(CONVERT_DRIVER, plan, work)
-        outputs, offline = res.get("outputs", []), res.get("offline", 0)
-        if to == "prproj":
-            xml = outputs[0] if outputs else None
-    elif kind in ("fcpxml", "drp"):
-        plan = {"kind": kind, "src": src, "to": to, "name": base, "drp": free_path(d, base, ".drp"),
-                "export": {"to": to, "dir": d, "base": base}}
-        res = run_driver(CONVERT_DRIVER, plan, work)
-        outputs, offline = res.get("outputs", []), res.get("offline", 0)
-    if xml and to in ("drp", "fcpxml"):
-        res = resolve_build(xml, drp=free_path(d, base, ".drp") if to == "drp" else "",
-                            export={"to": to, "dir": d, "base": base} if to == "fcpxml" else None)
-        outputs = [res["drp"]] if to == "drp" and res.get("drp") else res.get("outputs", [])
-        offline = res.get("offline", 0)
-    elif kind == "xml" and to == "prproj":
-        outputs = [src]
+            if to in ("xml", "prproj"):
+                outputs.append(xml)
+        elif kind == "drp":
+            plan = {"kind": "drp", "src": src, "to": "xml", "name": base,
+                    "export": {"to": "xml", "dir": d if to in ("xml", "prproj") else work, "base": base}}
+            res = run_driver(CONVERT_DRIVER, plan, work)
+            got, offline = res.get("outputs", []), res.get("offline", 0)
+            for o in got:                        # Resolve adds " (Resolve)" to every sequence name
+                tree = ET.parse(o)
+                for sq in tree.getroot().iter("sequence"):
+                    nm = sq.find("name")
+                    if nm is not None and nm.text:
+                        nm.text = re.sub(r"( \(Resolve\))+$", "", nm.text)
+                write_xml(tree.getroot(), o)
+            if to in ("xml", "prproj"):
+                outputs = got
+            xml = got[0] if got else None
+            if to == "fcpxml" and len(got) > 1:  # several timelines: one XML with them all
+                merged = ET.Element("xmeml", version="4")
+                pr = ET.SubElement(merged, "project")
+                ET.SubElement(pr, "name").text = base
+                ch = ET.SubElement(pr, "children")
+                for o in got:
+                    for sq in ET.parse(o).getroot().iter("sequence"):
+                        if sq.find("media") is not None:
+                            ch.append(sq)
+                xml = os.path.join(work, base + " (all).xml")
+                write_xml(merged, xml)
+        if to == "fcpxml" and xml:
+            event("stage", text="Writing the FCPXML")
+            out = free_path(d, base, ".fcpxml")
+            notes += xml_to_fcpxml(xml, out)
+            outputs = [out]
+        elif to == "drp" and xml:
+            res = resolve_build(xml, drp=free_path(d, base, ".drp"))
+            outputs = [res["drp"]] if res.get("drp") else []
+            offline = res.get("offline", 0)
+        elif kind == "xml" and to == "prproj":
+            outputs = [src]
+    except (RuntimeError, OSError, ValueError, ET.ParseError, zipfile.BadZipFile) as e:
+        sys.exit("error: %s" % e)
     if not outputs:
         sys.exit("error: Resolve didn't write anything. Check that DaVinci Resolve Studio is open, with no window "
                  "waiting on you")
     for n in notes:
-        log("Left out: %s" % n)
+        log("Left out or changed: %s" % n)
     for o in outputs:
         log("Wrote %s" % o)
     event("convert", to=to, outputs=outputs, notes=notes, offline=offline,
