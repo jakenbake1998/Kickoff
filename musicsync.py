@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.50"
+VERSION = "0.5.51"
 
 # ---------------------------------------------------------------- constants
 
@@ -4714,6 +4714,12 @@ def resolve_prep(xml_path, work):
                     clips.append({"start": st, "end": en, "in": a, "out": b, "path": p, "nest": nest,
                                   "ffps": ffps, "speed": sp, "on": (ci.findtext("enabled") or "TRUE") != "FALSE"})
                 tracks[kind].append({"on": (t.findtext("enabled") or "TRUE") != "FALSE", "clips": clips})
+        # Resolve links a clip by its name: a renamed one ("... (no match to song)", "(pass 2 of 3)")
+        # comes in offline, so every clip, nested ones too, carries its file's own name
+        for ci in s.iter("clipitem"):
+            p = fpath(ci.find("file")) if ci.find("file") is not None else None
+            if p and ci.find("name") is not None:
+                ci.find("name").text = os.path.basename(p)
         name = s.findtext("name") or "Sequence %d" % k
         out = os.path.join(work, "%02d %s.xml" % (k, re.sub(r'[/:\\\\]+', "_", name)))
         x = ET.Element("xmeml", version="4")
