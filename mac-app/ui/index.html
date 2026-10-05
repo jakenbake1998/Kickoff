@@ -860,7 +860,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       <div class="convdone" id="convDone" hidden>
         <p class="convok" id="convOk"></p>
         <p class="convleft" id="convLeft"></p>
-        <div class="convbtns"><button class="pri" id="convOpen">Open</button><button id="convShow">Show in Finder</button><button class="quiet" id="convAgain">Convert another</button></div>
+        <div class="convbtns"><button class="pri" id="convOpen">Open</button><button class="pri" id="convBring" hidden title="Click once Premiere has the new project open">Bring the edit into Premiere</button><button id="convShow">Show in Finder</button><button class="quiet" id="convAgain">Convert another</button></div>
       </div>
       <p class="convfail" id="convFail" hidden></p>
     </div>
@@ -3180,9 +3180,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("convOk").textContent = "\u2713 " + (r.to === "prproj" ? "Ready for Premiere"
         : many ? "Saved " + r.outputs.length + " " + CONV_NAMES[r.to] + " files, one per timeline"
         : "Saved " + base(r.outputs[0])) + " next to the original";
-      $("convLeft").textContent = (r.notes && r.notes.length ? "Left out: " + r.notes.join(", ") + ". " : "") +
+      $("convLeft").textContent = (r.notes && r.notes.length ? r.notes.join(". ") + ". " : "") +
         (r.offline ? r.offline + " clips came in offline." : "");
       $("convOpen").hidden = r.to === "xml" || r.to === "fcpxml";
+      $("convBring").hidden = true;
       $("convOpen").textContent = r.to === "drp" ? "Open in Resolve" : "Open in Premiere";
       $("convDone").hidden = false;
     } else {
@@ -3194,8 +3195,19 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
   $("convOpen").addEventListener("click", function () {
     var r = conv.result; if (!r) return;
-    if (r.to === "prproj") post({ cmd: "premiere", path: r.premiere, projectDir: r.dir });
-    else post({ cmd: "report", path: r.outputs[0] });
+    if (r.to === "prproj") {
+      // Premiere drops an XML that arrives while it's still opening the project, so after opening it
+      // there's a second step: one click hands the edit to the project that's now open
+      post({ cmd: "premiere", path: r.premiere, projectDir: r.dir });
+      $("convOpen").hidden = true;
+      $("convBring").hidden = false;
+      $("convLeft").textContent = "When Premiere has the project open, click Bring the edit into Premiere.";
+    } else post({ cmd: "report", path: r.outputs[0] });
+  });
+  $("convBring").addEventListener("click", function () {
+    var r = conv.result; if (!r) return;
+    post({ cmd: "premiere", path: r.premiere });             // no project: Premiere imports it into the open one
+    $("convLeft").textContent = "Sent. The sequence shows up in the Premiere project. Save it there.";
   });
   $("convShow").addEventListener("click", function () { if (conv.result) post({ cmd: "reveal", path: conv.result.outputs[0] }); });
   $("convAgain").addEventListener("click", function () { conv.src = ""; conv.kind = ""; conv.to = ""; conv.result = null; $("convDone").hidden = true; convRender(); });

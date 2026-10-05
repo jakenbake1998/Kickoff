@@ -41,7 +41,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.53"
+VERSION = "0.5.54"
 
 # ---------------------------------------------------------------- constants
 
@@ -4674,7 +4674,7 @@ def prproj_to_xml(src, out):
     if not built:
         raise RuntimeError("that Premiere project has no sequences in it")
     write_xml(xm, out)
-    return [("%d %s" % (n, k)) for k, n in notes.items()]
+    return [("Left out %d %s" % (n, k)) for k, n in notes.items()]
 
 
 def fcp_time(v):
@@ -4736,7 +4736,7 @@ def fcpxml_to_xml(src, out):
             emap = (lambda o, s: (lambda t: tmap(o + (t - s))))(off, st)
             eoff = off_ or e.get("enabled") == "0"         # switched off: kept, but off
             if e.find("timeMap") is not None:
-                notes["speed changes (played at normal speed)"] += 1
+                notes["speed changes (they play at normal speed)"] += 1
             vol = e.find("adjust-volume")
             emuted = muted or (vol is not None and (vol.get("amount") or "").startswith("-96"))
             if tag in ("asset-clip", "video", "audio"):
@@ -4875,7 +4875,7 @@ def fcpxml_to_xml(src, out):
     if not nseq:
         raise RuntimeError("that FCPXML has no project (timeline) in it")
     write_xml(xm, out)
-    return [("%d %s" % (v, k)) for k, v in notes.items()]
+    return [("Left out %d %s" % (v, k)) for k, v in notes.items()]
 
 
 def xml_to_fcpxml(xml, out):
@@ -5032,7 +5032,7 @@ def xml_to_fcpxml(xml, out):
         fh.write("\n")
     speed = sum(1 for ci in root.iter("clipitem") for x in ci.iter("parameter")
                 if x.findtext("parameterid") == "speed" and abs(float(x.findtext("value") or 100) - 100) > 0.01)
-    return ["%d speed changes (played at normal speed)" % speed] if speed else []
+    return ["%d clips with a speed change play at normal speed" % speed] if speed else []
 
 
 RESOLVE_HEAD = r'''
@@ -5631,9 +5631,9 @@ def fcpxml_prep(src, out, near=None):
                 for u in us:
                     text = text.replace('src="%s"' % u, 'src="%s"' % path_to_url(found[k], []).replace("file://localhost", "file://"))
         if found:
-            notes.append("%d media files found in new places" % len(found))
+            notes.append("Found %d media files in new places and linked them" % len(found))
         if len(found) < len(missing):
-            notes.append("%d media files not found on this Mac (offline)" % (len(missing) - len(found)))
+            notes.append("%d media files aren't on this Mac, so they're offline" % (len(missing) - len(found)))
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(text)
     return notes
@@ -5730,7 +5730,7 @@ def convert_main(args):
         sys.exit("error: Resolve didn't write anything. Check that DaVinci Resolve Studio is open, with no window "
                  "waiting on you")
     for n in notes:
-        log("Left out or changed: %s" % n)
+        log(n)
     for o in outputs:
         log("Wrote %s" % o)
     event("convert", to=to, outputs=outputs, notes=notes, offline=offline,
