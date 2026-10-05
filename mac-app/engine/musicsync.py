@@ -4673,7 +4673,7 @@ def prproj_to_xml(src, out):
         parent.append(build_sequence(s))
     if not built:
         raise RuntimeError("that Premiere project has no sequences in it")
-    write_xml(xm, out)
+    write_xml(premiere_polish(xm), out)
     return [("Left out %d %s" % (n, k)) for k, n in notes.items()]
 
 
@@ -4874,7 +4874,7 @@ def fcpxml_to_xml(src, out):
                         ET.SubElement(stt, "trackindex").text = "1"
     if not nseq:
         raise RuntimeError("that FCPXML has no project (timeline) in it")
-    write_xml(xm, out)
+    write_xml(premiere_polish(xm), out)
     return [("Left out %d %s" % (v, k)) for k, v in notes.items()]
 
 
@@ -5033,6 +5033,173 @@ def xml_to_fcpxml(xml, out):
     speed = sum(1 for ci in root.iter("clipitem") for x in ci.iter("parameter")
                 if x.findtext("parameterid") == "speed" and abs(float(x.findtext("value") or 100) - 100) > 0.01)
     return ["%d clips with a speed change play at normal speed" % speed] if speed else []
+
+
+_FACTS = {}
+
+
+def media_facts(path):
+    """What ffprobe says about a media file: width, height, audio channels, sample rate (None if unreadable)."""
+    if path in _FACTS:
+        return _FACTS[path]
+    facts = None
+    if path and os.path.exists(path):
+        try:
+            out = subprocess.run(["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", path],
+                                 capture_output=True, text=True, timeout=30).stdout
+            st = json.loads(out or "{}").get("streams", [])
+            v = next((s for s in st if s.get("codec_type") == "video" and s.get("width")), None)
+            a = [s for s in st if s.get("codec_type") == "audio"]
+            facts = {"w": int(v["width"]) if v else 0, "h": int(v["height"]) if v else 0,
+                     "ch": sum(int(s.get("channels") or 1) for s in a), "sr": int(a[0].get("sample_rate") or 48000) if a else 48000}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            facts = None
+    _FACTS[path] = facts
+    return facts
+
+
+def premiere_polish(xm):
+    """Fill an XML written from FCPXML or a .prproj out to the shape Premiere's own export has, which
+    Premiere needs to import it (a bare one imports nothing, without a word): sequence uuid and audio
+    outputs, timecode strings, clip durations and every file's picture size and sound channels."""
+    import uuid as _uuid
+
+    def rate_of(el):
+        tb = int(el.findtext("rate/timebase") or 24)
+        return tb * 1000 / 1001.0 if (el.findtext("rate/ntsc") or "").upper() == "TRUE" else float(tb)
+
+    def rate_el(fps):
+        rt = ET.Element("rate")
+        ET.SubElement(rt, "timebase").text = str(int(round(fps)))
+        ET.SubElement(rt, "ntsc").text = "TRUE" if abs(fps - round(fps)) > 0.001 else "FALSE"
+        return rt
+
+    def order(el, tags):
+        kids = list(el)
+        for k in kids:
+            el.remove(k)
+        rank = {t: i for i, t in enumerate(tags)}
+        for k in sorted(kids, key=lambda k: rank.get(k.tag, len(tags))):
+            el.append(k)
+
+    def fix_tc(tc, fps):
+        if tc.find("rate") is None:
+            tc.insert(0, rate_el(fps))
+        if tc.find("string") is None:
+            tc.append(ET.Element("string"))
+        tc.find("string").text = fmt_frames(int(tc.findtext("frame") or 0), fps)
+        if tc.find("displayformat") is None:
+            ET.SubElement(tc, "displayformat").text = "NDF"
+        order(tc, ["rate", "string", "frame", "displayformat"])
+
+    files = {}
+    for f in xm.iter("file"):
+        if not len(f):
+            continue
+        files[f.get("id")] = f
+        p = os.path.normpath(url_to_path(f.findtext("pathurl") or ""))
+        fps = rate_of(f) if f.find("rate") is not None else 23.976
+        facts = media_facts(p) or {}
+        if f.find("timecode") is None:
+            ET.SubElement(ET.SubElement(f, "timecode"), "frame").text = "0"
+        fix_tc(f.find("timecode"), fps)
+        md = f.find("media")
+        if md is None:
+            md = ET.SubElement(f, "media")
+        has_v = md.find("video") is not None
+        has_a = md.find("audio") is not None
+        for x in list(md):
+            md.remove(x)
+        if has_v:
+            sc = ET.SubElement(ET.SubElement(md, "video"), "samplecharacteristics")
+            sc.append(rate_el(fps))
+            ET.SubElement(sc, "width").text = str(facts.get("w") or 3840)
+            ET.SubElement(sc, "height").text = str(facts.get("h") or 2160)
+            ET.SubElement(sc, "anamorphic").text = "FALSE"
+            ET.SubElement(sc, "pixelaspectratio").text = "square"
+            ET.SubElement(sc, "fielddominance").text = "none"
+        if has_a or not has_v:
+            for ch in range(1, max(1, facts.get("ch") or 2) + 1):
+                au = ET.SubElement(md, "audio")
+                sc = ET.SubElement(au, "samplecharacteristics")
+                ET.SubElement(sc, "depth").text = "16"
+                ET.SubElement(sc, "samplerate").text = str(facts.get("sr") or 48000)
+                ET.SubElement(au, "channelcount").text = "1"
+                ac = ET.SubElement(au, "audiochannel")
+                ET.SubElement(ac, "sourcechannel").text = str(ch)
+        order(f, ["name", "pathurl", "rate", "duration", "timecode", "media"])
+    n = 0
+    for sq in xm.iter("sequence"):
+        if sq.find("media") is None:
+            continue
+        fps = rate_of(sq)
+        if sq.find("uuid") is None:
+            ET.SubElement(sq, "uuid").text = str(_uuid.uuid4())
+        if sq.find("timecode") is None:
+            ET.SubElement(ET.SubElement(sq, "timecode"), "frame").text = "0"
+        fix_tc(sq.find("timecode"), fps)
+        order(sq, ["uuid", "duration", "rate", "name", "media", "timecode"])
+        au = sq.find("media/audio")
+        if au is None:
+            au = ET.SubElement(sq.find("media"), "audio")
+        if au.find("numOutputChannels") is None:
+            ET.SubElement(au, "numOutputChannels").text = "2"
+            fm = ET.SubElement(ET.SubElement(au, "format"), "samplecharacteristics")
+            ET.SubElement(fm, "depth").text = "16"
+            ET.SubElement(fm, "samplerate").text = "48000"
+            outs = ET.SubElement(au, "outputs")
+            for i in (1, 2):
+                g = ET.SubElement(outs, "group")
+                ET.SubElement(g, "index").text = str(i)
+                ET.SubElement(g, "numchannels").text = "1"
+                ET.SubElement(g, "downmix").text = "0"
+                ET.SubElement(ET.SubElement(g, "channel"), "index").text = str(i)
+        order(au, ["numOutputChannels", "format", "outputs", "track"])
+        vfm = sq.find("media/video/format/samplecharacteristics")
+        if vfm is not None:
+            for k, v in (("anamorphic", "FALSE"), ("pixelaspectratio", "square"), ("fielddominance", "none")):
+                if vfm.find(k) is None:
+                    ET.SubElement(vfm, k).text = v
+        for kind in ("video", "audio"):
+            for t in sq.findall("media/%s/track" % kind):
+                if t.find("enabled") is None:
+                    ET.SubElement(t, "enabled").text = "TRUE"
+                if t.find("locked") is None:
+                    ET.SubElement(t, "locked").text = "FALSE"
+                for ci in t.findall("clipitem"):
+                    n += 1
+                    f = ci.find("file")
+                    full = files.get(f.get("id")) if f is not None else None
+                    if ci.find("duration") is None:
+                        d = int(full.findtext("duration") or 0) if full is not None else 0
+                        ffps = rate_of(full) if full is not None and full.find("rate") is not None else fps
+                        ET.SubElement(ci, "duration").text = str(int(round(d * fps / ffps)) or
+                                                                 int(ci.findtext("out") or 0))
+                    if ci.find("masterclipid") is None and f is not None:
+                        ET.SubElement(ci, "masterclipid").text = "masterclip-" + f.get("id").split("-")[-1]
+                    order(ci, ["masterclipid", "name", "enabled", "duration", "rate", "start", "end", "in", "out",
+                               "file", "sequence", "sourcetrack"])
+                order(t, ["clipitem", "enabled", "locked"])
+        # a shot's picture and sound linked, as Premiere writes them (unlinked they can import apart)
+        groups = collections.defaultdict(list)
+        for kind in ("video", "audio"):
+            for ti, t in enumerate(sq.findall("media/%s/track" % kind), 1):
+                for k, ci in enumerate(t.findall("clipitem"), 1):
+                    f = ci.find("file")
+                    if f is not None:
+                        groups[(f.get("id"), ci.findtext("start"), ci.findtext("end"))].append((ci, kind, ti, k))
+        for g in groups.values():
+            if len(g) > 1 and any(x[1] == "video" for x in g) and any(x[1] == "audio" for x in g):
+                for ci, _, _, _ in g:
+                    for x in ci.findall("link"):
+                        ci.remove(x)
+                    for other, kind, ti, k in g:
+                        ln = ET.SubElement(ci, "link")
+                        ET.SubElement(ln, "linkclipref").text = other.get("id")
+                        ET.SubElement(ln, "mediatype").text = kind
+                        ET.SubElement(ln, "trackindex").text = str(ti)
+                        ET.SubElement(ln, "clipindex").text = str(k)
+    return xm
 
 
 RESOLVE_HEAD = r'''
