@@ -308,7 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let videoTypes = videoExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
         if target == "song" { panel.allowedContentTypes = audioTypes }
         else if target == "xml" { panel.allowedContentTypes = [UTType.folder, UTType.xml, UTType.data] }
-        else if target == "convert" { panel.canChooseDirectories = false; panel.allowedContentTypes = [UTType.xml, UTType.data, UTType.package] }
+        else if target == "convert" { panel.allowedContentTypes = [UTType.folder, UTType.xml, UTType.data, UTType.package] }   // folders too: an .fcpxmld is one
         else if panel.canChooseFiles { panel.allowedContentTypes = [UTType.folder] + audioTypes + videoTypes }
         panel.allowsMultipleSelection = target == "footage" || target == "any"
         panel.canCreateDirectories = folderOnly && target != "template"
