@@ -40,7 +40,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.51"
+VERSION = "0.5.52"
 
 # ---------------------------------------------------------------- constants
 
@@ -4619,6 +4619,14 @@ def resolve_prep(xml_path, work):
     plus a plan of the bins, their media and every clip's spot, for the builder to check and patch."""
     root = ET.parse(xml_path).getroot()
     proj = root.find("project")
+    if proj is None and root.find("sequence") is not None:
+        # a sequence exported on its own (File > Export > Final Cut Pro XML with one sequence picked)
+        proj = ET.SubElement(root, "project")
+        ET.SubElement(proj, "name").text = os.path.splitext(os.path.basename(xml_path))[0]
+        kids = ET.SubElement(proj, "children")
+        for sq in root.findall("sequence"):
+            root.remove(sq)
+            kids.append(sq)
     if proj is None:
         raise RuntimeError("that XML has no project in it")
     pname = proj.findtext("name") or os.path.splitext(os.path.basename(xml_path))[0]
@@ -4730,6 +4738,17 @@ def resolve_prep(xml_path, work):
     (fps, w, h), _ = rates.most_common(1)[0] if rates else ((23.976, 3840, 2160), 0)
     if not any(s["open"] for s in plan_seqs) and plan_seqs:
         plan_seqs[-1]["open"] = True
+    # files no bin holds (a sequence exported on its own has no bins): Footage, and audio under Music
+    held = {m for b in bins for m in b["media"]}
+    loose = {}
+    for f in files.values():
+        p = fpath(f)
+        if p and p not in held:
+            held.add(p)
+            aud = os.path.splitext(p)[1].lower() in (".wav", ".mp3", ".aif", ".aiff", ".m4a", ".flac")
+            loose.setdefault("Music" if aud else "Footage", []).append(p)
+    for k in sorted(loose):
+        bins.append({"path": [k], "media": sorted(loose[k])})
     foot = next((b["path"] for b in bins if b["path"] and b["path"][0].lower() == "footage"), ["Footage"])
     return {"name": pname, "fps": RESOLVE_FPS.get(round(fps, 3) if fps % 1 else int(fps), "%g" % fps),
             "width": w, "height": h, "bins": bins, "sequences": plan_seqs,
