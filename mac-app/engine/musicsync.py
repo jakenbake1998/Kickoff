@@ -5216,6 +5216,56 @@ def free_path(d, base, ext):
     return p
 
 
+def fcpxml_prep(src, out):
+    """A copy of an FCPXML for Resolve: media that isn't where the file says (made on another Mac) is
+    looked for by name near the FCPXML and on its drive, and a version newer than Resolve reads (1.11)
+    is labelled 1.11. Returns notes for the report."""
+    with open(src, "rb") as fh:
+        text = fh.read().decode("utf-8", "replace")
+    notes = []
+    m = re.search(r'<fcpxml version="(\d+)\.(\d+)"', text)
+    if m and (int(m.group(1)), int(m.group(2))) > (1, 11):
+        text = text.replace(m.group(0), '<fcpxml version="1.11"', 1)
+    srcs = sorted(set(re.findall(r'src="(file://[^"]+)"', text)))
+    missing = {}
+    for u in srcs:
+        p = url_to_path(u.replace("file://localhost", "file://"))
+        if not os.path.exists(p):
+            missing.setdefault(os.path.basename(p).lower(), []).append(u)
+    if missing:
+        here = os.path.dirname(os.path.abspath(src.rstrip("/")))
+        if here.endswith(".fcpxmld"):
+            here = os.path.dirname(here)
+        parts = here.split(os.sep)
+        roots = [here]
+        if len(parts) > 2 and parts[1] == "Volumes":
+            roots.append(os.sep.join(parts[:3]))            # the whole drive it's on
+        found = {}
+        for root in roots:
+            for dp, dns, fns in os.walk(root):
+                dns[:] = [d for d in dns if not d.startswith(".") and not re.search(r"(?i)prox(y|ies)|render|cache", d)
+                          and dp.count(os.sep) - root.count(os.sep) < 7]
+                for fn in fns:
+                    k = fn.lower()
+                    if k in missing and k not in found:
+                        found[k] = os.path.join(dp, fn)
+                if len(found) == len(missing):
+                    break
+            if len(found) == len(missing):
+                break
+        for k, us in missing.items():
+            if k in found:
+                for u in us:
+                    text = text.replace('src="%s"' % u, 'src="%s"' % path_to_url(found[k], []).replace("file://localhost", "file://"))
+        if found:
+            notes.append("%d media files found in new places" % len(found))
+        if len(found) < len(missing):
+            notes.append("%d media files not found on this Mac (offline)" % (len(missing) - len(found)))
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return notes
+
+
 def convert_main(args):
     """--mode convert --to FORMAT FILE: an edit (XML, FCPXML, .drp or .prproj) as another of those, saved
     next to it. A .prproj is read by Kickoff itself; FCPXML and .drp go through Resolve Studio; to
@@ -5235,6 +5285,11 @@ def convert_main(args):
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
     xml = src if kind == "xml" else None
+    if kind == "fcpxml":
+        event("stage", text="Finding the media")
+        fx = os.path.join(work, base + ".fcpxml")
+        notes = fcpxml_prep(src, fx)
+        src = fx
     if kind == "prproj":
         event("stage", text="Reading the Premiere project")
         xml = free_path(d, base, ".xml") if to in ("xml", "prproj") else os.path.join(work, base + ".xml")
