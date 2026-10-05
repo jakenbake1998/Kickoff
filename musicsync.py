@@ -4580,7 +4580,7 @@ for s in plan["sequences"]:
                     it = None
                 if it is None:
                     bad += 1; continue
-                got = mp.AppendToTimeline([{"mediaPoolItem": it, "startFrame": int(round(a)), "endFrame": int(round(b)) - 1,
+                got = mp.AppendToTimeline([{"mediaPoolItem": it, "startFrame": int(round(a)), "endFrame": int(round(b)),
                                             "mediaType": 1 if kind == "video" else 2, "trackIndex": ti,
                                             "recordFrame": t0 + c["start"]}]) or []
                 if got:
