@@ -4724,6 +4724,17 @@ def fcpxml_to_xml(src, out):
         u = (mr.get("src") if mr is not None else None) or a.get("src") or ""
         return os.path.normpath(url_to_path(u.replace("file://localhost", "file://"))) if u else ""
 
+    def channels(e, a):
+        """The file channels a clip plays ("1, 2" = both of a stereo pair), each its own mono clip in
+        Premiere, the way it brings in camera audio (left on one track, right on the next)."""
+        spec = e.get("srcCh") or next((x.get("srcCh") for x in e.findall("audio-channel-source")
+                                       if x.get("srcCh") and x.get("enabled") != "0"), None)
+        try:
+            chs = [int(c) for c in (spec or "").replace(",", " ").split()]
+        except ValueError:
+            chs = []
+        return chs or list(range(1, max(1, int(a.get("audioChannels") or 2)) + 1))
+
     def flatten(children, tmap, window, lane0, items, kinds=("video", "audio"), muted=False, off_=False):
         """children: elements whose offset/start are in a local time; tmap(t) gives the sequence time
         of local time t; window = the visible (start, end) in sequence time."""
@@ -4758,7 +4769,7 @@ def fcpxml_to_xml(src, out):
                             src_in = st + (w[0] - t0) - fcp_time(a.get("start"))
                             items.append({"kind": kind, "start": w[0], "end": w[1], "in": src_in, "asset": a,
                                           "lane": ln, "on": not eoff and not (kind == "audio" and emuted),
-                                          "name": e.get("name") or a.get("name")})
+                                          "name": e.get("name") or a.get("name"), "chs": channels(e, a)})
                 # connected clips ride on this one, in its own local time
                 flatten(list(e), emap, window, ln, items, kinds, muted, off_)
             elif tag in ("clip", "sync-clip", "gap", "spine", "ref-clip"):
@@ -4801,6 +4812,46 @@ def fcpxml_to_xml(src, out):
         ET.SubElement(rt, "timebase").text = str(int(round(fps)))
         ET.SubElement(rt, "ntsc").text = "TRUE" if abs(fps - round(fps)) > 0.001 else "FALSE"
 
+    def place(tr, it, s0, s1, ch, n, kind, fps):
+        """Write one clip on a track (an audio clip carries one file channel, ch); returns the count."""
+        tr[1].append((s0, s1))
+        n += 1
+        a = it["asset"]
+        p = asset_path(a)
+        afps = fps_of(a.get("format"), fps) if a.get("hasVideo") == "1" else fps
+        ci = ET.SubElement(tr[2], "clipitem", id="clipitem-%d" % n)
+        if kind == "audio":
+            ci.set("premiereChannelType", "mono")
+        ET.SubElement(ci, "name").text = os.path.basename(p) or it["name"]
+        ET.SubElement(ci, "enabled").text = "TRUE" if it["on"] else "FALSE"
+        rate_el(ci, fps)
+        i0 = int(round(it["in"] * fps))
+        for k, v in (("start", s0), ("end", s1), ("in", i0), ("out", i0 + s1 - s0)):
+            ET.SubElement(ci, k).text = str(v)
+        if p in file_ids:
+            ET.SubElement(ci, "file", id=file_ids[p])
+        else:
+            fid = file_ids[p] = "file-%d" % (len(file_ids) + 1)
+            f = ET.SubElement(ci, "file", id=fid)
+            ET.SubElement(f, "name").text = os.path.basename(p)
+            ET.SubElement(f, "pathurl").text = path_to_url(p, [])
+            rate_el(f, afps)
+            ET.SubElement(f, "duration").text = str(int(round(fcp_time(a.get("duration")) * afps)))
+            ft = ET.SubElement(f, "timecode")
+            rate_el(ft, afps)
+            ET.SubElement(ft, "frame").text = str(int(round(fcp_time(a.get("start")) * afps)))
+            ET.SubElement(ft, "displayformat").text = "NDF"
+            fmd = ET.SubElement(f, "media")
+            if a.get("hasVideo") == "1":
+                ET.SubElement(ET.SubElement(fmd, "video"), "samplecharacteristics")
+            if a.get("hasAudio") == "1":
+                ET.SubElement(ET.SubElement(fmd, "audio"), "channelcount").text = a.get("audioChannels") or "2"
+        if kind == "audio":
+            stt = ET.SubElement(ci, "sourcetrack")
+            ET.SubElement(stt, "mediatype").text = "audio"
+            ET.SubElement(stt, "trackindex").text = str(ch or 1)
+        return n
+
     for pr in r.iter("project"):
         sq = pr.find("sequence")
         if sq is None or sq.find("spine") is None:
@@ -4842,44 +4893,16 @@ def fcpxml_to_xml(src, out):
                     s0, s1 = int(round(it["start"] * fps)), int(round(it["end"] * fps))
                     if s1 <= s0:
                         continue
-                    tr = next((t for t in tracks if t[0] == lane and all(s1 <= a or s0 >= b for a, b in t[1])), None)
-                    if tr is None:
-                        tr = (lane, [], ET.SubElement(km, "track"))
-                        tracks.append(tr)
-                    tr[1].append((s0, s1))
-                    n += 1
-                    a = it["asset"]
-                    p = asset_path(a)
-                    afps = fps_of(a.get("format"), fps) if a.get("hasVideo") == "1" else fps
-                    ci = ET.SubElement(tr[2], "clipitem", id="clipitem-%d" % n)
-                    ET.SubElement(ci, "name").text = os.path.basename(p) or it["name"]
-                    ET.SubElement(ci, "enabled").text = "TRUE" if it["on"] else "FALSE"
-                    rate_el(ci, fps)
-                    i0 = int(round(it["in"] * fps))
-                    for k, v in (("start", s0), ("end", s1), ("in", i0), ("out", i0 + s1 - s0)):
-                        ET.SubElement(ci, k).text = str(v)
-                    if p in file_ids:
-                        ET.SubElement(ci, "file", id=file_ids[p])
-                    else:
-                        fid = file_ids[p] = "file-%d" % (len(file_ids) + 1)
-                        f = ET.SubElement(ci, "file", id=fid)
-                        ET.SubElement(f, "name").text = os.path.basename(p)
-                        ET.SubElement(f, "pathurl").text = path_to_url(p, [])
-                        rate_el(f, afps)
-                        ET.SubElement(f, "duration").text = str(int(round(fcp_time(a.get("duration")) * afps)))
-                        ft = ET.SubElement(f, "timecode")
-                        rate_el(ft, afps)
-                        ET.SubElement(ft, "frame").text = str(int(round(fcp_time(a.get("start")) * afps)))
-                        ET.SubElement(ft, "displayformat").text = "NDF"
-                        fmd = ET.SubElement(f, "media")
-                        if a.get("hasVideo") == "1":
-                            ET.SubElement(ET.SubElement(fmd, "video"), "samplecharacteristics")
-                        if a.get("hasAudio") == "1":
-                            ET.SubElement(ET.SubElement(fmd, "audio"), "channelcount").text = a.get("audioChannels") or "2"
-                    if kind == "audio":
-                        stt = ET.SubElement(ci, "sourcetrack")
-                        ET.SubElement(stt, "mediatype").text = "audio"
-                        ET.SubElement(stt, "trackindex").text = "1"
+                    chs = it["chs"] if kind == "audio" else [None]
+                    free = lambda t: t[0] == lane and all(s1 <= a or s0 >= b for a, b in t[1])
+                    base = next((k for k, t in enumerate(tracks) if t[0] == lane), len(tracks))
+                    j = next((j for j in range(base, len(tracks) - len(chs) + 1, len(chs))
+                              if all(free(t) for t in tracks[j:j + len(chs)])), None)
+                    if j is None:                # a channel per track, side by side (L above R)
+                        j = len(tracks)
+                        tracks += [(lane, [], ET.SubElement(km, "track")) for _ in chs]
+                    for ch, tr in zip(chs, tracks[j:j + len(chs)]):
+                        n = place(tr, it, s0, s1, ch, n, kind, fps)
     if not nseq:
         raise RuntimeError("that FCPXML has no project (timeline) in it")
     write_xml(premiere_polish(xm), out)
@@ -4948,7 +4971,9 @@ def xml_to_fcpxml(xml, out):
             a.set("format", fmt(afps, 3840, 2160))
         if has_a:
             a.set("audioSources", "1")
-            a.set("audioChannels", d.findtext("media/audio/channelcount") or "2")
+            # Premiere writes a stereo file as two one-channel blocks: count them all
+            a.set("audioChannels", str(sum(int(x.findtext("channelcount") or 1) for x in d.findall("media/audio"))
+                                       or 2))
         ET.SubElement(a, "media-rep", kind="original-media", src=path_to_url(p, []).replace("file://localhost", "file://"))
         res.append(a)
         return aid
@@ -4994,6 +5019,14 @@ def xml_to_fcpxml(xml, out):
                         el = ET.SubElement(gap, "asset-clip", ref=aid, name=ci.findtext("name") or "",
                                            start=frac(tcf * sfps / afps + i0, sfps), **attrs)
                         el.set("srcEnable", kind)
+                        blocks = d.findall("media/audio")
+                        ti_ = int(ci.findtext("sourcetrack/trackindex") or 0)
+                        if kind == "audio" and len(blocks) > 1 and 0 < ti_ <= len(blocks):
+                            # one channel of a file Premiere splits per channel (left and right on own tracks)
+                            first = sum(int(x.findtext("channelcount") or 1) for x in blocks[:ti_ - 1])
+                            n_ = int(blocks[ti_ - 1].findtext("channelcount") or 1)
+                            ET.SubElement(el, "audio-channel-source",
+                                          srcCh=", ".join(str(first + k + 1) for k in range(n_)))
                     if not on:
                         el.set("enabled", "0")
         return sfps, dur
@@ -5183,17 +5216,18 @@ def premiere_polish(xm):
                 if t.find("locked") is None:
                     ET.SubElement(t, "locked").text = "FALSE"
                 if kind == "audio" and not t.get("premiereTrackType"):
+                    ti = sq.findall("media/audio/track").index(t)
                     chs = set()
                     for ci in t.findall("clipitem"):
                         f = ci.find("file")
                         full = files.get(f.get("id")) if f is not None else None
                         chs.add(len(full.findall("media/audio")) if full is not None else 0)
                     if chs == {2}:   # a stereo track, so Premiere plays both channels of a stereo file
-                        t.attrib.update({"PannerCurrentValue": "0.5", "PannerName": "Balance",
+                        t.attrib.update({"PannerCurrentValue": "0.5", "PannerIsInverted": "true", "PannerName": "Balance",
                                          "currentExplodedTrackIndex": "0", "totalExplodedTrackCount": "1",
                                          "premiereTrackType": "Stereo"})
                         if t.find("outputchannelindex") is None:
-                            ET.SubElement(t, "outputchannelindex").text = "1"
+                            ET.SubElement(t, "outputchannelindex").text = "1" if ti % 2 == 0 else "2"
                 for ci in t.findall("clipitem"):
                     n += 1
                     f = ci.find("file")
@@ -5217,7 +5251,7 @@ def premiere_polish(xm):
                     if f is not None:
                         groups[(f.get("id"), ci.findtext("start"), ci.findtext("end"))].append((ci, kind, ti, k))
         for g in groups.values():
-            if len(g) > 1 and any(x[1] == "video" for x in g) and any(x[1] == "audio" for x in g):
+            if len(g) > 1 and any(x[1] == "audio" for x in g):
                 for ci, _, _, _ in g:
                     for x in ci.findall("link"):
                         ci.remove(x)
@@ -5227,6 +5261,8 @@ def premiere_polish(xm):
                         ET.SubElement(ln, "mediatype").text = kind
                         ET.SubElement(ln, "trackindex").text = str(ti)
                         ET.SubElement(ln, "clipindex").text = str(k)
+                        if kind == "audio":
+                            ET.SubElement(ln, "groupindex").text = "1"
     return xm
 
 
