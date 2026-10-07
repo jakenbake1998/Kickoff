@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 import warnings
 import zipfile
@@ -6597,6 +6598,48 @@ def match_all(clips, master, args):
 
 
 NARR_NO_MATCH = "no match to any audio file"
+NARR_GROUP_S = 1800.0   # sound files are searched in groups of at most this much audio (memory stays bounded)
+MEMORY_LIMIT = 0.4      # stop before the engine holds more than this share of the Mac's memory
+SWAP_LIMIT_GB = 6.0     # ... or pushes this much more of the Mac's memory out to disk
+
+
+class MemoryGuard(Exception):
+    pass
+
+
+_mem = {"t": 0.0, "swap0": None}
+
+
+def _swap_used_gb():
+    if sys.platform != "darwin":
+        return None
+    r = run(["sysctl", "-n", "vm.swapusage"])
+    m = re.search(r"used\s*=\s*([\d.]+)([MG])", (r.stdout or b"").decode(errors="replace"))
+    return (float(m.group(1)) / (1024 if m.group(2) == "M" else 1)) if m else None
+
+
+def memory_check():
+    """Stop with a clear message before a long run could squeeze the Mac: the engine's own peak
+    memory past MEMORY_LIMIT of the machine, or the Mac swapping SWAP_LIMIT_GB more than at the start."""
+    now = time.time()
+    if now - _mem["t"] < 5:
+        return
+    _mem["t"] = now
+    try:
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ImportError, ValueError, OSError, AttributeError):
+        peak, total = 0, 0
+    swap = _swap_used_gb()
+    if _mem["swap0"] is None:
+        _mem["swap0"] = swap
+    if total and peak > MEMORY_LIMIT * total:
+        raise MemoryGuard("Kickoff stopped itself: it needed more memory than is safe on this Mac (%.0f of %.0f GB). "
+                          "Try fewer sound files or one scene folder at a time." % (peak / 2**30, total / 2**30))
+    if swap is not None and _mem["swap0"] is not None and swap - _mem["swap0"] > SWAP_LIMIT_GB:
+        raise MemoryGuard("Kickoff stopped itself: the Mac was running out of memory (%.0f GB pushed to disk). "
+                          "Try fewer sound files or one scene folder at a time." % (swap - _mem["swap0"]))
 NARR_GAP_S = 2.0        # silence between audio files while listening, and between them on the timeline
 
 
@@ -6684,20 +6727,31 @@ def narrative(args, project_name, audio_paths):
         files.sort(key=lambda f: os.path.basename(f["path"]).lower())
     log("Audio files, in order: %s" % ", ".join(os.path.basename(f["path"]) for f in files))
 
-    # listening: every file mixed to mono, end to end with a little silence between, indexed once
-    event("stage", text="Listening to the audio files")
-    chunks, pos = [], 0.0
+    # listening: every file mixed to mono, end to end with a little silence between. The files are
+    # matched in groups of at most NARR_GROUP_S (each group indexed, searched, then let go), so a
+    # long shoot never holds hours of sound and its index in memory at once
+    pos, groups = 0.0, []
     for f in files:
-        try:
-            x = load_audio(f["path"])
-        except RuntimeError as e:
-            log("  can't read %s: %s" % (os.path.basename(f["path"]), e))
-            x = np.zeros(int(f["dur"] * SR), np.float32)
         f["at"] = pos                                  # where it starts in what the clips are matched to
-        chunks += [x, np.zeros(int(NARR_GAP_S * SR), np.float32)]
-        pos += len(x) / SR + NARR_GAP_S
-    master = MasterIndex(np.concatenate(chunks)) if chunks else None
+        pos += f["dur"] + NARR_GAP_S
+        if not groups or (f["at"] - groups[-1][0]["at"]) + f["dur"] > NARR_GROUP_S:
+            groups.append([])
+        groups[-1].append(f)
     total = pos
+
+    def group_index(g):
+        chunks = []
+        for f in g:
+            try:
+                x = load_audio(f["path"])
+            except RuntimeError as e:
+                log("  can't read %s: %s" % (os.path.basename(f["path"]), e))
+                x = np.zeros(int(f["dur"] * SR), np.float32)
+            n = int(round(f["dur"] * SR))              # exactly its length, so later files stay where "at" says
+            x = x[:n] if len(x) >= n else np.concatenate([x, np.zeros(n - len(x), np.float32)])
+            chunks += [x, np.zeros(int(NARR_GAP_S * SR), np.float32)]
+            memory_check()
+        return MasterIndex(np.concatenate(chunks))
 
     def file_at(a, b):                                 # the file a stretch [a, b] overlaps most
         best = max(files, key=lambda f: min(b, f["at"] + f["dur"]) - max(a, f["at"]))
@@ -6729,14 +6783,80 @@ def narrative(args, project_name, audio_paths):
         if args.sync_by == "timecode":
             c.reasons.append("timecode outside every audio file" if ts is not None else "no timecode")
             return c
+        return c                    # by scratch audio: searched group by group below
+
+    # timecode first for every clip; then the rest by scratch audio, one group of sound files at a time
+    indexes = {}
+
+    def by_tc(c):
+        c.how = ""
+        ts = tc_seconds(c.timecode, c.fps) if args.sync_by != "audio" else None
+        if ts is not None:
+            te = ts + (c.duration or 0) * c.speed
+            ov = [(min(te, f["tc"] + f["dur"]) - max(ts, f["tc"]), i) for i, f in enumerate(files) if f["tc"] is not None]
+            if ov and max(ov)[0] > 0:
+                return True
+        return False
+    need_audio = [c for c in clips if c.readable and not by_tc(c)] if args.sync_by != "timecode" else []
+    if need_audio and groups:
+        log("Listening to %d audio files in %d group%s" % (len(files), len(groups), "s" if len(groups) > 1 else ""))
+    done = 0
+
+    def results():
+        # clips needing no audio search come straight back; the rest once every group was searched
+        quick = [c for c in clips if c not in need_audio]
+        for c in quick:
+            yield work(c)
+        if not need_audio:
+            return
+        for gi, g in enumerate(groups):
+            event("stage", text="Listening to the audio files (%d of %d)" % (gi + 1, len(groups))
+                  if len(groups) > 1 else "Listening to the audio files")
+            searched[0] = 0
+            indexes.clear()
+            indexes[gi] = group_index(g)
+            with cf.ThreadPoolExecutor(args.jobs) as ex:
+                list(ex.map(lambda c: search_group(c, gi), need_audio))
+            indexes.clear()
+        for c in need_audio:
+            yield finish(c)
+
+    tries, searched, lock = {}, [0], threading.Lock()
+
+    def search_group(c, gi):
+        memory_check()
+        with lock:
+            searched[0] += 1
+            n = searched[0]
+        if n % 5 == 0 or n == len(need_audio):
+            event("stage", text="Matching clips to the sound%s: %d of %d" % (
+                " (part %d of %d)" % (gi + 1, len(groups)) if len(groups) > 1 else "", n, len(need_audio)))
+        t = copy.copy(c)
+        t.reasons, t.notes, t.parts = [], [], []
         try:
-            sync_clip(c, master, st)
+            sync_clip(t, indexes[gi], st)
+        except MemoryError:
+            raise
         except Exception as e:
-            c.reasons.append(REASON_UNREADABLE)
-            c.notes.append("error: %s" % e)
-            return c
+            t.reasons.append(REASON_UNREADABLE)
+            t.notes.append("error: %s" % e)
+        if t.status == "placed":
+            g0 = groups[gi][0]["at"]
+            t.offset += g0
+            for p in t.parts:
+                if getattr(p, "offset", None) is not None:
+                    p.offset += g0
+        b = tries.get(id(c))
+        if b is None or (t.status == "placed" and (b.status != "placed" or (t.confidence or 0) > (b.confidence or 0))):
+            tries[id(c)] = t
+
+    def finish(c):
+        best = tries.get(id(c))
+        if best is not None:
+            notes = c.notes
+            c.__dict__.update(best.__dict__)
+            c.notes = notes + best.notes
         if c.status == "placed" and c.split:
-            # a clip is never cut: the whole clip goes where its longest synced stretch puts it
             p = max((p for p in c.parts if p.status == "placed"), key=lambda p: p.src_out - p.src_in)
             c.offset, c.confidence = p.offset, p.confidence
             c.notes.append("placed whole by its longest matching stretch (%d stretches heard)" % len(c.parts))
@@ -6745,23 +6865,25 @@ def narrative(args, project_name, audio_paths):
             c.how = "scratch audio"
         return c
 
-    done = 0
-    with cf.ThreadPoolExecutor(args.jobs) as ex:
-        for c in ex.map(work, clips):
-            done += 1
-            if c.status == "placed" and file_at(c.offset, c.offset + c.duration * c.speed) is None:
-                c.status, c.reasons = "", ["lines up with no audio file"]
-            if c.status != "placed":
-                c.status = "not placed"
-                c.reasons = [NARR_NO_MATCH if r in (REASON_NO_MATCH, REASON_LOW_CONF) else r for r in c.reasons] \
-                    or [NARR_NO_MATCH]
-            log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, ("%.3fs by %s" % (c.offset, c.how))
-                                        if c.status == "placed" else "-- " + "; ".join(c.reasons)))
-            af = file_at(c.offset, c.offset + c.duration * c.speed) if c.status == "placed" else None
-            event("clip", done=done, total=len(clips), file=c.rel, status=c.status, passes=1,
-                  reason=c.reasons[0] if c.reasons else "", cam=clip_cam(c),
-                  audio=os.path.basename(af["path"]) if af else "", by=c.how if af else "",
-                  spans=[[round(c.offset, 2), round(c.offset + c.duration * c.speed, 2)]] if c.status == "placed" else [])
+    try:
+        found = list(results())
+    except MemoryGuard as e:
+        sys.exit("error: %s" % e)
+    for c in found:
+        done += 1
+        if c.status == "placed" and file_at(c.offset, c.offset + c.duration * c.speed) is None:
+            c.status, c.reasons = "", ["lines up with no audio file"]
+        if c.status != "placed":
+            c.status = "not placed"
+            c.reasons = [NARR_NO_MATCH if r in (REASON_NO_MATCH, REASON_LOW_CONF) else r for r in c.reasons] \
+                or [NARR_NO_MATCH]
+        log("  [%d/%d] %-40s %s" % (done, len(clips), c.rel, ("%.3fs by %s" % (c.offset, c.how))
+                                    if c.status == "placed" else "-- " + "; ".join(c.reasons)))
+        af = file_at(c.offset, c.offset + c.duration * c.speed) if c.status == "placed" else None
+        event("clip", done=done, total=len(clips), file=c.rel, status=c.status, passes=1,
+              reason=c.reasons[0] if c.reasons else "", cam=clip_cam(c),
+              audio=os.path.basename(af["path"]) if af else "", by=c.how if af else "",
+              spans=[[round(c.offset, 2), round(c.offset + c.duration * c.speed, 2)]] if c.status == "placed" else [])
 
     # the timeline: each file after the one before, with room for clips that roll before it starts
     # or after it ends, so no clip reaches over another file's sound
