@@ -6622,23 +6622,27 @@ def audio_timecode(path):
     return start, float((info.get("format") or {}).get("duration") or 0), int(a.get("channels") or 2), rate
 
 
-def drop_audio_copies(paths):
+def drop_audio_copies(paths, info):
     """The same recording copied to a second folder (a sound dump next to the scene folders) counts
-    once, or each clip would match two identical files: same name and size, first by path kept."""
-    seen, out, dropped = set(), [], 0
-    for p in sorted(paths):
+    once, or each clip would match two identical files: same name and size, or (renamed) the same
+    recorder timecode, length and channel count. The first by path is kept."""
+    seen, out, oinfo, dropped = set(), [], [], 0
+    for p, i in sorted(zip(paths, info), key=lambda pi: pi[0]):
         try:
-            key = (os.path.basename(p).lower(), os.path.getsize(p))
+            keys = [("name", os.path.basename(p).lower(), os.path.getsize(p))]
         except OSError:
-            key = (p,)
-        if key in seen:
+            keys = [("path", p)]
+        if i[0] is not None and i[1] > 0:
+            keys.append(("tc", round(i[0], 3), round(i[1], 2), i[2]))
+        if any(k in seen for k in keys):
             dropped += 1
             continue
-        seen.add(key)
+        seen.update(keys)
         out.append(p)
+        oinfo.append(i)
     if dropped:
         log("Skipped %d audio files that are copies of others" % dropped)
-    return out
+    return out, oinfo
 
 
 def narrative(args, project_name, audio_paths):
@@ -6655,15 +6659,15 @@ def narrative(args, project_name, audio_paths):
     event("stage", text="Reading %d clips and %d audio files" % (len(clips), len(audio_paths)))
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         list(ex.map(probe, clips))
-    # a sound-only file with a video extension (an .mp4 of a recorder's audio) is sound, not a camera
+    # a video-type file with no picture (an .mp4 exported from an edit: score, ambience) is neither a
+    # camera nor the recordist's sound: left out
     sound = [c for c in clips if c.readable and not c.fps and c.audio_layout]
     if sound:
-        log("Treated as audio files (no picture): %s" % ", ".join(c.rel for c in sound[:20]))
+        log("Left out %d sound-only video files (no picture): %s" % (len(sound), ", ".join(c.rel for c in sound[:20])))
         clips = [c for c in clips if c not in sound]
-        audio_paths = sorted(set(audio_paths) | {c.path for c in sound})
-    audio_paths = drop_audio_copies(audio_paths)
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         info = list(ex.map(audio_timecode, audio_paths))
+    audio_paths, info = drop_audio_copies(audio_paths, info)
     files = [dict(path=p, tc=i[0], dur=i[1], ch=i[2], rate=i[3]) for p, i in zip(audio_paths, info) if i[1] > 0]
     if cams_only:
         return narrative_cameras(args, project_name, clips)
