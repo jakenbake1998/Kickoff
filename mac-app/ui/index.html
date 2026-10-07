@@ -1076,7 +1076,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   function setTitle(t) { $("title").textContent = t; post({ cmd: "title", text: t }); }
   function show(id, on) { $(id).hidden = !on; }
   function plural(n, one, many) { return n + " " + (n === 1 ? one : (many || one + "s")); }
-  function clock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+  function clock(s) { s = Math.max(0, Math.round(s)); var m = Math.floor(s / 60); return (m >= 60 ? Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0") : m) + ":" + String(s % 60).padStart(2, "0"); }
   function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return "&#" + c.charCodeAt(0) + ";"; }); }
   function base(p) { return String(p || "").replace(/\/+$/, "").split("/").pop(); }
   function parent(p) { return String(p || "").replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/"; }
@@ -1559,7 +1559,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     live = { dur: d, lanes: {} };
     $("lanes").innerHTML = "";
     keys.forEach(function (k) { liveLane(k, cams[k]); });
-    var ax = $("laxis"), step = d > 600 ? 120 : d > 90 ? 60 : 30, marks = [0];
+    var ax = $("laxis"), step = 30, marks = [0];
+    [30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400].some(function (s) { step = s; return d / s <= 8; });   // at most ~8 labels, however long
     for (var t = step; t < d - step * 0.4; t += step) marks.push(t);
     ax.innerHTML = "";
     if (d) marks.concat([d]).forEach(function (t) {

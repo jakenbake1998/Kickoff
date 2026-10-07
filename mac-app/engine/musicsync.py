@@ -77,6 +77,9 @@ CAM_FOLDER = re.compile(r"^(?:(?i:cam(?:era)?)(?:[ _-]+([A-Za-z])|([A-Z]))(?![A-
                         r"([A-Za-z])[ _-]*(?i:cam(?:era)?)(?![A-Za-z]))")
 
 
+FOLDER_LETTER = re.compile(r"^(?:(?i:media|footage|cam(?:era)?)[ _-]*)?([A-Za-z])$")
+
+
 def skip_dir(name):
     return name.startswith(".") or name.upper() in SKIP_DIRS or bool(SKIP_DIR_RE.search(name)) or \
         name.lower() in (x.lower() for x in SETTINGS["skip_folders"])
@@ -106,7 +109,8 @@ DEFAULT_SETTINGS = {
     "labels": {},                   # camera letter -> Premiere label name (unset: CAMERA_LABELS)
     "bins": DEFAULT_BINS,
     "names": {"breakup": "{cam}_Breakup", "synced": "{cam}_Synced", "condensed": "{cam}_Synced_Condensed",
-              "nested": "{project}_CamsNested", "edit": "{project}_Edit", "slowmo": "{project}_Slow Motion"},
+              "nested": "{project}_CamsNested", "edit": "{project}_Edit", "slowmo": "{project}_Slow Motion",
+              "broll": "B Roll_Breakup"},
     "unsynced": True,               # clips that didn't sync go on V1 after the song
     "unsynced_gap_s": 60,
     "place_repeats": True,          # a take that fits two identical choruses: first copy, marked
@@ -365,6 +369,7 @@ class Clip:
     model: str = ""
     serial: str = ""
     reel_letter: str = ""
+    folder_letter: str = ""     # from a folder named "a", "b", "Media_A"... (a weaker hint than "A Cam")
     timecode: str = ""
     # results
     camera_key: str = ""
@@ -795,7 +800,8 @@ def find_clips(clips_dir, master_path, skip_dirs=()):
             # the camera's folder: one named like "A Cam (Mini LF)" at any depth (Footage/Day 1/...),
             # else the first folder under the one dropped
             cam = next((d for d in parts if CAM_FOLDER.match(d)), None) or here_cam or (parts[0] if parts else "")
-            out.append(Clip(path=p, rel=rel, top_folder=cam))
+            fl = next((m.group(1).upper() for m in (FOLDER_LETTER.match(d.strip()) for d in reversed(parts)) if m), "")
+            out.append(Clip(path=p, rel=rel, top_folder=cam, folder_letter=fl))
     return drop_copies(out)
 
 
@@ -825,9 +831,88 @@ def drop_copies(clips):
 def load_audio(path, stream="a:0"):
     r = run(["ffmpeg", "-v", "error", "-nostdin", "-i", path, "-map", "0:" + stream,
              "-vn", "-ac", "1", "-ar", str(SR), "-f", "s16le", "-acodec", "pcm_s16le", "-"])
-    if r.returncode != 0:
-        raise RuntimeError(r.stderr.decode(errors="replace").strip()[-300:])
-    return np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+    if r.returncode == 0 and r.stdout:
+        return np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+    err = r.stderr.decode(errors="replace").strip()[-300:]
+    # ffmpeg refuses some recorder poly WAVs (a channel layout that doesn't fit the channel count):
+    # read every channel on its own and mix them here, else read the WAV directly
+    try:
+        chans = _decode_channels(path, [probe_audio(path)[1]])
+        if chans:
+            return np.mean([c for _, c in chans], axis=0).astype(np.float32)
+    except RuntimeError:
+        pass
+    x = read_wav_mono(path)
+    if x is not None:
+        return x
+    raise RuntimeError(err)
+
+
+def read_wav_mono(path):
+    """A PCM / float WAV (RIFF, RF64, BWF, poly) read without ffmpeg, mixed to mono at SR; None if
+    it isn't one."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(12)
+            if len(head) < 12 or head[:4] not in (b"RIFF", b"RF64", b"BW64") or head[8:12] != b"WAVE":
+                return None
+            fmt, data_at, data_len, big = None, None, None, None
+            while True:
+                ck = fh.read(8)
+                if len(ck) < 8:
+                    break
+                cid, size = ck[:4], int.from_bytes(ck[4:], "little")
+                if cid == b"ds64":
+                    body = fh.read(size)
+                    big = int.from_bytes(body[8:16], "little")
+                    fh.seek(size % 2, 1)
+                    continue
+                if cid == b"fmt ":
+                    fmt = fh.read(size)
+                    fh.seek(size % 2, 1)
+                    continue
+                if cid == b"data":
+                    data_at = fh.tell()
+                    data_len = big if (size == 0xFFFFFFFF and big) else size
+                    break
+                fh.seek(size + size % 2, 1)
+        if fmt is None or data_at is None:
+            return None
+        tag, nch, rate = int.from_bytes(fmt[0:2], "little"), int.from_bytes(fmt[2:4], "little"), \
+            int.from_bytes(fmt[4:8], "little")
+        bits = int.from_bytes(fmt[14:16], "little")
+        if tag == 0xFFFE and len(fmt) >= 26:          # WAVE_FORMAT_EXTENSIBLE: the real format is in the GUID
+            tag = int.from_bytes(fmt[24:26], "little")
+        width = bits // 8
+        if nch < 1 or width not in (2, 3, 4) or tag not in (1, 3):
+            return None
+        data_len = min(data_len, os.path.getsize(path) - data_at)
+        frames = data_len // (width * nch)
+        raw = np.memmap(path, dtype=np.uint8, mode="r", offset=data_at, shape=(frames * width * nch,))
+        g = math.gcd(int(rate), int(SR))
+        up, down = SR // g, rate // g
+        step = max(1, (1 << 20) // down) * down          # chunks a whole number of resampling periods
+        outs = []
+        from scipy.signal import resample_poly
+        for f0 in range(0, frames, step):
+            n = min(step, frames - f0)
+            blk = raw[f0 * width * nch:(f0 + n) * width * nch]
+            if tag == 3 and width == 4:
+                x = blk.view("<f4").reshape(n, nch).mean(axis=1)
+            elif width == 2:
+                x = blk.view("<i2").reshape(n, nch).astype(np.float32).mean(axis=1) / 32768.0
+            elif width == 4:
+                x = blk.view("<i4").reshape(n, nch).astype(np.float32).mean(axis=1) / 2147483648.0
+            else:                                     # 24-bit
+                b3 = np.asarray(blk).reshape(n, nch, 3).astype(np.int32)
+                v = b3[..., 0] | (b3[..., 1] << 8) | (b3[..., 2] << 16)
+                v = np.where(v >= 1 << 23, v - (1 << 24), v)
+                x = v.astype(np.float32).mean(axis=1) / 8388608.0
+            outs.append(resample_poly(x, up, down) if up != down else x)
+        x = np.concatenate(outs) if outs else np.zeros(0, np.float32)
+        return np.ascontiguousarray(x, dtype=np.float32)
+    except (OSError, ValueError):
+        return None
 
 
 MAX_CHANNELS = 16
@@ -2638,7 +2723,7 @@ def camera_letter_hint(clip):
     if clip.reel_letter:
         return clip.reel_letter
     m = re.match(r"^([A-Z])\d{3}$", clip.top_folder, re.I)
-    return m.group(1).upper() if m else ""
+    return m.group(1).upper() if m else clip.folder_letter
 
 
 def assign_cameras(clips, group_by, prior=None, prior_folders=None):
@@ -2659,6 +2744,7 @@ def assign_cameras(clips, group_by, prior=None, prior_folders=None):
                 c.camera_key = "Camera folder " + f[0]
                 continue
             ident = (("serial " + c.serial) if c.serial else ("reel " + c.reel_letter) if c.reel_letter
+                     else ("folder " + c.folder_letter) if c.folder_letter
                      else ("folder " + c.top_folder) if c.top_folder else "")
             c.camera_key = model + (" / " + ident if ident else "")
     # clips with no readable model (e.g. an unreadable raw file) join the camera they were filed with
@@ -2667,7 +2753,8 @@ def assign_cameras(clips, group_by, prior=None, prior_folders=None):
         if c.model or c.camera_key.startswith("Camera folder "):
             continue
         mates = [k for k in known if (c.reel_letter and k.reel_letter == c.reel_letter) or
-                 (c.top_folder and k.top_folder == c.top_folder)]
+                 (c.folder_letter and camera_letter_hint(k) == c.folder_letter)] or \
+            [k for k in known if c.top_folder and k.top_folder == c.top_folder]
         if mates:
             c.camera_key = collections.Counter(k.camera_key for k in mates).most_common(1)[0][0]
         elif (prior_folders or {}).get(c.top_folder):         # filed with a camera from an earlier run
@@ -3386,6 +3473,20 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             seq = xw.sequence(condb, seq_name("condensed", letter), seq_fps, w, h, tc,
                               condense(entries, seq_fps), label, markers=marks)
             nests.append((letter, seq, (w, h), tc))
+    if not setup_only:
+        # B Roll_Breakup: every clip that didn't sync, all cameras (camera order, then file order),
+        # laid out like a camera's Breakup, each in its camera's color
+        broll = [(letter, c) for letter, cl in cams
+                 for c in ([c for c in cl if c.status != "placed"] if narr else left_out(cl))
+                 if c.readable and c.fps and c.width and c.duration]
+        if broll:
+            (w, h), fps = first_format([c for _, c in broll], seq_fps)
+            entries, pos = [], 0
+            for letter, c in broll:
+                entries.append(dict(media=Media.of_clip(c, fps), start=pos, vtrack=1, atrack=1,
+                                    label=camera_label(letter), all_audio="raw"))
+                pos += int(round(c.duration * fps))
+            xw.sequence(breakup, seq_name("broll"), fps, w, h, start_frames(fps), entries)
     maybe_empty(breakup, bpath, bool(len(breakup)))
     if narr and syncb is not None:
         (w, h) = args.sync_size or (first_format([c for c in clips if c.readable and c.fps and c.width], seq_fps)[0]
@@ -3396,6 +3497,8 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         maybe_empty(condb, where["condensed"][1], bool(nests))
 
     edit = where["edit"][0]
+    # the _Edit sequence goes in Edit > Working when that bin is there (else in Edit itself)
+    working = next((ch for ch, here in empty_ok if here == where["edit"][1] + ["Working"]), edit)
     if nests:
         # every camera's condensed sync sequence nested on its own track (A on V1, B on V2...), song on A1:
         # "<name>_CamsNested" in the Sync bin, and the same again as the Edit sequence Jake
@@ -3412,17 +3515,17 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             return entries
         xw.sequence(condb if condb is not None else syncb, seq_name("nested", project=name), seq_fps, w, h, tc,
                     all_cams())
-        xw.sequence(edit, seq_name("edit", project=name), seq_fps, w, h, tc, all_cams())
+        xw.sequence(working, seq_name("edit", project=name), seq_fps, w, h, tc, all_cams())
     elif setup_only or narr:
         # an empty sequence to cut in, at the delivery size, starting at 01:00:00:00
         usable = [c for c in clips if c.readable and c.fps and c.width]
         (w, h) = args.sync_size or (first_format(usable, seq_fps)[0] if usable else (3840, 2160))
-        xw.sequence(edit, seq_name("edit", project=name), seq_fps, w, h, start_frames(seq_fps), [])
+        xw.sequence(working, seq_name("edit", project=name), seq_fps, w, h, start_frames(seq_fps), [])
     slow = slowmo_entries(cams, seq_fps)
     if slow:
         (w, h) = args.sync_size or (3840, 2160)
         entries, marks = slow
-        xw.sequence(edit, seq_name("slowmo", project=name), seq_fps, w, h, start_frames(seq_fps), entries,
+        xw.sequence(breakup, seq_name("slowmo", project=name), seq_fps, w, h, start_frames(seq_fps), entries,
                     markers=marks)
     maybe_empty(edit, where["edit"][1], bool(len(edit)))
 
@@ -6519,6 +6622,25 @@ def audio_timecode(path):
     return start, float((info.get("format") or {}).get("duration") or 0), int(a.get("channels") or 2), rate
 
 
+def drop_audio_copies(paths):
+    """The same recording copied to a second folder (a sound dump next to the scene folders) counts
+    once, or each clip would match two identical files: same name and size, first by path kept."""
+    seen, out, dropped = set(), [], 0
+    for p in sorted(paths):
+        try:
+            key = (os.path.basename(p).lower(), os.path.getsize(p))
+        except OSError:
+            key = (p,)
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        out.append(p)
+    if dropped:
+        log("Skipped %d audio files that are copies of others" % dropped)
+    return out
+
+
 def narrative(args, project_name, audio_paths):
     """Narrative: every clip synced to the recorder's audio file it was shot with, by timecode when
     both have it, else by the camera's scratch audio. One Sync sequence: the audio files end to end in
@@ -6533,6 +6655,14 @@ def narrative(args, project_name, audio_paths):
     event("stage", text="Reading %d clips and %d audio files" % (len(clips), len(audio_paths)))
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         list(ex.map(probe, clips))
+    # a sound-only file with a video extension (an .mp4 of a recorder's audio) is sound, not a camera
+    sound = [c for c in clips if c.readable and not c.fps and c.audio_layout]
+    if sound:
+        log("Treated as audio files (no picture): %s" % ", ".join(c.rel for c in sound[:20]))
+        clips = [c for c in clips if c not in sound]
+        audio_paths = sorted(set(audio_paths) | {c.path for c in sound})
+    audio_paths = drop_audio_copies(audio_paths)
+    with cf.ThreadPoolExecutor(args.jobs) as ex:
         info = list(ex.map(audio_timecode, audio_paths))
     files = [dict(path=p, tc=i[0], dur=i[1], ch=i[2], rate=i[3]) for p, i in zip(audio_paths, info) if i[1] > 0]
     if cams_only:
