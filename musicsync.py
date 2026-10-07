@@ -6109,6 +6109,12 @@ def slop_main(args):
 
 
 def main(argv=None):
+    # a long sync runs below everything else, so the Mac stays usable while it works (ffmpeg
+    # children inherit it)
+    try:
+        os.nice(10)
+    except (AttributeError, OSError):
+        pass
     # the window's Settings page (a JSON file) sets the defaults below; flags still win over it
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--settings", default=os.environ.get("KICKOFF_SETTINGS"))
