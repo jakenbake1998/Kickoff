@@ -444,6 +444,9 @@ def sony_sidecar(path):
                     out["make"] = el.get("manufacturer", "")
                     out["model"] = el.get("modelName", "")
                     out["serial"] = el.get("serialNo", "")
+                elif tag == "VideoLayout" and el.get("pixel", "").isdigit() \
+                        and el.get("numOfVerticalLine", "").isdigit():
+                    out["size"] = (int(el.get("pixel")), int(el.get("numOfVerticalLine")))
                 elif tag == "VideoFrame":
                     cap = el.get("captureFps", "")
                     m = re.match(r"([\d.]+)", cap)
@@ -586,6 +589,8 @@ def probe(clip: Clip):
         clip.model = side.get("model") or clip.model
         clip.serial = side.get("serial") or clip.serial
         clip.capture_fps = side.get("capture_fps")
+        if not clip.width and side.get("size"):       # X-OCN: ffmpeg can't read the picture, the XML can
+            clip.width, clip.height = side["size"]
     if clip.make and clip.model and not clip.model.lower().startswith(clip.make.lower()):
         if clip.make.lower() not in ("sony",):   # Sony model names are self-explanatory
             clip.model = "%s %s" % (clip.make, clip.model)
@@ -1251,6 +1256,8 @@ class Settings:
     speed_margin: float = 0.0       # extra confidence a sped-up match must clear
     speed_strength: float = 0.5     # and how far above chance it must stand (normal: 0.25)
     place_repeats: bool = True      # place clips that fit two copies of a section at the first one
+    deep: bool = True               # waveform searches over the whole song (channel pick, rescue) and
+                                    # sped-up playback; off for a quick landmarks-only first look
 
 
 def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
@@ -1304,7 +1311,7 @@ def sync_clip(clip: Clip, master: MasterIndex, st: Settings):
         score = (ec["conf"], ec["A"]) if ec is not None else (-1, 0)
         tried.append((score, label, xc, hc, tc_, ec))
     best = max(tried, key=lambda c: c[0])
-    if len(tried) > 1 and (best[5] is None or not accepted(best[5], st)):
+    if st.deep and len(tried) > 1 and (best[5] is None or not accepted(best[5], st)):
         # the landmarks can't tell the channels apart (a Mini LF's ch3 carries a steady tone or noise
         # that fingerprints as well as the room mic does at chance): the channel whose waveform
         # lines up with the song clearly, all through the clip, is the scratch mic
@@ -1359,7 +1366,7 @@ def place_on(clip, master, st, cand, multi, speeds=True):
         # Try common speeds two ways: varispeed (pitch went up with it) and time-stretched
         # (pitch kept). Keep a speed only if it clears a stricter bar than a normal-speed match.
         best_alt = None
-        for k in (candidate_speeds(clip) if speeds else []):   # slow motion: tried on the likeliest channel
+        for k in (candidate_speeds(clip) if speeds and st.deep else []):   # slow motion: tried on the likeliest channel
             frac = fractions.Fraction(k).limit_denominator(20)
             xr = signal.resample_poly(x, frac.numerator, frac.denominator).astype(np.float32)
             alt = [("varispeed", xr, landmarks(*find_peaks(xr)))]
@@ -1390,7 +1397,8 @@ def place_on(clip, master, st, cand, multi, speeds=True):
     xs_len = len(xs) / SR if xs is not None else len(x) / SR * speed
 
     rescued = None
-    if (A < st.min_hashes or ev["strength"] < 0.25 or conf < st.threshold) and xs is not None and speed == 1.0:
+    if st.deep and (A < st.min_hashes or ev["strength"] < 0.25 or conf < st.threshold) and xs is not None \
+            and speed == 1.0:
         # too few landmarks to be sure (a short take, a sparse outro): let the waveform decide
         rescued = waveform_rescue(xs, master, [coarse] + ([ev["runner_up_offset"]] if R else []),
                                   lead=A >= st.min_hashes and ev["strength"] >= 0.25)
@@ -2744,14 +2752,28 @@ def assign_cameras(clips, group_by, prior=None, prior_folders=None):
             if f:
                 c.camera_key = "Camera folder " + f[0]
                 continue
-            ident = (("serial " + c.serial) if c.serial else ("reel " + c.reel_letter) if c.reel_letter
-                     else ("folder " + c.folder_letter) if c.folder_letter
-                     else ("folder " + c.top_folder) if c.top_folder else "")
+            # a letter the shoot gives (a folder "b" / "Media_B", else the reel in "B002C001_...")
+            # decides next: the same camera often reads differently file to file (a Venice's MXFs
+            # say "AXS" or "AXS-R7", its partner FX's MP4s say nothing at all)
+            letter = c.folder_letter or c.reel_letter
+            if letter:
+                c.camera_key = "Camera letter " + letter
+                continue
+            ident = (("serial " + c.serial) if c.serial else ("folder " + c.top_folder) if c.top_folder else "")
             c.camera_key = model + (" / " + ident if ident else "")
+    # a clip with no letter whose camera model is only ever seen under one letter is that camera
+    by_model = collections.defaultdict(set)
+    for c in clips:
+        if c.model and c.camera_key.startswith("Camera letter "):
+            by_model[c.model].add(c.camera_key)
+    for c in clips:
+        if group_by == "auto" and c.model and not c.camera_key.startswith("Camera ") \
+                and len(by_model.get(c.model, ())) == 1:
+            c.camera_key = next(iter(by_model[c.model]))
     # clips with no readable model (e.g. an unreadable raw file) join the camera they were filed with
     known = [c for c in clips if c.model]
     for c in clips:
-        if c.model or c.camera_key.startswith("Camera folder "):
+        if c.model or c.camera_key.startswith("Camera "):
             continue
         mates = [k for k in known if (c.reel_letter and k.reel_letter == c.reel_letter) or
                  (c.folder_letter and camera_letter_hint(k) == c.folder_letter)] or \
@@ -2772,6 +2794,10 @@ def assign_cameras(clips, group_by, prior=None, prior_folders=None):
         if key.startswith("Camera folder "):
             labels[key] = key[-1]
     used |= set(labels.values())
+    for key in groups:                       # then a folder or reel letter, when still free
+        if key.startswith("Camera letter ") and key[-1] not in used and (key not in prior or prior[key][0] == key[-1]):
+            labels[key] = key[-1]
+            used.add(key[-1])
     for key in groups:
         if key in labels:
             continue
@@ -2793,6 +2819,13 @@ def assign_cameras(clips, group_by, prior=None, prior_folders=None):
             used.add(letter)
     for c in clips:
         c.camera = "%s Cam" % labels[c.camera_key]
+    # a picture ffmpeg can't size (X-OCN with its card XML left behind) takes its camera's size
+    for key, cl in groups.items():
+        sizes = collections.Counter((c.width, c.height) for c in cl if c.width and c.height)
+        if sizes:
+            for c in cl:
+                if c.fps and not c.width:
+                    c.width, c.height = sizes.most_common(1)[0][0]
     return labels
 
 
@@ -6598,6 +6631,7 @@ def match_all(clips, master, args):
 
 
 NARR_NO_MATCH = "no match to any audio file"
+NARR_DEEP_GROUPS = 2    # sound groups a clip the landmarks couldn't place gets the slow waveform search in
 NARR_GROUP_S = 1800.0   # sound files are searched in groups of at most this much audio (memory stays bounded)
 MEMORY_LIMIT = 0.4      # stop before the engine holds more than this share of the Mac's memory
 SWAP_LIMIT_GB = 6.0     # ... or pushes this much more of the Mac's memory out to disk
@@ -6694,6 +6728,64 @@ def drop_audio_copies(paths, info):
     return out, oinfo
 
 
+COPY_LISTEN_S = 30.0      # seconds from the start of two same-length recordings compared to tell a copy
+
+
+def audio_head(path, secs=COPY_LISTEN_S):
+    """The first seconds of a recording, mixed to mono (None if it can't be read)."""
+    try:
+        chans = _decode_channels(path, [probe_audio(path)[1]], limit=secs)
+        if chans:
+            return np.mean([c for _, c in chans], axis=0).astype(np.float32)
+    except Exception:
+        pass
+    try:
+        return read_wav_mono(path)[:int(secs * SR)]
+    except Exception:
+        return None
+
+
+def same_sound(a, b, max_lag_s=1.0):
+    """True when two stretches of sound are the same recording (a renamed or remixed copy): their
+    best alignment within a second correlates almost perfectly."""
+    n = min(len(a), len(b))
+    if n < SR * 5:
+        return False
+    a, b = a[:n] - a[:n].mean(), b[:n] - b[:n].mean()
+    ea, eb = float(np.sqrt(np.sum(a * a))), float(np.sqrt(np.sum(b * b)))
+    if ea < 1e-3 or eb < 1e-3:                    # silence matches anything: never a copy by that
+        return False
+    m = 1 << int(np.ceil(np.log2(2 * n)))
+    xc = np.fft.irfft(np.fft.rfft(a, m) * np.conj(np.fft.rfft(b, m)), m)
+    lag = int(max_lag_s * SR)
+    peak = max(np.max(xc[:lag + 1]), np.max(xc[-lag:]))
+    return peak / (ea * eb) >= 0.95
+
+
+def drop_sound_copies(paths, info):
+    """Copies the names and timecode don't give away (a sound dump renamed and re-written): two
+    recordings of the same length whose openings are the same sound. The one with more channels
+    (the recorder's own poly file), else the first by path, is kept."""
+    keep = [True] * len(paths)
+    heads = {}
+    order = sorted(range(len(paths)), key=lambda i: (-info[i][2], paths[i]))
+    for x, i in enumerate(order):
+        if not keep[i] or info[i][1] <= 0:
+            continue
+        for j in order[x + 1:]:
+            if not keep[j] or abs(info[j][1] - info[i][1]) > 1.0:
+                continue
+            for k in (i, j):
+                if k not in heads:
+                    heads[k] = audio_head(paths[k])
+            if heads[i] is not None and heads[j] is not None and same_sound(heads[i], heads[j]):
+                keep[j] = False
+    dropped = keep.count(False)
+    if dropped:
+        log("Skipped %d audio files with the same sound as others" % dropped)
+    return [p for p, k in zip(paths, keep) if k], [i for i, k in zip(info, keep) if k]
+
+
 def narrative(args, project_name, audio_paths):
     """Narrative: every clip synced to the recorder's audio file it was shot with, by timecode when
     both have it, else by the camera's scratch audio. One Sync sequence: the audio files end to end in
@@ -6717,6 +6809,7 @@ def narrative(args, project_name, audio_paths):
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         info = list(ex.map(audio_timecode, audio_paths))
     audio_paths, info = drop_audio_copies(audio_paths, info)
+    audio_paths, info = drop_sound_copies(audio_paths, info)
     files = [dict(path=p, tc=i[0], dur=i[1], ch=i[2], rate=i[3]) for p, i in zip(audio_paths, info) if i[1] > 0]
     if cams_only:
         return narrative_cameras(args, project_name, clips)
@@ -6809,6 +6902,9 @@ def narrative(args, project_name, audio_paths):
             yield work(c)
         if not need_audio:
             return
+        # first a quick look (landmarks only) in every group; then the slow waveform search, only
+        # for the clips still unplaced and only in the two groups whose landmarks came closest
+        # (searching all of them that way was most of an 8-hour run)
         for gi, g in enumerate(groups):
             event("stage", text="Listening to the audio files (%d of %d)" % (gi + 1, len(groups))
                   if len(groups) > 1 else "Listening to the audio files")
@@ -6816,25 +6912,43 @@ def narrative(args, project_name, audio_paths):
             indexes.clear()
             indexes[gi] = group_index(g)
             with cf.ThreadPoolExecutor(args.jobs) as ex:
-                list(ex.map(lambda c: search_group(c, gi), need_audio))
+                list(ex.map(lambda c: search_group(c, gi, st_quick, need_audio), need_audio))
+            indexes.clear()
+        closer = collections.defaultdict(list)
+        for c in need_audio:
+            b = tries.get(id(c))
+            if b is not None and b.status == "placed":
+                continue
+            near = sorted((sc for sc in scores.get(id(c), {}).items() if sc[1][0] > 0), key=lambda sc: sc[1], reverse=True)
+            for gi, _ in near[:NARR_DEEP_GROUPS]:
+                closer[gi].append(c)
+        for k, gi in enumerate(sorted(closer)):
+            event("stage", text="Taking a closer listen (%d of %d)" % (k + 1, len(closer)))
+            searched[0] = 0
+            indexes.clear()
+            indexes[gi] = group_index(groups[gi])
+            with cf.ThreadPoolExecutor(args.jobs) as ex:
+                list(ex.map(lambda c: search_group(c, gi, st, closer[gi]), closer[gi]))
             indexes.clear()
         for c in need_audio:
             yield finish(c)
 
-    tries, searched, lock = {}, [0], threading.Lock()
+    tries, scores, searched, lock = {}, {}, [0], threading.Lock()
+    st_quick = copy.copy(st)
+    st_quick.deep = False
 
-    def search_group(c, gi):
+    def search_group(c, gi, how, among):
         memory_check()
         with lock:
             searched[0] += 1
             n = searched[0]
-        if n % 5 == 0 or n == len(need_audio):
+        if n % 5 == 0 or n == len(among):
             event("stage", text="Matching clips to the sound%s: %d of %d" % (
-                " (part %d of %d)" % (gi + 1, len(groups)) if len(groups) > 1 else "", n, len(need_audio)))
+                " (part %d of %d)" % (gi + 1, len(groups)) if len(groups) > 1 else "", n, len(among)))
         t = copy.copy(c)
         t.reasons, t.notes, t.parts = [], [], []
         try:
-            sync_clip(t, indexes[gi], st)
+            sync_clip(t, indexes[gi], how)
         except MemoryError:
             raise
         except Exception as e:
@@ -6846,6 +6960,8 @@ def narrative(args, project_name, audio_paths):
             for p in t.parts:
                 if getattr(p, "offset", None) is not None:
                     p.offset += g0
+        with lock:
+            scores.setdefault(id(c), {})[gi] = (t.aligned or 0, t.confidence or 0)
         b = tries.get(id(c))
         if b is None or (t.status == "placed" and (b.status != "placed" or (t.confidence or 0) > (b.confidence or 0))):
             tries[id(c)] = t
