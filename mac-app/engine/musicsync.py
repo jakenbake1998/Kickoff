@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.55"
+VERSION = "0.5.56"
 
 # ---------------------------------------------------------------- constants
 
@@ -3521,7 +3521,7 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
                                     label=camera_label(letter), all_audio="raw"))
                 pos += int(round(c.duration * fps))
             xw.sequence(breakup, seq_name("broll"), fps, w, h, start_frames(fps), entries)
-    maybe_empty(breakup, bpath, bool(len(breakup)))
+    maybe_empty(breakup, bpath, bool(len(breakup)) or bool(slowmo_entries(cams, seq_fps)))
     if narr and syncb is not None:
         (w, h) = args.sync_size or (first_format([c for c in clips if c.readable and c.fps and c.width], seq_fps)[0]
                                     if any(c.width for c in clips) else (3840, 2160))
