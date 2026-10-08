@@ -6007,6 +6007,275 @@ def fcpxml_prep(src, out, near=None):
     return notes
 
 
+SYNCED_TAG = "ks"          # prefix of the ids Synced Audio adds, so they never clash with the edit's own
+
+
+def narrative_reports(paths):
+    """{video path (lowercase): (sound file path, seconds into it the clip starts)} from the Narrative
+    reports (Kickoff Exports/narrative_report.csv) of the shoots these files are in."""
+    found, seen = {}, set()
+    for vp in paths:
+        d = os.path.dirname(vp)
+        while d and d not in seen and os.path.dirname(d) != d:
+            seen.add(d)
+            for sub_ in ("Kickoff Exports", "Premiere Sync"):
+                rp = os.path.join(d, sub_, "narrative_report.csv")
+                if not os.path.isfile(rp):
+                    continue
+                sounds = collections.defaultdict(list)
+                for root_, dirs, files in os.walk(d):
+                    dirs[:] = sorted(x for x in dirs if not skip_dir(x) and x not in ("Kickoff Exports", "Premiere Sync"))
+                    for f in sorted(files):
+                        if os.path.splitext(f)[1].lower() in AUDIO_EXT:
+                            sounds[f.lower()].append(os.path.join(root_, f))
+                with open(rp, newline="") as fh:
+                    for row in csv.DictReader(fh):
+                        if row.get("status") != "placed" or not row.get("audio_file"):
+                            continue
+                        want = row.get("audio_path") and os.path.join(d, row["audio_path"])
+                        cands = sounds.get(row["audio_file"].lower(), [])
+                        ap = want if want and os.path.isfile(want) else (cands[0] if cands else None)
+                        if ap:
+                            found[os.path.normpath(os.path.join(d, row["file"])).lower()] = \
+                                (ap, float(row["starts_into_audio_s"]))
+            d = os.path.dirname(d)
+    return found
+
+
+def synced_audio(src, out):
+    """A copy of a Premiere sequence XML with, under every shot, its camera's own audio and the sound
+    recordist's audio it was synced to (from the shoot's Narrative sync), on new tracks at the bottom,
+    linked to the picture. Returns notes for the window."""
+    tree = ET.parse(src)
+    root = tree.getroot()
+    seq = root.find("sequence") if root.find("sequence") is not None else next(root.iter("sequence"), None)
+    if seq is None or seq.find("media") is None:
+        sys.exit("error: that XML has no sequence in it")
+    files = {f.get("id"): f for f in root.iter("file") if len(f)}
+    taken = {e.get("id") for e in root.iter() if e.get("id")}
+    n_id = [0]
+
+    def new_id(kind):
+        while True:
+            n_id[0] += 1
+            i = "%s-%s-%d" % (kind, SYNCED_TAG, n_id[0])
+            if i not in taken:
+                taken.add(i)
+                return i
+
+    def rate_of(el):
+        tb = int(el.findtext("rate/timebase") or 24)
+        return tb * 1000 / 1001.0 if (el.findtext("rate/ntsc") or "").upper() == "TRUE" else float(tb)
+
+    fps = rate_of(seq)
+    audio = seq.find("media/audio")
+    if audio is None:
+        audio = ET.SubElement(seq.find("media"), "audio")
+    old_tracks = audio.findall("track")
+    shots = []                                 # (video clipitem, file element, start, end, source seconds)
+    skipped = collections.Counter()
+    for vt in seq.findall("media/video/track"):
+        for ci in vt.findall("clipitem"):
+            fr = ci.find("file")
+            f = files.get(fr.get("id")) if fr is not None else None
+            if f is None or not f.findtext("pathurl"):
+                if ci.find("sequence") is not None:
+                    skipped["nested sequences"] += 1
+                continue
+            a, b = int(ci.findtext("start") or -1), int(ci.findtext("end") or -1)
+            i_, o_ = int(ci.findtext("in") or 0), int(ci.findtext("out") or 0)
+            if a < 0 and b >= 0:
+                a = b - (o_ - i_)
+            elif b < 0 and a >= 0:
+                b = a + (o_ - i_)
+            if a < 0 or b <= a:
+                continue
+            speed = 100.0
+            for eff in ci.iter("effect"):
+                if (eff.findtext("effectid") or "").lower() == "timeremap":
+                    for prm in eff.iter("parameter"):
+                        if (prm.findtext("parameterid") or "") == "speed":
+                            speed = float(prm.findtext("value") or 100)
+            if abs(speed - 100) > 0.01 or abs(b - a - (o_ - i_)) > 1:
+                skipped["shots with a speed change"] += 1
+                continue
+            ticks = ci.findtext("pproTicksIn")
+            s0 = int(ticks) / PR_TICKS if ticks else i_ / rate_of(ci)
+            shots.append((ci, f, a, b, s0))
+    if not shots:
+        sys.exit("error: no camera shots found in that sequence")
+    synced = narrative_reports({os.path.normpath(url_to_path(f.findtext("pathurl"))) for _, f, _, _, _ in shots})
+    if not synced:
+        sys.exit("error: these shots haven't been synced yet. Sync the footage in the Narrative tab "
+                 "first, then add the synced audio")
+
+    rec_files, rec_info = {}, {}
+
+    def recorder_file(path):
+        if path not in rec_info:
+            tc, dur, ch, rate = audio_timecode(path)
+            rec_info[path] = (dur, max(1, ch), rate, tc)
+        dur, ch, rate, tc = rec_info[path]
+        if path in rec_files:
+            return ET.Element("file", id=rec_files[path]), ch
+        fid = new_id("file")
+        rec_files[path] = fid
+        f = ET.Element("file", id=fid)
+        sub(f, "name", os.path.basename(path))
+        sub(f, "pathurl", path_to_url(path, ()))
+        add_rate(f, fps)
+        sub(f, "duration", int(round(dur * fps)))
+        add_timecode(f, fps, int(round((tc or 0) * fps)))
+        media = sub(f, "media")
+        for k in range(ch):
+            a = sub(media, "audio")
+            sc = sub(a, "samplecharacteristics")
+            sub(sc, "depth", 24)
+            sub(sc, "samplerate", rate)
+            sub(a, "channelcount", 1)
+            sub(a, "layout", "stereo" if ch == 2 else "mono")
+            ac = sub(a, "audiochannel")
+            sub(ac, "sourcechannel", k + 1)
+            sub(ac, "channellabel", ("left", "right")[k] if ch == 2 else "discrete")
+        return f, ch
+
+    def camera_channels(f):
+        blocks = f.findall("media/audio")
+        n = sum(max(1, int(b.findtext("channelcount") or 1)) for b in blocks)
+        return n, ("stereo" if n == 2 else "mono")
+
+    # new tracks at the bottom, in lanes so overlapping shots (a cutaway over the A Cam) never share one
+    lanes = {"cam": [], "rec": []}             # role -> [[track, ...] per lane], with each lane's busy spans
+    busy = {"cam": [], "rec": []}
+
+    def lane_for(role, a, b, nch):
+        for k, spans in enumerate(busy[role]):
+            if all(b <= x or a >= y for x, y in spans):
+                break
+        else:
+            k = len(busy[role])
+            busy[role].append([])
+            lanes[role].append([])
+        busy[role][k].append((a, b))
+        while len(lanes[role][k]) < nch:
+            lanes[role][k].append(ET.Element("track"))
+        return lanes[role][k]
+
+    def item(track, f, name, a, b, src_in_s, ch, kind, enabled, frames):
+        ci = ET.Element("clipitem", id=new_id("clipitem"), premiereChannelType=kind)
+        sub(ci, "name", name)
+        sub(ci, "enabled", "TRUE" if enabled else "FALSE")
+        sub(ci, "duration", frames)
+        add_rate(ci, fps)
+        sub(ci, "start", a)
+        sub(ci, "end", b)
+        sub(ci, "in", int(round(src_in_s * fps)))
+        sub(ci, "out", int(round(src_in_s * fps)) + (b - a))
+        sub(ci, "pproTicksIn", int(round(src_in_s * PR_TICKS)))
+        sub(ci, "pproTicksOut", int(round((src_in_s + (b - a) / fps) * PR_TICKS)))
+        ci.append(f)
+        st = sub(ci, "sourcetrack")
+        sub(st, "mediatype", "audio")
+        sub(st, "trackindex", ch)
+        track.append(ci)
+        return ci
+
+    groups, n_cam, n_rec, no_sound = [], 0, 0, set()
+    for ci, f, a, b, s0 in sorted(shots, key=lambda x: (x[2], x[3])):
+        path = os.path.normpath(url_to_path(f.findtext("pathurl")))
+        enabled = (ci.findtext("enabled") or "TRUE").upper() != "FALSE"
+        members = []
+        nch, kind = camera_channels(f)
+        if nch:
+            tracks = lane_for("cam", a, b, nch)
+            for k in range(nch):
+                members.append(item(tracks[k], ET.Element("file", id=f.get("id")), ci.findtext("name") or
+                                    f.findtext("name"), a, b, s0, k + 1, kind, enabled,
+                                    int(round(int(f.findtext("duration") or 0) * fps / rate_of(f)))))
+            n_cam += 1
+        hit = synced.get(path.lower())
+        if hit:
+            rpath, into = hit
+            rf, rch = recorder_file(rpath)
+            dur = rec_info[rpath][0]
+            ra, rb, r0 = a, b, s0 + into
+            if r0 < 0:                              # the camera rolled before the recorder: trim the head
+                cut = int(math.ceil(-r0 * fps - 1e-6))
+                ra, r0 = ra + cut, r0 + cut / fps
+            if r0 + (rb - ra) / fps > dur:          # ... or kept rolling after it stopped
+                rb = ra + int(math.floor((dur - r0) * fps + 1e-6))
+            if rb > ra:
+                tracks = lane_for("rec", ra, rb, rch)
+                for k in range(rch):
+                    members.append(item(tracks[k], rf if k == 0 and len(rf) else ET.Element("file", id=rf.get("id")),
+                                        os.path.basename(rpath), ra, rb, r0, k + 1,
+                                        "stereo" if rch == 2 else "mono", enabled, int(round(dur * fps))))
+                    rf = ET.Element("file", id=rf.get("id"))
+                n_rec += 1
+        else:
+            no_sound.add(os.path.basename(path))
+        if members:
+            groups.append([ci] + members)
+
+    # tracks: camera audio first, then the recordist's, each in Premiere's stereo-pair shape
+    new_tracks = [t for lane in lanes["cam"] for t in lane] + [t for lane in lanes["rec"] for t in lane]
+    attrs = dict(old_tracks[-1].attrib) if old_tracks else {}
+    first = (int(attrs.get("currentExplodedTrackIndex") or 1) + 1) % 2     # carry on the edit's L/R pairs
+    for k, t in enumerate(new_tracks):
+        pos = first + k
+        t.attrib.update(attrs)
+        t.attrib.update({"PannerIsInverted": "true", "PannerCurrentValue": "0.5", "PannerName": "Balance",
+                         "currentExplodedTrackIndex": str(pos % 2), "totalExplodedTrackCount": "2",
+                         "premiereTrackType": "Stereo"})
+        kids = sorted(t.findall("clipitem"), key=lambda c: int(c.findtext("start")))
+        for c in list(t):
+            t.remove(c)
+        for c in kids:
+            t.append(c)
+        sub(t, "enabled", "TRUE")
+        sub(t, "locked", "FALSE")
+        sub(t, "outputchannelindex", 1 if pos % 2 == 0 else 2)
+        audio.insert(list(audio).index(old_tracks[-1]) + 1 + k if old_tracks else len(audio), t)
+
+    # links: each shot's picture with all its audio, as Premiere writes them
+    where = {}
+    for kind_, tracks in (("video", seq.findall("media/video/track")), ("audio", audio.findall("track"))):
+        for ti, t in enumerate(tracks, 1):
+            for cx, c in enumerate(t.findall("clipitem"), 1):
+                where[c.get("id")] = (kind_, ti, cx)
+    for g in groups:
+        ids = [c.get("id") for c in g]
+        for c in g:                                 # an earlier link of the picture's stays in the group
+            for ln in c.findall("link"):
+                r = ln.findtext("linkclipref")
+                if r and r not in ids and r in where:
+                    ids.append(r)
+        byid = {c.get("id"): c for c in seq.iter("clipitem")}
+        for i in ids:
+            c = byid[i]
+            for ln in c.findall("link"):
+                c.remove(ln)
+            for j in ids:
+                kind_, ti, cx = where[j]
+                ln = sub(c, "link")
+                sub(ln, "linkclipref", j)
+                sub(ln, "mediatype", kind_)
+                sub(ln, "trackindex", ti)
+                sub(ln, "clipindex", cx)
+                if kind_ == "audio":
+                    sub(ln, "groupindex", 1)
+    for nm in seq.findall("name"):
+        nm.text = (nm.text or "") + " - Synced Audio"
+    write_xml(root, out)
+    notes = ["%d shots got their camera audio and %d the sound recordist's" % (n_cam, n_rec)]
+    if no_sound:
+        notes.append("%d clips have no synced sound (%s)" % (len(no_sound), ", ".join(sorted(no_sound)[:6]) +
+                                                          (" ..." if len(no_sound) > 6 else "")))
+    for what, n in skipped.items():
+        notes.append("%d %s left as they were" % (n, what))
+    return notes
+
+
 def convert_main(args):
     """--mode convert --to FORMAT FILE: an edit (XML, FCPXML, .drp or .prproj) as another of those, saved
     next to it. Kickoff reads and writes XML, FCPXML and .prproj itself; a .drp goes through Resolve
@@ -6021,6 +6290,17 @@ def convert_main(args):
     d = os.path.dirname(src)
     base = os.path.splitext(os.path.basename(src.rstrip("/")))[0]
     notes, outputs, offline = [], [], 0
+    if to == "syncaudio":                        # not a conversion: the same XML with the synced sound added
+        if kind != "xml":
+            sys.exit("error: Synced Audio works on a Premiere sequence XML (File > Export > Final Cut Pro XML)")
+        event("stage", text="Adding the synced audio")
+        out = free_path(d, base + " - Synced Audio", ".xml")
+        notes = synced_audio(src, out)
+        for n in notes:
+            log(n)
+        log("Wrote %s" % out)
+        event("convert", to=to, outputs=[out], notes=notes, offline=0, premiere="", dir=d)
+        return
     work = os.path.join(tempfile.gettempdir(), "kickoff-convert", hashlib.md5(src.encode()).hexdigest()[:10])
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
@@ -6200,10 +6480,10 @@ def main(argv=None):
                     help="keep placed stretches whose picture is a flat color (see drop_blank)")
     ap.add_argument("--no-cache", action="store_true",
                     help="don't keep decoded camera audio for the next run (see audio_cache_dir)")
-    ap.add_argument("--to", choices=["xml", "fcpxml", "drp", "prproj"],
+    ap.add_argument("--to", choices=["xml", "fcpxml", "drp", "prproj", "syncaudio"],
                     help="--mode convert: the format to turn the file into")
     ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras", "slop", "slopimport", "resolve", "convert", "convert-xml", "convert-fcpxml",
-                             "convert-drp", "convert-prproj"], default="auto",
+                             "convert-drp", "convert-prproj", "convert-syncaudio"], default="auto",
                     help="music: sync to the song (music video); narrative: sync each clip to the sound "
                          "recordist's audio files (timecode, else scratch audio) in one Sync sequence; cameras: "
                          "narrative with no sound files, the cameras synced to each other; setup: "
@@ -7071,14 +7351,15 @@ def narrative(args, project_name, audio_paths):
     with open(report, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["file", "camera", "status", "synced_by", "audio_file", "starts_into_audio_s",
-                    "timeline_timecode", "reason"])
+                    "timeline_timecode", "reason", "audio_path"])
         for letter, cl in cams:
             for c in cl:
                 ok = c.status == "placed"
                 w.writerow([c.rel, "%s Cam" % letter, c.status, c.how if ok else "",
                             os.path.basename(c.afile["path"]) if ok else "", "%.3f" % c.in_file if ok else "",
                             fmt_frames(start_frames(seq_fps) + fr(c.tl), seq_fps) if ok else "",
-                            "" if ok else "; ".join(c.reasons)])
+                            "" if ok else "; ".join(c.reasons),
+                            os.path.relpath(c.afile["path"], args.clips) if ok else ""])
     log("Wrote %s. Synced %d of %d clips (%d by timecode)." % (
         os.path.basename(report), len(placed), len(clips), sum(c.how == "timecode" for c in placed)))
     aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH for c in clips if c.status != "placed")

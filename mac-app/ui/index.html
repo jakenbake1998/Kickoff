@@ -484,6 +484,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
 .convto{display:grid;gap:8px}
 .convto .k{font-size:13px;color:var(--muted);font-weight:600}
 .convfmts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.convfmts.one{grid-template-columns:1fr}
 .convfmts button{display:grid;gap:2px;padding:10px 8px;text-align:center;border-radius:10px}
 .convfmts button b{font-size:14px}
 .convfmts button small{font-size:11.5px;color:var(--muted);font-weight:500}
@@ -852,6 +853,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
           <button type="button" data-to="fcpxml"><b>FCPXML</b><small>Final Cut, Resolve</small></button>
           <button type="button" data-to="drp"><b>DaVinci</b><small>.drp project</small></button>
           <button type="button" data-to="prproj"><b>Premiere</b><small>.prproj project</small></button>
+        </div>
+        <span class="k">Or add to a Premiere XML</span>
+        <div class="convfmts one" id="convAdd">
+          <button type="button" data-to="syncaudio"><b>Synced audio</b><small>Camera audio and the sound recordist's, under every shot</small></button>
         </div>
       </div>
       <p class="convnote" id="convNote"></p>
@@ -3132,16 +3137,18 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     $("convFile").textContent = f ? base(f) : "Drop a project file here";
     $("convKind").textContent = f ? (CONV_NAMES[conv.kind] || "Not a file Kickoff can convert") + ". Click to pick another."
       : "XML, FCPXML, DaVinci .drp or Premiere .prproj. Or click to choose.";
-    document.querySelectorAll("#convFmts button").forEach(function (b) {
-      b.disabled = conv.busy || !conv.kind || b.dataset.to === conv.kind;
+    document.querySelectorAll("#convFmts button, #convAdd button").forEach(function (b) {
+      b.disabled = conv.busy || !conv.kind || b.dataset.to === conv.kind || (b.dataset.to === "syncaudio" && conv.kind !== "xml");
       b.setAttribute("aria-pressed", b.dataset.to === conv.to && !b.disabled ? "true" : "false");
     });
     var resolve = conv.kind === "drp" || conv.to === "drp";
     $("convNote").textContent = !conv.to ? ""
+      : conv.to === "syncaudio" ? "Sync the footage in the Narrative tab first. A copy of the XML gets each shot's camera audio and the sound recordist's audio on new tracks at the bottom, linked to the picture."
       : resolve ? "Uses DaVinci Resolve Studio in the background. Have it open with no window waiting on you."
       : conv.kind === "prproj" ? "Cuts, nests and audio come over. Effects, titles and transitions stay behind."
       : conv.kind === "fcpxml" ? "Cuts and audio come over, and missing media is found on your drives. Titles and effects stay behind."
       : conv.to === "prproj" ? "Makes a Premiere project next to the file and opens it in Premiere." : "";
+    $("convGo").textContent = conv.to === "syncaudio" ? "Add synced audio" : "Convert";
     $("convGo").disabled = conv.busy || !conv.kind || !conv.to || running();
     $("convGoRow").hidden = conv.busy || !!conv.result;
     $("convBusy").hidden = !conv.busy;
@@ -3162,13 +3169,13 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   $("convX").addEventListener("click", function () { convOpen(false); });
   $("convOv").addEventListener("click", function (ev) { if (ev.target === $("convOv") && !conv.busy) convOpen(false); });
   $("convDrop").addEventListener("click", function () { if (!conv.busy) post({ cmd: "pick", target: "convert" }); });
-  document.querySelectorAll("#convFmts button").forEach(function (b) {
+  document.querySelectorAll("#convFmts button, #convAdd button").forEach(function (b) {
     b.addEventListener("click", function () { conv.to = b.dataset.to; convRender(); });
   });
   $("convGo").addEventListener("click", function () {
     if (!conv.kind || !conv.to || conv.busy || running()) return;
     conv.busy = true; conv.result = null; conv.err = "";
-    $("convStage").textContent = "Converting";
+    $("convStage").textContent = conv.to === "syncaudio" ? "Adding the synced audio" : "Converting";
     $("convDone").hidden = true; $("convFail").hidden = true;
     convRender();
     post({ cmd: "run", paths: [conv.src], mode: "convert-" + conv.to, xmlDir: "drive", xmlName: "" });
@@ -3183,7 +3190,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
         : "Saved " + base(r.outputs[0])) + " next to the original";
       $("convLeft").textContent = (r.notes && r.notes.length ? r.notes.join(". ") + ". " : "") +
         (r.offline ? r.offline + " clips came in offline." : "");
-      $("convOpen").hidden = r.to === "xml" || r.to === "fcpxml";
+      $("convOpen").hidden = r.to === "xml" || r.to === "fcpxml" || r.to === "syncaudio";
       $("convBring").hidden = true;
       $("convOpen").textContent = r.to === "drp" ? "Open in Resolve" : "Open in Premiere";
       $("convDone").hidden = false;
