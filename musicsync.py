@@ -41,7 +41,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.54"
+VERSION = "0.5.55"
 
 # ---------------------------------------------------------------- constants
 
@@ -106,7 +106,8 @@ DEFAULT_SETTINGS = {
     "labels": {},                   # camera letter -> Premiere label name (unset: CAMERA_LABELS)
     "bins": DEFAULT_BINS,
     "names": {"breakup": "{cam}_Breakup", "synced": "{cam}_Synced", "condensed": "{cam}_Synced_Condensed",
-              "nested": "{project}_CamsNested", "edit": "{project}_Edit", "slowmo": "{project}_Slow Motion"},
+              "nested": "{project}_CamsNested", "edit": "{project}_Edit", "slowmo": "{project}_Slow Motion",
+              "broll": "B Roll_Breakup"},
     "unsynced": True,               # clips that didn't sync go on V1 after the song
     "unsynced_gap_s": 60,
     "place_repeats": True,          # a take that fits two identical choruses: first copy, marked
@@ -3386,7 +3387,21 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             seq = xw.sequence(condb, seq_name("condensed", letter), seq_fps, w, h, tc,
                               condense(entries, seq_fps), label, markers=marks)
             nests.append((letter, seq, (w, h), tc))
-    maybe_empty(breakup, bpath, bool(len(breakup)))
+    if not setup_only:
+        # B Roll_Breakup: every clip that didn't sync, all cameras (camera order, then file order),
+        # laid out like a camera's Breakup, each in its camera's color
+        broll = [(letter, c) for letter, cl in cams
+                 for c in ([c for c in cl if c.status != "placed"] if narr else left_out(cl))
+                 if c.readable and c.fps and c.width and c.duration]
+        if broll:
+            (w, h), fps = first_format([c for _, c in broll], seq_fps)
+            entries, pos = [], 0
+            for letter, c in broll:
+                entries.append(dict(media=Media.of_clip(c, fps), start=pos, vtrack=1, atrack=1,
+                                    label=camera_label(letter), all_audio="raw"))
+                pos += int(round(c.duration * fps))
+            xw.sequence(breakup, seq_name("broll"), fps, w, h, start_frames(fps), entries)
+    maybe_empty(breakup, bpath, bool(len(breakup)) or bool(slowmo_entries(cams, seq_fps)))
     if narr and syncb is not None:
         (w, h) = args.sync_size or (first_format([c for c in clips if c.readable and c.fps and c.width], seq_fps)[0]
                                     if any(c.width for c in clips) else (3840, 2160))
@@ -3396,6 +3411,8 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         maybe_empty(condb, where["condensed"][1], bool(nests))
 
     edit = where["edit"][0]
+    # the _Edit sequence goes in Edit > Working when that bin is there (else in Edit itself)
+    working = next((ch for ch, here in empty_ok if here == where["edit"][1] + ["Working"]), edit)
     if nests:
         # every camera's condensed sync sequence nested on its own track (A on V1, B on V2...), song on A1:
         # "<name>_CamsNested" in the Sync bin, and the same again as the Edit sequence Jake
@@ -3412,17 +3429,17 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             return entries
         xw.sequence(condb if condb is not None else syncb, seq_name("nested", project=name), seq_fps, w, h, tc,
                     all_cams())
-        xw.sequence(edit, seq_name("edit", project=name), seq_fps, w, h, tc, all_cams())
+        xw.sequence(working, seq_name("edit", project=name), seq_fps, w, h, tc, all_cams())
     elif setup_only or narr:
         # an empty sequence to cut in, at the delivery size, starting at 01:00:00:00
         usable = [c for c in clips if c.readable and c.fps and c.width]
         (w, h) = args.sync_size or (first_format(usable, seq_fps)[0] if usable else (3840, 2160))
-        xw.sequence(edit, seq_name("edit", project=name), seq_fps, w, h, start_frames(seq_fps), [])
+        xw.sequence(working, seq_name("edit", project=name), seq_fps, w, h, start_frames(seq_fps), [])
     slow = slowmo_entries(cams, seq_fps)
     if slow:
         (w, h) = args.sync_size or (3840, 2160)
         entries, marks = slow
-        xw.sequence(edit, seq_name("slowmo", project=name), seq_fps, w, h, start_frames(seq_fps), entries,
+        xw.sequence(breakup, seq_name("slowmo", project=name), seq_fps, w, h, start_frames(seq_fps), entries,
                     markers=marks)
     maybe_empty(edit, where["edit"][1], bool(len(edit)))
 
