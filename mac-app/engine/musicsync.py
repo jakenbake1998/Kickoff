@@ -259,9 +259,16 @@ def log(msg):
 EVENTS = False              # --events: progress as JSON lines on stdout, for the Kickoff window
 
 
+def plain(o):
+    """json's fallback: a numpy number (a float32 offset, an int64 count) or array as plain numbers."""
+    if hasattr(o, "tolist"):                       # numpy numbers and arrays alike
+        return o.tolist()
+    raise TypeError("Object of type %s is not JSON serializable" % o.__class__.__name__)
+
+
 def event(kind, **data):
     if EVENTS:
-        print("@@kickoff " + json.dumps(dict(data, event=kind)), flush=True)
+        print("@@kickoff " + json.dumps(dict(data, event=kind), default=plain), flush=True)
 
 
 # Footage drives (spinning or USB) slow right down when many files are read at once, so only a few
@@ -4346,7 +4353,7 @@ def look_at(path, a, b, step=VISION_STEP):
     if cfile and frames:
         try:
             with open(cfile, "w", encoding="utf-8") as fh:
-                json.dump(frames, fh)
+                json.dump(frames, fh, default=plain)
         except OSError:
             pass
     return frames
@@ -5410,7 +5417,7 @@ RESOLVE_HEAD = r'''
 import json, os, subprocess, sys, time
 
 def say(**k):
-    sys.stdout.write(json.dumps(k) + "\n"); sys.stdout.flush()
+    sys.stdout.write(json.dumps(k, default=plain) + "\n"); sys.stdout.flush()
 
 def bye(code):
     sys.stdout.flush(); sys.stderr.flush(); os._exit(code)
@@ -5854,7 +5861,7 @@ def run_driver(driver, plan, work):
     Returns its result, or exits with its error."""
     os.makedirs(work, exist_ok=True)
     with open(os.path.join(work, "plan.json"), "w") as fh:
-        json.dump(plan, fh)
+        json.dump(plan, fh, default=plain)
     with open(os.path.join(work, "build.py"), "w") as fh:
         fh.write(driver)
     # Resolve's scripting library loads in a plain Python 3 (the engine's own, else the Mac's)
@@ -7742,7 +7749,7 @@ def save_state(args, name, clips, labels, seq_fps, preroll, audio_files, prev=No
     st["cards"] = cards if cards is not None else {letter: 1 for letter in cnt}
     tmp = os.path.join(args.out, STATE_FILE + ".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(st, fh, indent=1)
+        json.dump(st, fh, indent=1, default=plain)
     os.replace(tmp, os.path.join(args.out, STATE_FILE))
 
 
