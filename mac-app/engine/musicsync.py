@@ -3562,11 +3562,14 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         usable = [c for c in clips if c.readable and c.fps and c.width]
         (w, h) = args.sync_size or (first_format(usable, seq_fps)[0] if usable else (3840, 2160))
         xw.sequence(working, seq_name("edit", project=name), seq_fps, w, h, start_frames(seq_fps), [])
-    slow = slowmo_entries(cams, seq_fps)
+    # always 24p (23.976 for an NTSC project), whatever the project's rate, so a 59.94 project's
+    # 60p clips still slow to 40%
+    slow_fps = 23.976 if abs(seq_fps - round(seq_fps)) > 0.001 else 24
+    slow = slowmo_entries(cams, slow_fps)
     if slow:
         (w, h) = args.sync_size or (3840, 2160)
         entries, marks = slow
-        xw.sequence(breakup, seq_name("slowmo", project=name), seq_fps, w, h, start_frames(seq_fps), entries,
+        xw.sequence(breakup, seq_name("slowmo", project=name), slow_fps, w, h, start_frames(slow_fps), entries,
                     markers=marks)
     maybe_empty(edit, where["edit"][1], bool(len(edit)))
 
