@@ -811,11 +811,44 @@ def find_clips(clips_dir, master_path, skip_dirs=()):
             rel = os.path.relpath(p, clips_dir)
             parts = rel.replace("\\", "/").split("/")[:-1]
             # the camera's folder: one named like "A Cam (Mini LF)" at any depth (Footage/Day 1/...),
-            # else the first folder under the one dropped
-            cam = next((d for d in parts if CAM_FOLDER.match(d)), None) or here_cam or (parts[0] if parts else "")
+            # else the first folder under the one dropped that isn't just a wrapper (camera_folder)
+            cam = next((d for d in parts if CAM_FOLDER.match(d)), None) or here_cam
             fl = next((m.group(1).upper() for m in (FOLDER_LETTER.match(d.strip()) for d in reversed(parts)) if m), "")
-            out.append(Clip(path=p, rel=rel, top_folder=cam, folder_letter=fl))
+            out.append(Clip(path=p, rel=rel, top_folder=cam or parts, folder_letter=fl))
+    kids = collections.defaultdict(set)              # folder -> its subfolders that hold media
+    loose = set()                                    # folders with media files right in them
+    for c in out:
+        if isinstance(c.top_folder, list):
+            parts = c.top_folder
+            loose.add(tuple(parts))
+            for i in range(len(parts)):
+                kids[tuple(parts[:i])].add(parts[i])
+    for c in out:
+        if isinstance(c.top_folder, list):
+            c.top_folder = camera_folder(c.top_folder, kids, loose)
     return drop_copies(out)
+
+
+# folders that hold cameras rather than being one: "Beautiful - RAW Footage", "Footage", "Day 2"
+CONTAINER_DIR = re.compile(r"(?i)\b(footage|raw|rushes|media|cameras|cams|shoot|day[ _-]*\d+)\b")
+# what a camera card holds inside: never a camera's name
+CARD_DIR = re.compile(r"(?i)^(private|dcim|m4root|xdroot|avchd|clip|clips\d*|contents|bpav|stream|"
+                      r"sony|\d{3}[a-z_]+|card[ _-]*\d*|reel[ _-]*\d*|roll[ _-]*\d*|[a-z]\d{3}([ _].*)?)$")
+
+
+def camera_folder(parts, kids, loose):
+    """The camera folder of a clip at `parts` (folders under the one dropped): the first one, unless
+    it only wraps the cameras, holding nothing but folders, and is named like it ("Beautiful - RAW
+    Footage", "Day 2") or is the only folder there. Then the next one down, and so on. It never
+    goes into a card's own folders (PRIVATE, DCIM, Card 1...)."""
+    i = 0
+    while i + 1 < len(parts):
+        here, nxt = tuple(parts[:i + 1]), parts[i + 1]
+        wrapper = here not in loose and (CONTAINER_DIR.search(parts[i]) or len(kids[tuple(parts[:i])]) == 1)
+        if not wrapper or CARD_DIR.match(nxt) or any(CARD_DIR.match(k) for k in kids[here]):
+            break
+        i += 1
+    return parts[i] if parts else ""
 
 
 def drop_copies(clips):
@@ -3293,6 +3326,11 @@ def cam_bin_name(letter, cl):
         return "%s Cam (%s)" % (letter, collections.Counter(named).most_common(1)[0][0])
     model = next((c.model for c in cl if c.model), "")
     short = short_camera_name(model)
+    # no model in the files, but the camera is one plain folder ("A7S III", "FREMONT"): its name
+    tops = {c.top_folder for c in cl}
+    top = next(iter(tops)) if len(tops) == 1 else ""
+    if not short and top and not (CONTAINER_DIR.search(top) or CARD_DIR.match(top) or FOLDER_LETTER.match(top.strip())):
+        return "%s Cam (%s)" % (letter, top)
     return "%s Cam (%s)" % (letter, short) if short else "%s Cam" % letter
 
 
