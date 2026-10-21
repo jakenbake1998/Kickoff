@@ -3320,12 +3320,15 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song
     return entries, start_tc
 
 
-GRIDS = (4, 9, 16)             # Premiere's Multi-Camera monitor: 2x2, 3x3, 4x4, then pages of 16
+def grid_size(need):
+    """Smallest square multicam grid (4, 9, 16, 25, 36...) that holds `need` angles."""
+    n = max(2, math.isqrt(max(0, need - 1)) + 1)
+    return n * n
 
 
 def condense(entries, fps):
     """The same clips on fewer video tracks (fewer feeds in multicam): the smallest of Premiere's
-    multicam grids (4, 9, 16 angles, then pages of 16) that every overlap fits, and then every track of
+    multicam grids (4, 9, 16, 25, 36... angles) that every overlap fits, and then every track of
     that grid used. Clips are dealt out in clip order, clip 1 on V1, clip 2 on V2... and round again
     from V1; a clip moves on to the next free track only when its own is taken at that moment.
     Nothing is cut or moved in time; its scratch audio follows it to the matching audio track."""
@@ -3337,7 +3340,7 @@ def condense(entries, fps):
     for _, d in edges:
         cur += d
         need = max(need, cur)
-    tracks = next((g for g in GRIDS if need <= g), -(-need // 16) * 16)
+    tracks = grid_size(need)
     # clip n's own track is n (mod the grid): clip 1 on V1, clip 2 on V2... Going through the clips
     # by start time, each takes its own track if that's free by then, else the next free one after
     # it; there's always one, since no more than `tracks` clips ever play at once
