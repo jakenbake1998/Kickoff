@@ -68,7 +68,7 @@ UNREADABLE_EXT = {".r3d"}   # ffmpeg cannot open RED files (BRAW opens: its soun
 # its frame rate, size, length and timecode as one JSON line
 R3D_HELPER = os.environ.get("KICKOFF_R3D") or os.path.expanduser("~/Library/Application Support/Kickoff/kickoff_r3d")
 R3D_SPAN = re.compile(r"^(.*)_(\d{3})\.r3d$", re.I)    # A001_C001_0101AB_001.R3D, _002... one clip
-OUT_DIR = "Kickoff Exports"            # what Kickoff writes, inside the shoot folder
+OUT_DIR = "Kickoff Exports"            # what Kickoff writes, next to the project XML
 OLD_OUT_DIRS = ("Premiere Sync",)      # its name before 0.5.3: earlier projects are still found there
 SKIP_DIRS = {"SUB", "THMBNL", "GENERAL", "AVF_INFO", "CACHE", "THMB"}
 # not camera originals: proxies, Premiere's preview renders and auto-saves, renders and exports
@@ -6017,34 +6017,74 @@ def fcpxml_prep(src, out, near=None):
 SYNCED_TAG = "ks"          # prefix of the ids Synced Audio adds, so they never clash with the edit's own
 
 
-def narrative_reports(paths):
+REPORTS_LIST = os.path.expanduser("~/Library/Application Support/Kickoff/narrative-reports.txt")
+
+
+def remember_report(path):
+    """Note where a Narrative report was written, so Synced Audio finds it wherever the XML was saved."""
+    try:
+        have = open(REPORTS_LIST, encoding="utf-8").read().splitlines() if os.path.isfile(REPORTS_LIST) else []
+        if path not in have:
+            os.makedirs(os.path.dirname(REPORTS_LIST), exist_ok=True)
+            with open(REPORTS_LIST, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(([p for p in have if os.path.isfile(p)] + [path])[-500:]) + "\n")
+    except OSError:
+        pass
+
+
+def narrative_reports(paths, near=()):
     """{video path (lowercase): (sound file path, seconds into it the clip starts)} from the Narrative
-    reports (Kickoff Exports/narrative_report.csv) of the shoots these files are in."""
+    reports (Kickoff Exports/narrative_report.csv, or a project folder inside it) found in the folders
+    these files are in, or above them, or above the files in `near` (the edit's own XML)."""
     found, seen = {}, set()
-    for vp in paths:
-        d = os.path.dirname(vp)
+
+    def read(rp, d):
+        with open(rp, newline="") as fh:
+            rows = [r for r in csv.DictReader(fh) if r.get("status") == "placed" and r.get("audio_file")]
+        sounds = None
+        for row in rows:
+            ap = row.get("audio_path") or ""
+            if ap and not os.path.isabs(ap):
+                ap = os.path.join(d, ap)             # 0.5.56: relative to the shoot folder by the report
+            if not os.path.isfile(ap):
+                if not row.get("path"):              # a report from before 0.5.56: look for it by name
+                    if sounds is None:
+                        sounds = collections.defaultdict(list)
+                        for root_, dirs, files in os.walk(d):
+                            dirs[:] = sorted(x for x in dirs if not skip_dir(x) and x not in (OUT_DIR,) + OLD_OUT_DIRS)
+                            for f in sorted(files):
+                                if os.path.splitext(f)[1].lower() in AUDIO_EXT:
+                                    sounds[f.lower()].append(os.path.join(root_, f))
+                    ap = (sounds.get(row["audio_file"].lower()) or [None])[0]
+                else:
+                    ap = None
+            if ap:
+                vp = row.get("path") or os.path.join(d, row["file"])
+                found[os.path.normpath(vp).lower()] = (ap, float(row["starts_into_audio_s"]))
+
+    try:                                       # every report Kickoff wrote on this Mac
+        listed = open(REPORTS_LIST, encoding="utf-8").read().splitlines() if os.path.isfile(REPORTS_LIST) else []
+    except OSError:
+        listed = []
+    for rp in listed:
+        if os.path.isfile(rp):
+            read(rp, os.path.dirname(os.path.dirname(rp)))
+    for start in sorted({os.path.dirname(p) for p in list(paths) + list(near)}):
+        d = start
         while d and d not in seen and os.path.dirname(d) != d:
             seen.add(d)
-            for sub_ in ("Kickoff Exports", "Premiere Sync"):
-                rp = os.path.join(d, sub_, "narrative_report.csv")
-                if not os.path.isfile(rp):
+            for sub_ in (OUT_DIR,) + OLD_OUT_DIRS:
+                base = os.path.join(d, sub_)
+                if not os.path.isdir(base):
                     continue
-                sounds = collections.defaultdict(list)
-                for root_, dirs, files in os.walk(d):
-                    dirs[:] = sorted(x for x in dirs if not skip_dir(x) and x not in ("Kickoff Exports", "Premiere Sync"))
-                    for f in sorted(files):
-                        if os.path.splitext(f)[1].lower() in AUDIO_EXT:
-                            sounds[f.lower()].append(os.path.join(root_, f))
-                with open(rp, newline="") as fh:
-                    for row in csv.DictReader(fh):
-                        if row.get("status") != "placed" or not row.get("audio_file"):
-                            continue
-                        want = row.get("audio_path") and os.path.join(d, row["audio_path"])
-                        cands = sounds.get(row["audio_file"].lower(), [])
-                        ap = want if want and os.path.isfile(want) else (cands[0] if cands else None)
-                        if ap:
-                            found[os.path.normpath(os.path.join(d, row["file"])).lower()] = \
-                                (ap, float(row["starts_into_audio_s"]))
+                try:
+                    inner = [os.path.join(base, x) for x in sorted(os.listdir(base))]
+                except OSError:
+                    inner = []
+                for rd in [base] + [x for x in inner if os.path.isdir(x)]:
+                    rp = os.path.join(rd, "narrative_report.csv")
+                    if os.path.isfile(rp):
+                        read(rp, d)
             d = os.path.dirname(d)
     return found
 
@@ -6111,7 +6151,8 @@ def synced_audio(src, out):
             shots.append((ci, f, a, b, s0))
     if not shots:
         sys.exit("error: no camera shots found in that sequence")
-    synced = narrative_reports({os.path.normpath(url_to_path(f.findtext("pathurl"))) for _, f, _, _, _ in shots})
+    synced = narrative_reports({os.path.normpath(url_to_path(f.findtext("pathurl"))) for _, f, _, _, _ in shots},
+                               near=[os.path.abspath(src)])
     if not synced:
         sys.exit("error: these shots haven't been synced yet. Sync the footage in the Narrative tab "
                  "first, then add the synced audio")
@@ -6446,10 +6487,10 @@ def main(argv=None):
                     help="a shoot folder (the song is found inside it), or a master song then a clips folder; "
                          "several folders (cards) are taken together, as one project in the folder that holds them")
     ap.add_argument("--master", help="master song, if it can't be found in the folder automatically")
-    ap.add_argument("-o", "--out", help="output folder (default: '%s' inside the folder)" % OUT_DIR)
+    ap.add_argument("-o", "--out", help="output folder (default: '%s' next to the project XML)" % OUT_DIR)
     ap.add_argument("--name", help="project name, which names the XML (default: the folder name)")
-    ap.add_argument("--xml-dir", help="where the project XMLs go (default: the output folder); 'drive' puts them "
-                                      "at the top of the drive the footage is on. Reports stay in the output folder")
+    ap.add_argument("--xml-dir", help="where the project XMLs go (default: the shoot folder); 'drive' puts them "
+                                      "at the top of the drive the footage is on. Kickoff Exports goes next to them")
     ap.add_argument("--no-placeholders", dest="placeholders", action="store_false",
                     help="don't put a blank '(empty bin)' still in bins that would otherwise be empty "
                          "(Premiere drops empty bins on XML import)")
@@ -6574,9 +6615,12 @@ def main(argv=None):
                                                ", ".join(os.path.relpath(f, args.clips) for f in args.only[:12])
                                                + (" ..." if len(args.only) > 12 else "")))
     out_given = bool(args.out)
-    args.out = os.path.abspath(args.out or os.path.join(args.clips, OUT_DIR))
-    state, restrict = (None, None) if args.rebuild or args.mode == "narrative" else load_state(args, out_given)
+    # Kickoff Exports goes next to the XML, wherever that is saved (Jake, 2026-10-21)
     args.xml_out = xml_folder(args)
+    args.out = os.path.abspath(args.out or exports_dir(args.xml_out, args.clips,
+                                                       args.name or os.path.basename(args.clips.rstrip("/\\"))))
+    state, restrict = (None, None) if args.rebuild or args.mode == "narrative" else load_state(args, out_given)
+    mark_exports(args.out, args.clips)
     project_name = args.name or (state or {}).get("project") or os.path.basename(args.clips.rstrip("/\\")) or "Sync"
 
     for tool in ("ffmpeg", "ffprobe"):
@@ -7358,7 +7402,7 @@ def narrative(args, project_name, audio_paths):
     with open(report, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["file", "camera", "status", "synced_by", "audio_file", "starts_into_audio_s",
-                    "timeline_timecode", "reason", "audio_path"])
+                    "timeline_timecode", "reason", "audio_path", "path"])
         for letter, cl in cams:
             for c in cl:
                 ok = c.status == "placed"
@@ -7366,7 +7410,8 @@ def narrative(args, project_name, audio_paths):
                             os.path.basename(c.afile["path"]) if ok else "", "%.3f" % c.in_file if ok else "",
                             fmt_frames(start_frames(seq_fps) + fr(c.tl), seq_fps) if ok else "",
                             "" if ok else "; ".join(c.reasons),
-                            os.path.relpath(c.afile["path"], args.clips) if ok else ""])
+                            os.path.abspath(c.afile["path"]) if ok else "", os.path.abspath(c.path)])
+    remember_report(os.path.abspath(report))
     log("Wrote %s. Synced %d of %d clips (%d by timecode)." % (
         os.path.basename(report), len(placed), len(clips), sum(c.how == "timecode" for c in placed)))
     aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH for c in clips if c.status != "placed")
@@ -7650,14 +7695,14 @@ def xml_folder(args):
     the Mac's own disk."""
     d = args.xml_dir
     if not d:
-        return args.out
+        return args.clips
     if d == "drive":
         parts = os.path.abspath(args.clips).split(os.sep)
         if len(parts) > 2 and parts[1] == "Volumes":
             d = os.sep.join(parts[:3])
         else:
-            log("The footage is on this Mac's own disk: the XML goes in %s" % args.out)
-            return args.out
+            log("The footage is on this Mac's own disk: the XML goes in %s" % args.clips)
+            return args.clips
     d = os.path.abspath(os.path.expanduser(d))
     try:
         os.makedirs(d, exist_ok=True)
@@ -7665,8 +7710,36 @@ def xml_folder(args):
         open(test, "w").close()
         os.remove(test)
     except OSError as e:
-        log("Can't write the XML to %s (%s): it goes in %s" % (d, e.strerror or e, args.out))
-        return args.out
+        log("Can't write the XML to %s (%s): it goes in %s" % (d, e.strerror or e, args.clips))
+        return args.clips
+    return d
+
+
+SHOOT_MARK = ".kickoff-shoot"           # in Kickoff Exports: the shoot folder it belongs to
+
+
+def mark_exports(out, clips):
+    """Note in Kickoff Exports which shoot it belongs to (see exports_dir)."""
+    try:
+        os.makedirs(out, exist_ok=True)
+        with open(os.path.join(out, SHOOT_MARK), "w", encoding="utf-8") as fh:
+            fh.write(os.path.abspath(clips) + "\n")
+    except OSError:
+        pass
+
+
+def exports_dir(xml_dir, clips, name):
+    """Kickoff Exports next to the XML. Several shoots can save their XML in one place (the top of a
+    drive): one already holding another shoot's project keeps it, and this shoot's goes in a folder
+    named for it inside."""
+    d = os.path.join(xml_dir, OUT_DIR)
+    try:
+        with open(os.path.join(d, SHOOT_MARK), encoding="utf-8") as fh:
+            other = fh.read().strip()
+    except OSError:
+        other = None
+    if other and os.path.abspath(other) != os.path.abspath(clips):
+        d = os.path.join(d, re.sub(r"[^\w .-]+", "_", name) or "Sync")
     return d
 
 
@@ -7689,15 +7762,30 @@ def load_state(args, out_given):
             return None
     only = getattr(args, "only", None)
     st = read(args.out)
-    if st:
+    if st and (not st.get("shoot") or os.path.abspath(st["shoot"]) == os.path.abspath(args.clips)):
         return st, only
     if out_given:
         return None, None
-    for old in OLD_OUT_DIRS:                 # a project set up before the folder was renamed
+    for old in (OUT_DIR,) + OLD_OUT_DIRS:    # runs before 0.5.57 kept it inside the shoot folder
         st = read(os.path.join(args.clips, old))
         if st:
-            args.out = os.path.join(args.clips, old)
             return st, only
+    # a card dropped on its own whose shoot was set up before: its Kickoff Exports is by the XML
+    base = os.path.join(args.xml_out, OUT_DIR)
+    try:
+        cands = [base] + [os.path.join(base, x) for x in sorted(os.listdir(base))]
+    except OSError:
+        cands = []
+    for o in cands:
+        st = read(o)
+        root_ = st and st.get("shoot") and os.path.abspath(st["shoot"])
+        if root_ and root_ != os.path.abspath(args.clips) and inside(args.clips, [root_]):
+            restrict = only or [args.clips]
+            args.clips, args.out = root_, o
+            log("%s %s part of %s, which was set up before: adding %s" % (
+                ", ".join(os.path.basename(r) for r in restrict), "is" if len(restrict) == 1 else "are", root_,
+                "it" if len(restrict) == 1 else "them"))
+            return st, restrict
     d = args.clips
     while os.path.dirname(d) != d:
         d = os.path.dirname(d)
@@ -7706,7 +7794,10 @@ def load_state(args, out_given):
         if found:
             st = found[1]
             restrict = only or [args.clips]
-            args.clips, args.out = d, os.path.join(d, found[0])
+            if args.xml_out == args.clips:   # no XML folder picked: the XML (and Kickoff Exports) by the shoot
+                args.xml_out = d
+            args.clips = d
+            args.out = exports_dir(args.xml_out, d, args.name or st.get("project") or os.path.basename(d))
             log("%s %s part of %s, which was set up before: adding %s" % (
                 ", ".join(os.path.basename(r) for r in restrict), "is" if len(restrict) == 1 else "are", d,
                 "it" if len(restrict) == 1 else "them"))
@@ -7721,6 +7812,7 @@ def save_state(args, name, clips, labels, seq_fps, preroll, audio_files, prev=No
         master = os.path.abspath(master)
         master = rel_key(master, args.clips) if master.startswith(args.clips + os.sep) else master
     st.update(version=1, project=name, mode=args.mode, master=master, seq_fps=seq_fps, preroll=preroll,
+              shoot=os.path.abspath(args.clips),
               sync_size=list(args.sync_size) if args.sync_size else None, group_by=args.group_by,
               adds=adds, updated=datetime.datetime.now().isoformat(timespec="seconds"))
     cams = st.setdefault("cameras", {})

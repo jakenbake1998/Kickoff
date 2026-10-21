@@ -1035,7 +1035,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     box.appendChild(el("span", { class: "k" }, xml ? "Export XML to" : "Premiere project saves to"));
     var seg = el("div", { class: "seg", role: "group" });
     var def = el("button", { type: "button", class: dir ? "" : "on" }, xml ? "Top of the footage drive" : "Next to the XML");
-    def.title = xml ? "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the Kickoff Exports folder inside it"
+    def.title = xml ? "e.g. /Volumes/26JL02. Footage on this Mac's own disk: the shoot folder"
       : "When the XML folder is called XML, a Premiere folder beside it";
     var pick = el("button", { type: "button", class: dir ? "on" : "" }, dir ? esc(base(dir)) : "Choose a folder…");
     pick.title = dir ? "Click to pick a different folder" : "Pick a folder";
@@ -2535,7 +2535,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       }
       P.appendChild(g);
     } else if (pane === "files") {
-      g = group("Where it saves", "Reports and Kickoff's own files always go in Kickoff Exports inside the shoot folder.");
+      g = group("Where it saves", "Reports and Kickoff's own files go in a Kickoff Exports folder next to the XML.");
       g.appendChild(destControl("export"));
       g.appendChild(destControl("prproj"));
       P.appendChild(g);
