@@ -3375,6 +3375,14 @@ def stringout_entries(clips, fps, label):
     return entries, start_frames(fps)
 
 
+def seq_rate(placed, clips):
+    """Sync, Edit and Slow Motion sequence rate: 23.976, or true 24 when the footage is mostly true
+    24 fps. Never 30 or 60, whatever the footage was shot at (Jake: he never delivers those)."""
+    fps = (collections.Counter(c.fps for c in placed if c.fps).most_common(1) or
+           collections.Counter(c.fps for c in clips if c.fps).most_common(1) or [(23.976, 0)])[0][0]
+    return 24.0 if abs(fps - 24) < 0.001 else 23.976
+
+
 SLOWMO_MIN_FPS = 30.5      # a clip shot faster than this is slow motion (25 and 30 fps play as normal footage)
 
 
@@ -3562,8 +3570,7 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         usable = [c for c in clips if c.readable and c.fps and c.width]
         (w, h) = args.sync_size or (first_format(usable, seq_fps)[0] if usable else (3840, 2160))
         xw.sequence(working, seq_name("edit", project=name), seq_fps, w, h, start_frames(seq_fps), [])
-    # always 24p (23.976 for an NTSC project), whatever the project's rate, so a 59.94 project's
-    # 60p clips still slow to 40%
+    # 24p (23.976 unless --fps asked for a whole rate), so 60p clips slow to 40%
     slow_fps = 23.976 if abs(seq_fps - round(seq_fps)) > 0.001 else 24
     slow = slowmo_entries(cams, slow_fps)
     if slow:
@@ -6506,7 +6513,7 @@ def main(argv=None):
     ap.add_argument("--max-fps", type=float, default=0.0,
                     help="set aside clips above this frame rate even if they have scratch audio "
                          "(default 0: high-frame-rate clips with audio are synced)")
-    ap.add_argument("--fps", type=float, help="sync sequence frame rate (default: most common among placed clips)")
+    ap.add_argument("--fps", type=float, help="sync and edit sequence frame rate (default: 23.976, or 24 for true 24 fps footage)")
     ap.add_argument("--group-by", choices=["auto", "model", "folder"], default="auto",
                     help="auto: model + serial / reel letter / top folder; model: model only; "
                          "folder: top-level folder only")
@@ -6779,8 +6786,7 @@ def main(argv=None):
                             check=c.check, phase=c.phase, repeat_alt=c.repeat_alt)]
     labels = assign_cameras(clips, args.group_by)
     placed = [c for c in clips if c.status == "placed"]
-    seq_fps = args.fps or (collections.Counter(c.fps for c in placed if c.fps).most_common(1) or
-                           collections.Counter(c.fps for c in clips if c.fps).most_common(1) or [(24.0, 0)])[0][0]
+    seq_fps = args.fps or seq_rate(placed, clips)
     preroll = max([0.0] + [-(p.offset + p.src_in * c.speed) for c in placed for p in c.parts
                            if p.status == "placed"])
     # whole seconds, identical in every camera sequence; at least 10 s so cards added later that
@@ -7340,8 +7346,7 @@ def narrative(args, project_name, audio_paths):
     placed = [c for c in clips if c.status == "placed"]
     for c in placed:
         c.afile = file_at(c.offset, c.offset + c.duration * c.speed)
-    seq_fps = args.fps or (collections.Counter(c.fps for c in placed if c.fps).most_common(1) or
-                           collections.Counter(c.fps for c in clips if c.fps).most_common(1) or [(24.0, 0)])[0][0]
+    seq_fps = args.fps or seq_rate(placed, clips)
     t = 0.0
     for f in files:
         mine = [c for c in placed if c.afile is f]
@@ -7580,8 +7585,7 @@ def narrative_cameras(args, project_name, clips):
     order = sorted(files, key=(lambda f: (f["tc"], f["clip"].rel)) if files and all(f["tc"] is not None for f in files)
                    else (lambda f: (when(f), f["clip"].rel)))
     placed = [c for c in clips if c.status == "placed"]
-    seq_fps = args.fps or (collections.Counter(c.fps for c in placed if c.fps).most_common(1) or
-                           collections.Counter(c.fps for c in clips if c.fps).most_common(1) or [(24.0, 0)])[0][0]
+    seq_fps = args.fps or seq_rate(placed, clips)
     t = 0.0
     for f in order:
         mine = [c for c in placed if c.afile is f]
