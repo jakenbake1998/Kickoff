@@ -105,7 +105,7 @@ DEFAULT_BINS = [
 REQUIRED_ROLES = ("footage", "breakup", "sync", "synced", "condensed", "edit", "music")
 DEFAULT_SETTINGS = {
     "sync_size": "3840x2160",       # Sync, CamsNested and Edit sequences; "first": the camera's first clip
-    "start_hour": 1,                # the song starts at 01:00:00:00 (1 to 23: the preroll needs room before it)
+    "start_hour": 1,                # every sequence starts at 01:00:00:00 (Jake: 1 or 0; the song a little after)
     "track_order": "name",          # clips on V1, V2... in file order ("offset": song order)
     "labels": {},                   # camera letter -> Premiere label name (unset: CAMERA_LABELS)
     "bins": DEFAULT_BINS,
@@ -151,7 +151,7 @@ def load_settings(path):
     size = str(user.get("sync_size", s["sync_size"]))
     if size == "first" or re.match(r"^\d{2,5}x\d{2,5}$", size):
         s["sync_size"] = size
-    if isinstance(user.get("start_hour"), int) and 1 <= user["start_hour"] <= 23:
+    if isinstance(user.get("start_hour"), int) and 0 <= user["start_hour"] <= 23:
         s["start_hour"] = user["start_hour"]
     if user.get("track_order") in ("name", "offset"):
         s["track_order"] = user["track_order"]
@@ -231,7 +231,7 @@ def seq_name(kind, letter=None, project=None, suffix=""):
 
 
 def start_frames(fps):
-    """Timeline frame the song starts at (01:00:00:00 unless Settings says another hour)."""
+    """Timeline frame every sequence starts at (01:00:00:00, or 00:00:00:00 if Settings says so)."""
     return SETTINGS["start_hour"] * 3600 * rate_xml(fps)[0]
 
 
@@ -2965,6 +2965,13 @@ def premiere_audio(layout, pick):
     return n, first[i] + 1 + (c if layout[i] > 2 else 0)
 
 
+def channel_kinds(m):
+    """"stereo" or "mono" for each source channel of an audio file, as Premiere clips it: a stereo
+    stream is one stereo clip (left and right on a pair of tracks), anything else a mono clip each."""
+    return [("stereo" if n == 2 else "mono") for n in audio_track_channels(m.audio_layout or [m.channels])
+            for _ in range(n)]
+
+
 def audio_track_channels(layout):
     """Channels in each audio clip Premiere makes of a file, from its streams' channel counts
     (see premiere_audio): [1, 1, 1, 1, 1] for a Mini LF, [2] for most cameras, [1, 1, 1, 1] for
@@ -3067,15 +3074,29 @@ class Xmeml:
         ci = sub(track, "clipitem", id=cid)
         sub(ci, "name", name or os.path.basename(m.path))
         sub(ci, "enabled", "TRUE" if enabled else "FALSE")
-        sub(ci, "duration", int(round(m.duration * fps)))
+        # Premiere's own shape: a speed-changed clip counts its duration and in/out in stretched frames
+        # (a 40% clip's in point of source frame 100 is 250), and the exact source times go in ticks
+        # and the Time Remap map. Unstretched in/out came back from a save with in points before the
+        # media's start on clips cut up in the timeline (Chad Gray, 2026-10-22).
+        src_frames = int(round(m.duration * fps))
+        src_out = src_in + int(round(frames / speed))
+        sped = abs(speed - 1) > 1e-6
+        k = speed if sped else 1.0
+        if sped:                                       # rounding never runs past the file's end
+            src_out = min(src_out, max(src_frames, src_in + 1))
+        sub(ci, "duration", max(int(round(src_frames * k)), int(round(src_in * k)) + frames) if sped else src_frames)
         add_rate(ci, fps)
         sub(ci, "start", start)
         sub(ci, "end", start + frames)
-        sub(ci, "in", src_in)                          # source frames; timeline length is frames
-        sub(ci, "out", src_in + int(round(frames / speed)))
+        sub(ci, "in", int(round(src_in * k)))
+        sub(ci, "out", int(round(src_in * k)) + frames if sped else src_out)
+        exact = rate_xml(fps)[0] * (1000 / 1001 if rate_xml(fps)[1] else 1)
+        sub(ci, "pproTicksIn", int(round(src_in / exact * PR_TICKS)))
+        sub(ci, "pproTicksOut", int(round(src_out / exact * PR_TICKS)))
         self.file(ci, m)
-        if abs(speed - 1) > 1e-6:
-            add_speed(ci, 100.0 / speed, mediatype)
+        if sped:
+            add_speed(ci, 100.0 / speed, mediatype, (src_in, src_out, src_frames), k,
+                      (int(round(src_in * k)), int(round(src_in * k)) + frames))
         if mediatype == "audio":
             st = sub(ci, "sourcetrack")
             sub(st, "mediatype", "audio")
@@ -3139,11 +3160,13 @@ class Xmeml:
         video = sub(media, "video")
         sc = sub(sub(video, "format"), "samplecharacteristics")
         add_rate(sc, fps)
+        add_prores_previews(sc)
         sub(sc, "width", width)
         sub(sc, "height", height)
         sub(sc, "anamorphic", "FALSE")
         sub(sc, "pixelaspectratio", "square")
         sub(sc, "fielddominance", "none")
+        sub(sc, "colordepth", 24)
         audio = sub(media, "audio")
         sub(audio, "numOutputChannels", 2)
         asc = sub(sub(audio, "format"), "samplecharacteristics")
@@ -3166,6 +3189,7 @@ class Xmeml:
                     atracks[k].set("TL.SQTrackExpandedHeight", str(SONG_TRACK_HEIGHT))
         count = collections.Counter()
         track_of, index_of = {}, {}
+        stereo_out = {}                     # audio track -> 1 (left) / 2 (right) of a stereo pair
         for e in sorted(entries, key=lambda e: e["start"]):
             if e.get("nest") is not None:           # a sequence used as a clip (nested sequence)
                 nseq, nframes = e["nest"]
@@ -3194,11 +3218,23 @@ class Xmeml:
                 track_of[id(ci)], index_of[id(ci)] = e["vtrack"], count["v", e["vtrack"]]
                 items.append((ci, "video"))
             if e["atrack"] and m.has_audio:
+                kinds = channel_kinds(m) if not m.has_video else []
                 for k, (strack, on) in enumerate(e["asrc"]):
                     at = e["atrack"] + k
                     ci = self.clipitem(atracks[at - 1], self.uid("clipitem"), m, "audio",
                                        e["start"], frames, fps, enabled=on, label=e.get("label"), speed=sp,
                                        src_in=src_in, name=e.get("name"), strack=strack)
+                    if strack <= len(kinds):
+                        # the song's own shape: a stereo file is a stereo clip on a stereo track pair,
+                        # the way Premiere writes it (only channel 1, untyped, came in as mono)
+                        ci.set("premiereChannelType", kinds[strack - 1])
+                        if kinds[strack - 1] == "stereo":
+                            pair = (strack - 1) % 2
+                            atracks[at - 1].attrib.update({
+                                "PannerIsInverted": "true", "PannerCurrentValue": "0.5", "PannerName": "Balance",
+                                "currentExplodedTrackIndex": str(pair), "totalExplodedTrackCount": "2",
+                                "premiereTrackType": "Stereo"})
+                            stereo_out[at] = pair + 1
                     count["a", at] += 1
                     track_of[id(ci)], index_of[id(ci)] = at, count["a", at]
                     items.append((ci, "audio"))
@@ -3209,6 +3245,8 @@ class Xmeml:
             # a muted track (the song in a Condensed sequence) is there but silent
             sub(t, "enabled", "FALSE" if i - len(vtracks) + 1 in muted else "TRUE")
             sub(t, "locked", "FALSE")
+            if i - len(vtracks) + 1 in stereo_out:
+                sub(t, "outputchannelindex", stereo_out[i - len(vtracks) + 1])
         add_labels(seq, label)
         for mk in markers:                 # sequence markers, after the tracks as Premiere writes them
             m = sub(seq, "marker")
@@ -3226,7 +3264,8 @@ def audio_sources(m, enabled=True, every=False):
     silence and timecode), so they are there to switch on. every="raw" (Breakups): every channel in
     the camera's own order, all on, exactly as the file has them."""
     if not m.has_video:
-        return [(1, enabled)]
+        # the song (or any audio file): every channel, so a stereo song stays stereo
+        return [(k, enabled) for k in range(1, sum(audio_track_channels(m.audio_layout or [m.channels])) + 1)]
     if every == "raw":
         return [(k, True) for k in range(1, max(1, m.audio_tracks) + 1)]
     pick = m.audio_pick or 1
@@ -3262,23 +3301,62 @@ def add_scale(clipitem, scale):
     sub(p, "value", "%.2f" % scale)
 
 
-def add_speed(clipitem, percent, mediatype):
-    """Constant speed change (Premiere: Speed/Duration), as Premiere writes it in its XML exports."""
+def add_prores_previews(sc):
+    """Sequence video previews as QuickTime, Apple ProRes 422 (Jake), the codec block Premiere writes
+    in a sequence's format when its previews are set that way."""
+    codec = sub(sc, "codec")
+    sub(codec, "name", "Apple ProRes 422")
+    app = sub(codec, "appspecificdata")
+    sub(app, "appname", "Final Cut Pro")
+    sub(app, "appmanufacturer", "Apple Inc.")
+    sub(app, "appversion", "7.0")
+    qt = sub(sub(app, "data"), "qtcodec")
+    for k, v in (("codecname", "Apple ProRes 422"), ("codectypename", "Apple ProRes 422"),
+                 ("codectypecode", "apcn"), ("codecvendorcode", "appl"), ("spatialquality", 1024),
+                 ("temporalquality", 0), ("keyframerate", 0), ("datarate", 0)):
+        sub(qt, k, v)
+
+
+def add_speed(clipitem, percent, mediatype, src=None, stretch=1.0, whens=None):
+    """Constant speed change (Premiere: Speed/Duration), as Premiere writes it in its XML exports:
+    with src = (in, out, length) in source frames, the graphdict map from stretched timeline frames
+    ("when") to source frames ("value") at the file's start, in and out points and end."""
     eff = sub(sub(clipitem, "filter"), "effect")
     sub(eff, "name", "Time Remap")
     sub(eff, "effectid", "timeremap")
     sub(eff, "effectcategory", "motion")
     sub(eff, "effecttype", "motion")
     sub(eff, "mediatype", mediatype)
-    for pid, val in (("variablespeed", 0), ("speed", "%.4f" % percent), ("reverse", "FALSE"),
+    for pid, val in (("variablespeed", 0), ("speed", "%g" % round(percent, 4)), ("reverse", "FALSE"),
                      ("frameblending", "FALSE")):
         p = sub(eff, "parameter", authoringApp="PremierePro")
         sub(p, "parameterid", pid)
         sub(p, "name", pid)
+        if pid == "variablespeed":
+            sub(p, "valuemin", 0)
+            sub(p, "valuemax", 1)
         if pid == "speed":
             sub(p, "valuemin", -100000)
             sub(p, "valuemax", 100000)
         sub(p, "value", val)
+    if src is None:
+        return
+    a, b, n = src
+    p = sub(eff, "parameter", authoringApp="PremierePro")
+    sub(p, "parameterid", "graphdict")
+    sub(p, "name", "graphdict")
+    sub(p, "valuemin", 0)
+    sub(p, "valuemax", n)
+    sub(p, "value", 0)
+    wa, wb = whens or (int(round(a * stretch)), int(round(b * stretch)))     # the clip's own in/out
+    for when, val, tag in ((0, 0, "speedkfstart"), (wa, a, "speedkfin"), (wb, b, "speedkfout"),
+                           (max(wb, int(round(n * stretch))), n, "speedkfend")):
+        kf = sub(p, "keyframe")
+        sub(kf, "when", when)
+        sub(kf, "value", val)
+        sub(kf, "speedvirtualkf", "TRUE")
+        sub(kf, tag, "TRUE")
+    sub(sub(p, "interpolation"), "name", "FCPCurve")
 
 
 def fill_scale(m, width, height, fit="fill"):
@@ -3335,14 +3413,14 @@ def cam_bin_name(letter, cl):
 
 
 def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song=True):
-    """Sync layout: song at 01:00:00:00, every clip (every pass of a restarted take) on its own
+    """Sync layout: the sequence at 01:00:00:00, the song the preroll (10 s+) after it, every clip (every pass of a restarted take) on its own
     video track at its song offset. placements: [(Clip, Part)]."""
     song_frame = int(round(preroll_s * seq_fps))
     entries = []
     with_song = bool(master_media) and song and not args.no_master_audio
     if with_song:
         entries.append(dict(media=master_media, start=song_frame, vtrack=None, atrack=1, tall=True))
-    first_a = 2 if with_song else 1
+    first_a = 1 + (len(audio_sources(master_media)) if with_song else 0)
     for c, p in placements:
         # song time of the part's first frame, snapped so the cut sits on a whole source frame
         a = int(round(p.src_in * seq_fps))
@@ -3354,8 +3432,8 @@ def sync_entries(placements, seq_fps, preroll_s, master_media, args, label, song
                             aenabled=args.scratch_audio == "on", label=label, speed=c.speed,
                             src=(p.src_in, p.src_out) if c.split or p.src_in > 0 else None,
                             name=clip_name(c, p)))
-    start_tc = start_frames(seq_fps) - song_frame
-    return entries, start_tc
+    # the sequence starts on the hour (Jake: always 1 h or 0); the song a preroll after it
+    return entries, start_frames(seq_fps)
 
 
 def grid_size(need):
@@ -3723,7 +3801,8 @@ def unsynced_entries(clips, entries, seq_fps, preroll_s, master_media):
             if p is not None:
                 why = "pass %d of %d, %s" % (c.parts.index(p) + 1, len(c.parts), why)
             src = (p.src_in, p.src_out) if p is not None else None
-            out.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=2, all_audio="raw",
+            out.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, all_audio="raw",
+                            atrack=1 + (len(audio_sources(master_media)) if master_media else 1),
                             label=None, tail=True, src=src, name="%s (%s)" % (os.path.basename(c.path), why)))
             pos += max(1, entry_span(out[-1], seq_fps)[1])
         n = len(group)
@@ -3844,7 +3923,7 @@ def clip_row(c, seq_fps, preroll, part=None):
         "playback_speed": ("%gx %s" % (c.speed, c.speed_mode)) if c.speed != 1 else "",
         "offset_seconds": "%.3f" % c.offset if c.offset is not None else "",
         "offset_timecode": fmt_tc(c.offset, fps) if c.offset is not None else "",
-        "timeline_timecode": fmt_frames(start_frames(fps) + int(round(c.offset * fps)), fps)
+        "timeline_timecode": fmt_frames(start_frames(fps) + int(round((preroll + c.offset) * fps)), fps)
         if c.offset is not None else "",
         "confidence": "%.1f" % c.confidence if c.confidence is not None else "",
         "waveform_check": ("%s windows match" % c.check) if c.check else "",
@@ -3880,8 +3959,8 @@ def write_reports(clips, out_dir, seq_fps, preroll, args, cam_files, labels, cap
     L.append("")
     L.append("Master: `%s`  " % os.path.basename(args.master))
     L.append("Clips folder: `%s`  " % args.clips)
-    L.append("Generated %s by musicsync %s. Sequence rate %g fps. Song starts at timeline "
-             "01:00:00:00 in every camera sequence." % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+    L.append("Generated %s by musicsync %s. Sequence rate %g fps. Sequences start at "
+             "01:00:00:00; the song starts a few seconds in, the same in every camera sequence." % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
                                                         VERSION, seq_fps))
     if getattr(args, "song_note", ""):
         L.append("")
@@ -4544,9 +4623,8 @@ def slop_cut(xml_path, seed=0, out_path=None, style=None):
             event("stage", text="Looking at take %d of %d" % (n, len(takes)))
             it = t["item"]
             s0, s1 = int(it.findtext("start")), int(it.findtext("end"))
-            i0, i1 = int(it.findtext("in")), int(it.findtext("out"))
-            k = (i1 - i0) / max(1, s1 - s0)                        # source frames per timeline frame
-            src = lambda song_t: (i0 + (song_t * fps + song_frame - s0) * k) / fps
+            t0, per = source_time(it, fps)                        # source s at start, s per timeline frame
+            src = lambda song_t: t0 + (song_t * fps + song_frame - s0) * per
             a, b = max(0.0, t["a"]), min(an["dur"], t["b"])
             path = path_of(it)
             frames = look_at(path, src(a), src(b)) if path else []
@@ -4610,6 +4688,7 @@ def slop_cut(xml_path, seed=0, out_path=None, style=None):
                 seg.find("start").text, seg.find("end").text = str(a), str(b)
                 seg.find("in").text = str(i0 + int(round((a - s0) * k)))
                 seg.find("out").text = str(i0 + int(round((b - s0) * k)))
+                retime(seg, it, a - s0, b - s0, fps)
                 by_ref(seg)
                 tr.append(seg)
             last = max(last, s1)
@@ -4619,6 +4698,32 @@ def slop_cut(xml_path, seed=0, out_path=None, style=None):
     holder.insert(list(holder).index(edit) + 1, new)
     write_xml(root, out_path or xml_path)
     return name, shots, takes, an, looked
+
+
+def source_time(ci, fps):
+    """(source seconds at the clip's first timeline frame, source seconds per timeline frame), from
+    Premiere's ticks when the clip has them (right for speed changes too), else from in/out."""
+    s0, s1 = int(ci.findtext("start")), int(ci.findtext("end"))
+    i0, i1 = int(ci.findtext("in") or 0), int(ci.findtext("out") or 0)
+    ta, tb = ci.findtext("pproTicksIn"), ci.findtext("pproTicksOut")
+    if ta and tb:
+        return int(ta) / PR_TICKS, (int(tb) - int(ta)) / PR_TICKS / max(1, s1 - s0)
+    return i0 / fps, (i1 - i0) / max(1, s1 - s0) / fps
+
+
+def retime(seg, orig, a, b, fps):
+    """A piece of `orig` from timeline frame a to b (counted from its start), cut out as `seg`: its
+    ticks and Time Remap in/out points follow, so Premiere doesn't keep the whole clip's."""
+    t0, per = source_time(orig, fps)
+    if seg.find("pproTicksIn") is not None:
+        seg.find("pproTicksIn").text = str(int(round((t0 + a * per) * PR_TICKS)))
+        seg.find("pproTicksOut").text = str(int(round((t0 + b * per) * PR_TICKS)))
+    for kf in seg.iter("keyframe"):
+        if kf.find("speedkfin") is not None or kf.find("speedkfout") is not None:
+            edge = seg.findtext("in") if kf.find("speedkfin") is not None else seg.findtext("out")
+            kf.find("when").text = edge
+            kf.find("value").text = str(int(round((t0 + (a if kf.find("speedkfin") is not None else b) * per)
+                                                  * rate_xml(fps)[0] * (1000 / 1001 if rate_xml(fps)[1] else 1))))
 
 
 def by_ref(el):
@@ -5404,6 +5509,11 @@ def premiere_polish(xm):
             for k, v in (("anamorphic", "FALSE"), ("pixelaspectratio", "square"), ("fielddominance", "none")):
                 if vfm.find(k) is None:
                     ET.SubElement(vfm, k).text = v
+            if vfm.find("codec") is None:          # previews as QuickTime ProRes 422 (Jake)
+                add_prores_previews(vfm)
+                c = vfm.find("codec")
+                vfm.remove(c)
+                vfm.insert(list(vfm).index(vfm.find("rate")) + 1 if vfm.find("rate") is not None else 0, c)
         for kind in ("video", "audio"):
             for t in sq.findall("media/%s/track" % kind):
                 if t.find("enabled") is None:
@@ -7406,10 +7516,11 @@ def narrative(args, project_name, audio_paths):
     # video tracks: A Cam's clips on the fewest tracks from V1 up (by time), then B Cam's above...
     fr = lambda s: int(round(s * seq_fps))
     base, entries = 0, []
-    n_audio = 1
     for f in files:
         f["media"] = Media(f["path"], seq_fps, f["dur"], has_video=False, channels=f["ch"], rate=f["rate"])
         entries.append(dict(media=f["media"], start=fr(f["pos"]), vtrack=None, atrack=1))
+    # every channel of the sound files sits on A1 down, camera audio below the widest of them
+    n_audio = max([1] + [len(audio_sources(f["media"])) for f in files])
     for letter, cl in cams:
         label = camera_label(letter)
         ends = []
@@ -7431,8 +7542,8 @@ def narrative(args, project_name, audio_paths):
             if c.status == "placed" or not (c.readable and c.fps and c.width):
                 continue
             why = re.split(r"\s*[(;]", (c.reasons or ["not synced"])[0])[0].strip()
-            entries.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=2, all_audio="raw",
-                                label=camera_label(letter), tail=True, name="%s (%s)" % (os.path.basename(c.path), why)))
+            entries.append(dict(media=Media.of_clip(c, seq_fps), start=pos, vtrack=1, atrack=n_audio + 1,
+                                all_audio="raw", label=camera_label(letter), tail=True, name="%s (%s)" % (os.path.basename(c.path), why)))
             pos += fr(c.duration)
 
     audio_bins = collections.defaultdict(list)

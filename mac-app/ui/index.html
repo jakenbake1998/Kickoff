@@ -2490,8 +2490,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     if (pane === "seq") {
       g = group("Sequence size", "Synced, Condensed, CamsNested and Edit. Every clip is scaled to fill it, no black edges. Breakups always match the camera.");
       row(g, "Frame size", select(SIZES, settings.sync_size, function (v) { settings.sync_size = v; }));
-      var hours = []; for (var h = 1; h <= 23; h++) hours.push([h, String(h).padStart(2, "0") + ":00:00:00"]);
-      row(g, "Song starts at", select(hours, settings.start_hour, function (v) { settings.start_hour = +v; }));
+      var hours = [[1, "01:00:00:00"], [0, "00:00:00:00"]];
+      row(g, "Sequences start at", select(hours, settings.start_hour ? 1 : 0, function (v) { settings.start_hour = +v; }));
       row(g, "Takes on V1, V2...", select([["name", "In file order"], ["offset", "In song order"]], settings.track_order,
         function (v) { settings.track_order = v; }));
       P.appendChild(g);
