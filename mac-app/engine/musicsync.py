@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.58"
+VERSION = "0.5.59"
 
 # ---------------------------------------------------------------- constants
 
@@ -555,6 +555,7 @@ def probe(clip: Clip):
         clip.audio_offset = float(a.get("start_time") or 0) - vstart
         for k, val in (a.get("tags") or {}).items():
             tags.setdefault("audio_" + k.lower(), val)
+    clip.created = tags.get("creation_time") or ""
     # Sony XAVC (FX3, FX6...) keeps its timecode on a metadata stream ("rtmd"), not on the video
     clip.timecode = tags.get("timecode") or next(
         ((st.get("tags") or {}).get("timecode") for st in streams if (st.get("tags") or {}).get("timecode")), "")
@@ -7179,6 +7180,29 @@ def tc_seconds(tc, fps):
 
 
 _WAV_TC = {}
+_WAV_DATE = {}
+
+
+def wav_date(path):
+    """The day a recorder file was recorded (its bext OriginationDate, "2026-06-25"), or None."""
+    wav_tc_rate(path)
+    return _WAV_DATE.get(path)
+
+
+def clip_day(c):
+    """The day a camera clip was shot: the yymmdd in a Sony / ARRI / RED style name
+    (A004C001_260623HM), else its creation time in this Mac's time zone; None when neither."""
+    m = re.match(r"^[A-Z]\d{3}[A-Z]\d{3}_(\d{2})(\d{2})(\d{2})[0-9A-Z]{2}(?:[_.]|$)", os.path.basename(c.path))
+    if m:
+        return "20%s-%s-%s" % m.groups()
+    t = getattr(c, "created", "") or ""
+    try:
+        d = datetime.datetime.fromisoformat(t.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if d.year < 2000:
+        return None
+    return (d.astimezone() if d.tzinfo else d).strftime("%Y-%m-%d")
 
 
 def wav_tc_rate(path):
@@ -7197,7 +7221,12 @@ def wav_tc_rate(path):
                         break
                     cid, size = h[:4], int.from_bytes(h[4:], "little")
                     if cid in (b"bext", b"iXML") and size < 4 << 20:
-                        text += fh.read(size) + b"\n"
+                        chunk = fh.read(size)
+                        if cid == b"bext":             # OriginationDate, yyyy-mm-dd, at byte 320
+                            d = re.match(rb"(\d{4})\D?(\d{2})\D?(\d{2})", chunk[320:330])
+                            if d:
+                                _WAV_DATE[path] = "%s-%s-%s" % tuple(x.decode() for x in d.groups())
+                        text += chunk + b"\n"
                         fh.seek(size & 1, 1)
                     else:
                         if cid == b"data" and size == 0xFFFFFFFF:
@@ -7246,7 +7275,8 @@ def audio_timecode(path):
 
 
 TC_CHECK_S = 2.0       # how far the sound may move a timecode placement (s)
-TC_CHECK_Q = 8.0       # GCC-PHAT peak / median that counts as the sound agreeing
+TC_CHECK_Q = 30.0      # GCC-PHAT peak / median that counts as the sound agreeing (ETS: real matches
+                       # 75-457; 8 let clips on the wrong take through)
 
 
 _SOUND = collections.OrderedDict()
@@ -7265,25 +7295,28 @@ def _recent_sound(path):
 def confirm_by_sound(c, path, into, dur):
     """A timecode placement checked against the sound: the clip's own scratch audio against the
     recorder file within TC_CHECK_S of where timecode put it (`into`: seconds into the file of the
-    clip's first frame). Returns (seconds into the file, how): moved onto the sound when it agrees
-    clearly, else left where timecode put it and said so."""
+    clip's first frame). Returns (seconds into the file, how, ok): moved onto the sound when it
+    agrees clearly; ok False when the camera has sound and it doesn't match there (a camera clock
+    off the recorder's), so the clip is synced by its sound instead."""
     if not c.audio_layout:
-        return into, "no camera sound to check it with"
+        return into, "no camera sound to check it with", True
     try:
         x = load_audio(c.path)
         rec = _recent_sound(path)
     except RuntimeError:
-        return into, "sound not checked (unreadable)"
+        return into, "sound not checked (unreadable)", True
+    if float(np.sqrt(np.mean(np.square(x[:SR * 60])))) < 1e-3 if len(x) else True:
+        return into, "camera sound is silent, so it's checked by date only", True
     # the stretch of the clip that lies inside the file even when moved by the full search either way
     c0 = max(0.0, TC_CHECK_S - into) + 0.2
     c1 = min(len(x) / SR, len(rec) / SR - into - TC_CHECK_S) - 0.2
     c1 = min(c1, c0 + 40.0)                     # 40 s of overlap is plenty to agree on
     if c1 - c0 < 3.0:
-        return into, "too little overlap to check by sound"
+        return into, "too little overlap to check by sound", True
     fine, q = gcc_phat_offset(x, rec, into, c0, c1, search=TC_CHECK_S)
     if fine is None or q < TC_CHECK_Q:
-        return into, "sound didn't confirm it (check this one)"
-    return float(fine), "sound agrees (moved %+.2f s)" % (fine - into)
+        return into, "its sound doesn't match there (%.0f)" % q, False
+    return float(fine), "sound agrees (moved %+.2f s)" % (fine - into), True
 
 
 def drop_audio_copies(paths, info):
@@ -7437,42 +7470,64 @@ def narrative(args, project_name, audio_paths):
     st = Settings(threshold=args.threshold, min_hashes=args.min_landmarks, max_fps=args.max_fps,
                   place_repeats=False)
 
-    def work(c):
+    tc_tried = {}
+
+    def by_tc(c):
+        """Place a clip by timecode: its start label inside a file recorded the same day, and its
+        own sound agreeing there. True when placed; else why not is kept for the report."""
+        if id(c) in tc_tried:
+            return tc_tried[id(c)]
+        tc_tried[id(c)] = False
         c.how = ""
-        # timecode first: the clip's start label inside one file's labels
         ts = tc_seconds(c.timecode, c.fps) if args.sync_by != "audio" else None
-        if ts is not None:
-            # the file whose timecode span the clip's overlaps most
-            te = ts + (c.duration or 0) * c.speed
-            ov = [(min(te, f["tc"] + f["dur"]) - max(ts, f["tc"]), i) for i, f in enumerate(files) if f["tc"] is not None]
-            if ov and max(ov)[0] > 0:
-                f = files[max(ov)[1]]
-                into = (ts - f["tc"]) * tc_scale(f["path"])     # real seconds into the file
-                into, how = confirm_by_sound(c, f["path"], into, f["dur"])
-                c.offset, c.status, c.how = f["at"] + into, "placed", "timecode"
-                c.confidence = 100.0
-                c.notes.append("by timecode %s in %s, %s" % (c.timecode, os.path.basename(f["path"]), how))
-                return c
+        if ts is None:
+            return False
+        te = ts + (c.duration or 0) * c.speed
+        day = clip_day(c)
+        ov = [(min(te, f["tc"] + f["dur"]) - max(ts, f["tc"]), i) for i, f in enumerate(files) if f["tc"] is not None]
+        ov = [o for o in ov if o[0] > 0]
+        same = [o for o in ov if not (day and f_day(files[o[1]]) and f_day(files[o[1]]) != day)]
+        if not same:
+            c.tc_why = ("its timecode falls in %s, recorded on another day" % os.path.basename(files[max(ov)[1]]["path"])
+                        if ov else "timecode outside every audio file")
+            return False
+        f = files[max(same)[1]]
+        into = (ts - f["tc"]) * tc_scale(f["path"])     # real seconds into the file
+        into, how, ok = confirm_by_sound(c, f["path"], into, f["dur"])
+        if not ok:
+            c.tc_why = "its timecode puts it in %s, but %s" % (os.path.basename(f["path"]), how)
+            return False
+        c.offset, c.status, c.how = f["at"] + into, "placed", "timecode"
+        c.confidence = 100.0
+        c.notes.append("by timecode %s in %s, %s" % (c.timecode, os.path.basename(f["path"]), how))
+        tc_tried[id(c)] = True
+        return True
+
+    def f_day(f):
+        if "day" not in f:
+            f["day"] = wav_date(f["path"])
+        return f["day"]
+
+    def work(c):
+        if by_tc(c):
+            return c
         if not c.readable:
             c.reasons.append(REASON_UNREADABLE)
             return c
         if args.sync_by == "timecode":
-            c.reasons.append("timecode outside every audio file" if ts is not None else "no timecode")
+            c.reasons.append(getattr(c, "tc_why", "") or "no timecode")
             return c
         return c                    # by scratch audio: searched group by group below
 
     # timecode first for every clip; then the rest by scratch audio, one group of sound files at a time
     indexes = {}
+    if args.sync_by != "audio":
+        event("stage", text="Checking timecode against the sound")
+        for c in clips:
+            if c.readable:
+                by_tc(c)
+        log("%d clips placed by timecode" % sum(tc_tried.values()))
 
-    def by_tc(c):
-        c.how = ""
-        ts = tc_seconds(c.timecode, c.fps) if args.sync_by != "audio" else None
-        if ts is not None:
-            te = ts + (c.duration or 0) * c.speed
-            ov = [(min(te, f["tc"] + f["dur"]) - max(ts, f["tc"]), i) for i, f in enumerate(files) if f["tc"] is not None]
-            if ov and max(ov)[0] > 0:
-                return True
-        return False
     need_audio = [c for c in clips if c.readable and not by_tc(c)] if args.sync_by != "timecode" else []
     if need_audio and groups:
         log("Listening to %d audio files in %d group%s" % (len(files), len(groups), "s" if len(groups) > 1 else ""))
@@ -7562,6 +7617,8 @@ def narrative(args, project_name, audio_paths):
             c.split, c.parts = False, []
         if c.status == "placed":
             c.how = "scratch audio"
+        elif getattr(c, "tc_why", ""):
+            c.notes.append(c.tc_why)
         return c
 
     try:
