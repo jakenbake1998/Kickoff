@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.59"
+VERSION = "0.5.60"
 
 # ---------------------------------------------------------------- constants
 
@@ -556,6 +556,7 @@ def probe(clip: Clip):
         for k, val in (a.get("tags") or {}).items():
             tags.setdefault("audio_" + k.lower(), val)
     clip.created = tags.get("creation_time") or ""
+    clip.modified = tags.get("modification_date") or ""        # MXF keeps its record date here
     # Sony XAVC (FX3, FX6...) keeps its timecode on a metadata stream ("rtmd"), not on the video
     clip.timecode = tags.get("timecode") or next(
         ((st.get("tags") or {}).get("timecode") for st in streams if (st.get("tags") or {}).get("timecode")), "")
@@ -7195,7 +7196,7 @@ def clip_day(c):
     m = re.match(r"^[A-Z]\d{3}[A-Z]\d{3}_(\d{2})(\d{2})(\d{2})[0-9A-Z]{2}(?:[_.]|$)", os.path.basename(c.path))
     if m:
         return "20%s-%s-%s" % m.groups()
-    t = getattr(c, "created", "") or ""
+    t = getattr(c, "created", "") or getattr(c, "modified", "") or ""
     try:
         d = datetime.datetime.fromisoformat(t.replace("Z", "+00:00"))
     except ValueError:
@@ -7299,14 +7300,14 @@ def confirm_by_sound(c, path, into, dur):
     agrees clearly; ok False when the camera has sound and it doesn't match there (a camera clock
     off the recorder's), so the clip is synced by its sound instead."""
     if not c.audio_layout:
-        return into, "no camera sound to check it with", True
+        return into, "no camera sound to check it with", "silent"
     try:
         x = load_audio(c.path)
         rec = _recent_sound(path)
     except RuntimeError:
         return into, "sound not checked (unreadable)", True
     if float(np.sqrt(np.mean(np.square(x[:SR * 60])))) < 1e-3 if len(x) else True:
-        return into, "camera sound is silent, so it's checked by date only", True
+        return into, "camera sound is silent, so it's checked by date only", "silent"
     # the stretch of the clip that lies inside the file even when moved by the full search either way
     c0 = max(0.0, TC_CHECK_S - into) + 0.2
     c1 = min(len(x) / SR, len(rec) / SR - into - TC_CHECK_S) - 0.2
@@ -7494,6 +7495,11 @@ def narrative(args, project_name, audio_paths):
         f = files[max(same)[1]]
         into = (ts - f["tc"]) * tc_scale(f["path"])     # real seconds into the file
         into, how, ok = confirm_by_sound(c, f["path"], into, f["dur"])
+        if ok == "silent" and not (day and f_day(f)):
+            # nothing to check it by: a timecode from another day lands on a recording just the same
+            c.tc_why = ("its timecode puts it in %s, but its camera sound is silent and the shoot date "
+                        "can't be read, so it can't be checked" % os.path.basename(f["path"]))
+            return False
         if not ok:
             c.tc_why = "its timecode puts it in %s, but %s" % (os.path.basename(f["path"]), how)
             return False
