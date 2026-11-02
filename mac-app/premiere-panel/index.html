@@ -1,0 +1,116 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Kickoff</title>
+<style>
+:root{--bg:#1d1d1f;--fg:#e8e6e3;--muted:#9a968f;--accent:#f0962e;--bad:#e5645a}
+body{margin:0;padding:12px 14px;background:var(--bg);color:var(--fg);font:12px -apple-system,Helvetica,sans-serif}
+h1{font-size:13px;margin:0 0 8px;color:var(--accent);font-weight:600}
+#state{font-size:13px;margin-bottom:6px}
+#detail{color:var(--muted);line-height:1.5}
+#problems{margin-top:8px;color:var(--bad);line-height:1.5}
+</style></head>
+<body>
+<h1>Kickoff proxies</h1>
+<div id="state">Looking for proxy jobs…</div>
+<div id="detail"></div>
+<div id="problems"></div>
+<script>
+// Attaches each proxy the Razer finishes to its clip in the open project, once the proxy's length
+// and timecode match the original (a duplicate or cut-short render is never attached).
+// Kickoff writes the jobs to ~/Library/Application Support/Kickoff/proxy-jobs/<project>.json.
+var fs = require("fs"), path = require("path"), os = require("os"), cp = require("child_process");
+var DIR = path.join(os.homedir(), "Library/Application Support/Kickoff/proxy-jobs");
+var FFPROBE = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"].filter(function (p) { return fs.existsSync(p); })[0];
+var busy = false;
+
+function evalHost(code) {
+  return new Promise(function (ok) { window.__adobe_cep__.evalScript(code, function (r) { ok(r); }); });
+}
+function probe(file) {
+  return new Promise(function (ok) {
+    if (!FFPROBE) return ok(null);
+    cp.execFile(FFPROBE, ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", file],
+      { timeout: 20000 }, function (err, out) {
+        if (err) return ok(null);
+        try {
+          var j = JSON.parse(out), f = j.format || {}, tc = (f.tags || {}).timecode || "";
+          (j.streams || []).forEach(function (s) { if (!tc && s.tags && s.tags.timecode) tc = s.tags.timecode; });
+          ok({ dur: parseFloat(f.duration || 0), tc: tc });
+        } catch (e) { ok(null); }
+      });
+  });
+}
+function frames(tc, fps) {
+  var m = /^(\d+):(\d+):(\d+)[:;.](\d+)$/.exec(tc || ""), r = Math.round(fps || 24);
+  return m ? ((+m[1] * 60 + +m[2]) * 60 + +m[3]) * r + +m[4] : null;
+}
+function check(job, p) {
+  if (!p) return "Kickoff couldn't read the proxy";
+  var slack = 0.1 + 1 / (job.fps || 24);
+  if (Math.abs(p.dur - job.dur) > slack) return "the proxy is " + p.dur.toFixed(1) + " s, the clip " + job.dur.toFixed(1) + " s";
+  if (job.tc) {
+    var a = frames(job.tc, job.fps), b = frames(p.tc, job.fps);
+    if (b === null || a !== b) return "the proxy's timecode (" + (p.tc || "none") + ") isn't the clip's (" + job.tc + ")";
+  }
+  return "";
+}
+function getJobs(base) {
+  return fetch(base + "/api/jobs").then(function (r) { return r.json(); }).then(function (j) { return j.jobs || []; });
+}
+
+async function tick() {
+  if (busy) return;
+  busy = true;
+  try {
+    var files = fs.existsSync(DIR) ? fs.readdirSync(DIR).filter(function (f) { return /\.json$/.test(f); }) : [];
+    var total = 0, attached = 0, waiting = 0, problems = [], offline = [], names = [];
+    for (var fi = 0; fi < files.length; fi++) {
+      var fp = path.join(DIR, files[fi]), d;
+      try { d = JSON.parse(fs.readFileSync(fp, "utf8")); } catch (e) { continue; }
+      var open = d.jobs.filter(function (j) { return !j.attached && !j.problem; });
+      if (open.length) {
+        var live = null;
+        try { live = await getJobs(d.razer); } catch (e) { offline.push(d.razer); }
+        if (live) {
+          var byId = {};
+          live.forEach(function (j) { byId[j.id] = j; });
+          for (var k = 0; k < open.length; k++) {
+            var job = open[k], lj = byId[job.id];
+            if (!lj) continue;
+            if (lj.state === "failed" || lj.state === "cancelled") { job.problem = "the Razer couldn't make it" + (lj.error ? " (" + lj.error + ")" : ""); continue; }
+            if (lj.state !== "done") continue;
+            var proxy = lj.proxy_mac || job.proxy;
+            if (!job.verified) {
+              var why = check(job, await probe(proxy));
+              if (why) { job.problem = why; continue; }
+              job.verified = true;
+            }
+            var n = parseInt(await evalHost("kickoffAttach(" + JSON.stringify(job.clip) + "," + JSON.stringify(proxy) + ")"), 10) || 0;
+            if (n > 0) job.attached = true;
+          }
+          fs.writeFileSync(fp, JSON.stringify(d, null, 1));
+        }
+      }
+      if (d.jobs.length) names.push(d.project);
+      d.jobs.forEach(function (j) {
+        total++;
+        if (j.attached) attached++;
+        else if (j.problem) problems.push(path.basename(j.clip) + ": " + j.problem);
+        else waiting++;
+      });
+    }
+    var st = document.getElementById("state"), dt = document.getElementById("detail");
+    if (!total) { st.textContent = "No proxies asked for yet."; dt.textContent = "Turn on Settings > Proxies in Kickoff, then sync a shoot."; }
+    else {
+      st.textContent = attached + " of " + total + " proxies attached";
+      dt.textContent = (waiting ? waiting + " still rendering or waiting for their clip to be imported. " : "") +
+        (offline.length ? "The Razer isn't answering right now. " : "") + names.join(", ");
+    }
+    document.getElementById("problems").innerHTML = problems.slice(0, 12).map(function (p) {
+      return p.replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; });
+    }).join("<br>") + (problems.length > 12 ? "<br>…and " + (problems.length - 12) + " more" : "");
+  } finally { busy = false; }
+}
+tick();
+setInterval(tick, 10000);
+</script>
+</body></html>

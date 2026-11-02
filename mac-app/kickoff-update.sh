@@ -76,6 +76,20 @@ if get mac-app/vision/kickoff_vision.swift \
     changed="${changed:+$changed, }shot finder"
   fi
 fi
+# the Kickoff panel in Premiere (Window > Extensions > Kickoff): attaches the Razer's proxies as they
+# finish. A local panel, so Premiere needs its "load unsigned panels" switch (PlayerDebugMode) on.
+PANEL="$HOME/Library/Application Support/Adobe/CEP/extensions/com.kickoff.proxies"
+mkdir -p "$TMP/panel/CSXS"
+if curl -fsSL --max-time 20 "$BASE/mac-app/premiere-panel/CSXS/manifest.xml" -o "$TMP/panel/CSXS/manifest.xml" 2>/dev/null \
+   && curl -fsSL --max-time 20 "$BASE/mac-app/premiere-panel/index.html" -o "$TMP/panel/index.html" 2>/dev/null \
+   && curl -fsSL --max-time 20 "$BASE/mac-app/premiere-panel/host.jsx" -o "$TMP/panel/host.jsx" 2>/dev/null \
+   && grep -q "com.kickoff.proxies" "$TMP/panel/CSXS/manifest.xml" \
+   && ! diff -rq "$TMP/panel" "$PANEL" >/dev/null 2>&1; then
+  mkdir -p "$PANEL/CSXS"
+  cp "$TMP/panel/CSXS/manifest.xml" "$PANEL/CSXS/" && cp "$TMP/panel/index.html" "$TMP/panel/host.jsx" "$PANEL/"
+  for v in 11 12 13; do defaults write "com.adobe.CSXS.$v" PlayerDebugMode 1 2>/dev/null; done
+  changed="${changed:+$changed, }Premiere panel"
+fi
 case "$changed" in
   *window*|*app*|*icon*) echo "Updated: $changed. The new window shows next time you open Kickoff." ;;
   ?*) echo "Updated: $changed" ;;

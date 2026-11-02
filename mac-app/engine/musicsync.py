@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.60"
+VERSION = "0.5.61"
 
 # ---------------------------------------------------------------- constants
 
@@ -118,6 +118,8 @@ DEFAULT_SETTINGS = {
     "skip_folders": [],             # extra folder names never scanned (on top of proxies, renders...)
     "timecode_narrative": True,     # Narrative: sync by timecode when the clip and the audio file carry it
     "timecode_music": False,        # Music video: sync by timecode (the song file must carry it)
+    "razer_proxies": "off",         # "720" / "1080": after the run the Razer makes ProRes proxies and the
+    "razer_url": "http://kickoff.local",   # Kickoff panel in Premiere attaches each as it finishes
 }
 SETTINGS = json.loads(json.dumps(DEFAULT_SETTINGS))
 
@@ -158,6 +160,10 @@ def load_settings(path):
     for k in ("timecode_narrative", "timecode_music"):
         if isinstance(user.get(k), bool):
             s[k] = user[k]
+    if user.get("razer_proxies") in ("off", "720", "1080"):
+        s["razer_proxies"] = user["razer_proxies"]
+    if isinstance(user.get("razer_url"), str) and re.match(r"^https?://[\w.\-]+(:\d+)?/?$", user["razer_url"].strip()):
+        s["razer_url"] = user["razer_url"].strip().rstrip("/")
     if isinstance(user.get("labels"), dict):
         s["labels"] = {k.upper(): v for k, v in user["labels"].items()
                        if isinstance(k, str) and len(k) == 1 and k.isalpha() and v in PREMIERE_LABELS}
@@ -6633,6 +6639,59 @@ def slop_main(args):
     return 0
 
 
+# ---------------------------------------------------------------- proxies on the Razer
+PROXY_JOBS_DIR = os.path.expanduser("~/Library/Application Support/Kickoff/proxy-jobs")
+
+
+def razer_proxies(clips, project_name):
+    """Settings > Proxies on: hand the shoot's video files to the Razer, which renders ProRes proxies
+    next to them (<folder>/Proxies/<same subfolders>/<name>.mov, never overwriting one). The jobs
+    are written to proxy-jobs/<project>.json with each original's timecode and length, so the
+    Kickoff panel in Premiere attaches a proxy only once it's done AND matches its clip. Never stops
+    the run: when the Razer can't be reached, the log says so."""
+    res = SETTINGS.get("razer_proxies", "off")
+    if res not in ("720", "1080"):
+        return
+    import urllib.request
+    vids = [c for c in clips if c.readable and c.width and os.path.abspath(c.path).startswith("/Volumes/")]
+    if not vids:
+        log("Proxies: no footage on an external drive, so nothing was sent to the Razer")
+        return
+    by_drive = collections.defaultdict(list)
+    for c in vids:
+        by_drive[os.path.abspath(c.path).split(os.sep)[2]].append(c)
+    base = SETTINGS.get("razer_url", "http://kickoff.local")
+    out = {"project": project_name, "razer": base, "res": res, "made": time.strftime("%Y-%m-%d %H:%M"), "jobs": []}
+    for drive, cl in by_drive.items():
+        root = os.path.commonpath([os.path.dirname(os.path.abspath(c.path)) for c in cl])
+        rel = os.path.relpath(root, "/Volumes")
+        body = {"path": rel, "res": res, "dry": False,
+                "files": [os.path.relpath(os.path.abspath(c.path), root) for c in cl]}
+        want = {os.path.abspath(c.path): c for c in cl}
+        try:
+            req = urllib.request.Request(base + "/api/proxy", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                reply = json.loads(r.read() or b"{}")
+        except Exception as e:
+            log("Proxies: couldn't reach the Razer at %s (%s); no proxies were asked for" % (base, e))
+            event("proxies", sent=0, error="The Razer didn't answer, so no proxies were made")
+            return
+        for j in reply.get("jobs") or []:
+            c = want.get(os.path.abspath(j.get("clip") or ""))
+            if c is None:
+                continue
+            out["jobs"].append(dict(id=j.get("id"), clip=os.path.abspath(c.path), proxy=j.get("proxy"),
+                                    tc=c.timecode or "", fps=c.fps or 0, dur=round(c.duration or 0, 3)))
+        log("Proxies: the Razer is making %s for %s (%s already had one)" % (
+            reply.get("todo", len(reply.get("jobs") or [])), rel, reply.get("have", 0)))
+    os.makedirs(PROXY_JOBS_DIR, exist_ok=True)
+    name = re.sub(r"[^\w\- ]+", "_", project_name).strip() or "project"
+    with open(os.path.join(PROXY_JOBS_DIR, name + ".json"), "w", encoding="utf-8") as fh:
+        json.dump(out, fh, indent=1)
+    event("proxies", sent=len(out["jobs"]), res=res)
+
+
 def main(argv=None):
     # a long sync runs below everything else, so the Mac stays usable while it works (ffmpeg
     # children inherit it)
@@ -7005,6 +7064,7 @@ def main(argv=None):
                                clips=len(cl), synced=sum(c.status == "placed" for c in cl), spans=spans))
     aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH
                                 for c in clips if c.status != "placed") if master is not None else {}
+    razer_proxies(clips, project_name)
     event("done", project=project_name, edit_name=seq_name("edit", project=project_name), out=args.out, xml=os.path.join(args.xml_out, proj_file),
           report=report, song_duration=round(master.duration, 2) if master is not None else 0,
           mode=args.mode, clips=len(clips), synced=len(placed), cameras=cam_events,
@@ -7735,6 +7795,7 @@ def narrative(args, project_name, audio_paths):
         if c.status != "placed":
             lists["aside"].setdefault(c.reasons[0] if c.reasons else REASON_NO_MATCH, []).append(
                 dict(file=os.path.basename(c.path), cam=clip_cam(c), at=None))
+    razer_proxies(clips, project_name)
     event("done", project=project_name, edit_name=seq_name("edit", project=project_name), out=args.out,
           xml=os.path.join(args.xml_out, proj_file), report=report, song_duration=round(t, 2), mode="narrative",
           clips=len(clips), synced=len(placed), sync_name=sync_name, audio=len(files),
@@ -7957,6 +8018,7 @@ def narrative_cameras(args, project_name, clips):
         if c.status != "placed":
             lists["aside"].setdefault(c.reasons[0] if c.reasons else REASON_UNREADABLE, []).append(
                 dict(file=os.path.basename(c.path), cam=clip_cam(c), at=None))
+    razer_proxies(clips, project_name)
     event("done", project=project_name, edit_name=seq_name("edit", project=project_name), out=args.out,
           xml=os.path.join(args.xml_out, proj_file), report=report_path, song_duration=round(t, 2), mode="narrative",
           clips=len(clips), synced=len(placed), sync_name=sync_name, audio=0, takes=len(files), cams_together=True,
@@ -8285,6 +8347,7 @@ def add_cards(args, state, restrict):
     placed = [c for c in clips if c.status == "placed"]
     aside = collections.Counter(c.reasons[0] if c.reasons else REASON_NO_MATCH
                                 for c in clips if c.status != "placed") if master is not None else {}
+    razer_proxies(clips, name)
     event("done", project=name, add=n, out=args.out, xml=xml_path, report=report,
           song_duration=round(master.duration, 2) if master is not None else 0, mode=args.mode,
           clips=len(clips), synced=len(placed),
