@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.57"
+VERSION = "0.5.58"
 
 # ---------------------------------------------------------------- constants
 
@@ -6900,7 +6900,7 @@ def main(argv=None):
             for c in clips:
                 ts = tc_seconds(c.timecode, c.fps)
                 if ts is not None and ts + (c.duration or 0) > song_tc and ts < song_tc + master.duration:
-                    c.offset, c.status, c.how, c.confidence = ts - song_tc, "placed", "timecode", 100.0
+                    c.offset, c.status, c.how, c.confidence = (ts - song_tc) * tc_scale(args.master), "placed", "timecode", 100.0
                     c.notes.append("by timecode %s (song starts at %s)" % (c.timecode, "%02d:%02d:%02d" % (song_tc // 3600, song_tc // 60 % 60, song_tc % 60)))
             log("%d clips placed by timecode" % sum(getattr(c, "how", "") == "timecode" for c in clips))
     if master is not None:
@@ -7178,9 +7178,58 @@ def tc_seconds(tc, fps):
     return h * 3600 + mi * 60 + s + f / max(1, round(fps))
 
 
+_WAV_TC = {}
+
+
+def wav_tc_rate(path):
+    """(timecode fps, drop frame) a recorder wrote in its WAV (iXML TIMECODE_RATE / TIMECODE_FLAG,
+    else the bext description's SPEED=23.976ND), or (None, False)."""
+    if path in _WAV_TC:
+        return _WAV_TC[path]
+    fps, drop, text = None, False, b""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(12)
+            if head[:4] in (b"RIFF", b"RF64", b"BW64") and head[8:12] == b"WAVE":
+                for _ in range(64):                    # chunk headers; the sound data is skipped over
+                    h = fh.read(8)
+                    if len(h) < 8:
+                        break
+                    cid, size = h[:4], int.from_bytes(h[4:], "little")
+                    if cid in (b"bext", b"iXML") and size < 4 << 20:
+                        text += fh.read(size) + b"\n"
+                        fh.seek(size & 1, 1)
+                    else:
+                        if cid == b"data" and size == 0xFFFFFFFF:
+                            break                      # RF64 data size lives in ds64: stop here
+                        fh.seek(size + (size & 1), 1)
+    except OSError:
+        pass
+    t = text.decode("latin-1", "replace")
+    m = re.search(r"<TIMECODE_RATE>\s*(\d+)\s*/\s*(\d+)\s*<", t)
+    if m and int(m.group(2)):
+        fps = int(m.group(1)) / int(m.group(2))
+        drop = bool(re.search(r"<TIMECODE_FLAG>\s*DF\s*<", t))
+    else:
+        m = re.search(r"SPEED=0*(\d+(?:\.\d+)?)[ -]?(ND|NDF|DF|D)?", t)
+        if m:
+            fps, drop = float(m.group(1)), (m.group(2) or "").upper() in ("DF", "D")
+    _WAV_TC[path] = (fps, drop)
+    return _WAV_TC[path]
+
+
+def tc_scale(path):
+    """Real seconds per second of timecode labels in a recorder file: 1.001 for 23.976 / 29.97 /
+    59.94 non-drop (the labels run 0.1% slow against the clock), else 1."""
+    fps, drop = wav_tc_rate(path)
+    return 1.001 if fps and abs(fps - round(fps)) > 0.001 and not drop else 1.0
+
+
 def audio_timecode(path):
     """(start in seconds of timecode labels, duration, channels, rate) of an audio file. A BWF
-    recorder file carries its start as time_reference (samples since midnight); some files carry a
+    recorder file carries its start as time_reference (samples since midnight, real time); at a
+    23.976 / 29.97 non-drop timecode that is turned into labels, which run 0.1% slow (an ETS F8 shoot
+    was a minute out by the afternoon), so it compares with camera timecode. Some files carry a
     timecode tag instead. None when there's neither."""
     r = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path])
     info = json.loads(r.stdout or b"{}") if r.returncode == 0 else {}
@@ -7190,10 +7239,51 @@ def audio_timecode(path):
     tags.update({k.lower(): v for k, v in (a.get("tags") or {}).items()})
     start = None
     if str(tags.get("time_reference", "")).strip().isdigit():
-        start = int(tags["time_reference"]) / rate
+        start = int(tags["time_reference"]) / rate / tc_scale(path)
     elif tags.get("timecode"):
         start = tc_seconds(tags["timecode"], 30)
     return start, float((info.get("format") or {}).get("duration") or 0), int(a.get("channels") or 2), rate
+
+
+TC_CHECK_S = 2.0       # how far the sound may move a timecode placement (s)
+TC_CHECK_Q = 8.0       # GCC-PHAT peak / median that counts as the sound agreeing
+
+
+_SOUND = collections.OrderedDict()
+
+
+def _recent_sound(path):
+    """A recorder file's sound, mixed to mono; the last few are kept, since clips of one take come
+    one after another."""
+    if path not in _SOUND:
+        _SOUND[path] = load_audio(path)
+        while len(_SOUND) > 3:
+            _SOUND.popitem(last=False)
+    return _SOUND[path]
+
+
+def confirm_by_sound(c, path, into, dur):
+    """A timecode placement checked against the sound: the clip's own scratch audio against the
+    recorder file within TC_CHECK_S of where timecode put it (`into`: seconds into the file of the
+    clip's first frame). Returns (seconds into the file, how): moved onto the sound when it agrees
+    clearly, else left where timecode put it and said so."""
+    if not c.audio_layout:
+        return into, "no camera sound to check it with"
+    try:
+        x = load_audio(c.path)
+        rec = _recent_sound(path)
+    except RuntimeError:
+        return into, "sound not checked (unreadable)"
+    # the stretch of the clip that lies inside the file even when moved by the full search either way
+    c0 = max(0.0, TC_CHECK_S - into) + 0.2
+    c1 = min(len(x) / SR, len(rec) / SR - into - TC_CHECK_S) - 0.2
+    c1 = min(c1, c0 + 40.0)                     # 40 s of overlap is plenty to agree on
+    if c1 - c0 < 3.0:
+        return into, "too little overlap to check by sound"
+    fine, q = gcc_phat_offset(x, rec, into, c0, c1, search=TC_CHECK_S)
+    if fine is None or q < TC_CHECK_Q:
+        return into, "sound didn't confirm it (check this one)"
+    return float(fine), "sound agrees (moved %+.2f s)" % (fine - into)
 
 
 def drop_audio_copies(paths, info):
@@ -7357,9 +7447,11 @@ def narrative(args, project_name, audio_paths):
             ov = [(min(te, f["tc"] + f["dur"]) - max(ts, f["tc"]), i) for i, f in enumerate(files) if f["tc"] is not None]
             if ov and max(ov)[0] > 0:
                 f = files[max(ov)[1]]
-                c.offset, c.status, c.how = f["at"] + ts - f["tc"], "placed", "timecode"
+                into = (ts - f["tc"]) * tc_scale(f["path"])     # real seconds into the file
+                into, how = confirm_by_sound(c, f["path"], into, f["dur"])
+                c.offset, c.status, c.how = f["at"] + into, "placed", "timecode"
                 c.confidence = 100.0
-                c.notes.append("by timecode %s in %s" % (c.timecode, os.path.basename(f["path"])))
+                c.notes.append("by timecode %s in %s, %s" % (c.timecode, os.path.basename(f["path"]), how))
                 return c
         if not c.readable:
             c.reasons.append(REASON_UNREADABLE)
