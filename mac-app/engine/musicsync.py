@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.61"
+VERSION = "0.5.62"
 
 # ---------------------------------------------------------------- constants
 
@@ -7488,11 +7488,10 @@ def narrative(args, project_name, audio_paths):
     files = [dict(path=p, tc=i[0], dur=i[1], ch=i[2], rate=i[3]) for p, i in zip(audio_paths, info) if i[1] > 0]
     if cams_only:
         return narrative_cameras(args, project_name, clips)
-    # in the order they were recorded: by timecode when every file has it, else by name
-    if files and all(f["tc"] is not None for f in files):
-        files.sort(key=lambda f: (f["tc"], f["path"]))
-    else:
-        files.sort(key=lambda f: os.path.basename(f["path"]).lower())
+    # in the order they sit on the drive (folder by folder, then by name, numbers counted as numbers),
+    # so a scene's takes stay together: timecode alone put Jun 23 scene 9 next to Jun 25 scene 1
+    files.sort(key=lambda f: [(0, int(t)) if t.isdigit() else (1, t)
+                              for t in re.split(r"(\d+)", os.path.relpath(f["path"], args.clips).lower())])
     log("Audio files, in order: %s" % ", ".join(os.path.basename(f["path"]) for f in files))
 
     # listening: every file mixed to mono, end to end with a little silence between. The files are
