@@ -50,3 +50,26 @@ function kickoffNoProxy() {
     });
     return "[" + s.join(",") + "]";
 }
+
+// Every video clip in the open project, one per file: its media path and its proxy's path ("" if none).
+function kickoffAll() {
+    var seen = {}, s = [], q = function (x) { return '"' + String(x).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'; };
+    if (!app.project || !app.project.rootItem) return "[]";
+    kickoffWalk(app.project.rootItem, function (it) {
+        try {
+            var p = it.getMediaPath ? it.getMediaPath() : "";
+            if (!p || !/\.(mov|mp4|mxf|r3d|braw|crm|mts|m4v|avi)$/i.test(p) || !it.canProxy()) return;
+            var px = "";
+            try { if (it.hasProxy()) px = it.getProxyPath() || "?"; } catch (e) {}
+            if (seen[p] !== undefined) {
+                if (px && !s[seen[p]][1]) s[seen[p]][1] = px;
+                return;
+            }
+            seen[p] = s.length;
+            s.push([p, px]);
+        } catch (e) {}
+    });
+    var out = [];
+    for (var i = 0; i < s.length; i++) out.push("[" + q(s[i][0]) + "," + q(s[i][1]) + "]");
+    return "[" + out.join(",") + "]";
+}

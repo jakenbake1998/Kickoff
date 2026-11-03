@@ -34,12 +34,17 @@ button:hover{border-color:var(--accent);color:var(--accent)}
 .why{font-size:12px;color:var(--muted)}
 .why.badtext{color:var(--bad)}
 .grow{flex:1;min-width:0}
+.px{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.show{flex:none;font-size:11px;padding:3px 8px;align-self:center}
+button.make{border-color:var(--accent);color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
 .empty{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:var(--muted);gap:6px}
 .empty b{font:700 16px var(--display);color:var(--ink)}
 .foot{color:var(--muted);font-size:11px;margin-top:6px;min-height:14px}
 </style></head>
 <body>
 <header><span class="brand">Kickoff proxies</span><span class="project" id="project"></span>
+  <button id="make" class="make" style="display:none" title="Renders on the Razer, then attaches here.">Make missing proxies</button>
   <button id="find" title="Look for proxies already on the drive (Proxies folders near the footage) and attach the ones that match">Find on drive</button>
   <button id="again" title="Check every proxy again, e.g. after re-rendering one">Check again</button></header>
 <div id="main" style="display:none;flex:1;min-height:0;flex-direction:column">
@@ -154,48 +159,139 @@ async function tick() {
     if (ready.length) {
       try { inProj = JSON.parse(await evalHost("kickoffSync(" + JSON.stringify(JSON.stringify(ready)) + ")")) || {}; } catch (e) { inProj = {}; }
     }
-    // show the shoots whose clips are in this project, else the newest one
-    var shown = sets.filter(function (s) { return s.d.jobs.some(function (j) { return inProj[j.clip] && inProj[j.clip] !== "missing"; }); });
-    if (!shown.length && sets.length) shown = [sets.sort(function (a, b) { return b.mtime - a.mtime; })[0]];
-    render(shown, inProj, offline);
+    // a remade proxy is attached: the bad one it replaced goes to the Trash (listed when you confirmed)
+    for (var si = 0; si < sets.length; si++) {
+      var dirty = false;
+      sets[si].d.jobs.forEach(function (j) {
+        if (j.replaces && !j.trashed && j.verified && inProj[j.clip] === "on") { trash(j.replaces); j.trashed = true; dirty = true; }
+      });
+      if (dirty) fs.writeFileSync(sets[si].file, JSON.stringify(sets[si].d, null, 1));
+    }
+    var all = [];
+    try { all = JSON.parse(await evalHost("kickoffAll()")) || []; } catch (e) { all = []; }
+    var byClip = {};
+    sets.sort(function (a, b) { return a.mtime - b.mtime; }).forEach(function (s) {
+      s.d.jobs.forEach(function (j) { byClip[j.clip] = j; });     // the newest set's job wins
+    });
+    render(all, byClip, offline);
   } finally { busy = false; }
 }
 
-function render(shown, inProj, offline) {
-  var rows = [], n = { on: 0, run: 0, wait: 0, bad: 0 };
-  shown.forEach(function (s) {
-    s.d.jobs.forEach(function (j) {
-      var st, why;
-      if (j.problem) { st = "bad"; why = j.problem; }
-      else if (j.verified && inProj[j.clip] === "on") { st = "on"; why = "attached"; }
-      else if (j.verified && inProj[j.clip] === "off") { st = "bad"; why = "Premiere wouldn't take this proxy"; }
-      else if (j.verified) { st = "wait"; why = "ready: attaches when you import this clip"; }
-      else { st = "run"; why = j.razer === "running" ? "rendering on the Razer" + (j.stage ? " " + j.stage : "") : "waiting on the Razer"; }
-      n[st]++;
-      rows.push({ st: st, why: why, name: path.basename(j.clip) });
-    });
+var missing = [];
+function render(all, byClip, offline) {
+  var rows = [], n = { on: 0, run: 0, wait: 0, bad: 0, none: 0 };
+  missing = [];
+  all.forEach(function (c) {
+    var clip = c[0], px = c[1], j = byClip[clip], st, why, file = "";
+    if (px) { st = "on"; why = "attached"; file = px === "?" ? "" : px; }
+    else if (j && j.problem) { st = "bad"; why = j.problem; file = j.proxy || ""; }
+    else if (j && j.verified) { st = "bad"; why = "Premiere wouldn't take this proxy"; file = j.proxy || ""; }
+    else if (j && !j.local && !j.problem) { st = "run"; why = j.razer === "running" ? "rendering on the Razer" + (j.stage ? " " + j.stage : "") : "waiting on the Razer"; }
+    else { st = "none"; why = "no proxy"; }
+    if (st === "bad" || st === "none") missing.push({ clip: clip, bad: st === "bad" ? file : "" });
+    n[st]++;
+    rows.push({ st: st, why: why, name: path.basename(clip), file: file });
   });
   var total = rows.length;
   $("main").style.display = total ? "flex" : "none";
   $("empty").style.display = total ? "none" : "flex";
-  $("project").textContent = shown.map(function (s) { return s.d.project; }).join(", ");
+  $("project").textContent = projName;
   $("count").innerHTML = n.on + "<small> / " + total + "</small>";
   $("label").textContent = n.on === total && total ? "proxies attached, all done" : "proxies attached";
   $("fill").style.width = total ? (100 * n.on / total) + "%" : "0";
   $("fill").className = "fill" + (total && n.on === total ? " done" : "");
-  var chips = [["run", n.run, "rendering"], ["wait", n.wait, "waiting for import"], ["bad", n.bad, "refused"]];
+  var chips = [["run", n.run, "rendering"], ["bad", n.bad, "refused"], ["wait", n.none, "no proxy"]];
   $("chips").innerHTML = chips.filter(function (c) { return c[1]; }).map(function (c) {
     return '<span class="chip"><span class="dot ' + c[0] + '"></span>' + c[1] + " " + c[2] + "</span>";
   }).join("");
-  var order = { bad: 0, run: 1, wait: 2, on: 3 };
+  $("make").style.display = missing.length ? "" : "none";
+  $("make").textContent = "Make missing proxies (" + missing.length + ")";
+  var order = { bad: 0, none: 1, run: 2, on: 3 };
   rows.sort(function (a, b) { return order[a.st] - order[b.st] || a.name.localeCompare(b.name); });
   $("list").innerHTML = rows.map(function (r) {
-    return '<div class="row"><span class="dot ' + r.st + '"></span><div class="grow"><div class="name">' + esc(r.name) +
-      '</div><div class="why' + (r.st === "bad" ? " badtext" : "") + '">' + esc(r.why) + "</div></div></div>";
+    var where = r.file ? '<div class="px">' + esc(path.basename(r.file)) + "  in  " + esc(path.dirname(r.file)) + "</div>" : "";
+    return '<div class="row"><span class="dot ' + (r.st === "none" ? "wait" : r.st) + '"></span><div class="grow"><div class="name">' + esc(r.name) +
+      '</div><div class="why' + (r.st === "bad" ? " badtext" : "") + '">' + esc(r.why) + "</div>" + where + "</div>" +
+      (r.file ? '<button class="show" data-path="' + esc(r.file) + '">Show in Finder</button>' : "") + "</div>";
   }).join("");
   $("foot").textContent = offline ? "The Razer isn't answering. Proxies still rendering will attach once it's back." :
     note && Date.now() - note.t < 60000 ? note.text : "Checks every 10 seconds.";
 }
+var projName = "";
+evalHost("app.project.name").then(function (r) { projName = String(r || "").replace(/\.prproj$/i, ""); });
+$("list").onclick = function (e) {
+  var b = e.target.closest ? e.target.closest("button.show") : null;
+  if (b) cp.execFile("/usr/bin/open", ["-R", b.getAttribute("data-path")]);
+};
+function trash(p) {
+  if (!p || !fs.existsSync(p)) return;
+  cp.execFile("/usr/bin/osascript", ["-e", 'tell application "Finder" to delete (POSIX file ' + JSON.stringify(p) + " as alias)"], function () {});
+}
+function kickoffSettings() {
+  try { return JSON.parse(fs.readFileSync(path.join(HOME, "Library/Application Support/Kickoff/settings.json"), "utf8")) || {}; } catch (e) { return {}; }
+}
+
+// ---- Make missing proxies: the clips with no proxy (or a refused one) go to the Razer ----
+async function makeMissing() {
+  if (!missing.length || busy) return;
+  var set = kickoffSettings(), base = (set.razer_url || "http://kickoff.local").replace(/\/$/, "");
+  var res = set.razer_proxies === "1080" ? "1080" : "720";
+  var list = missing.filter(function (m) { return /^\/Volumes\/[^/]+\//.test(m.clip); });
+  if (!list.length) { note = { t: Date.now(), text: "These clips aren't on an external drive, so the Razer can't reach them." }; return tick(); }
+  var bad = list.filter(function (m) { return m.bad; });
+  var msg = "Make " + list.length + " prox" + (list.length === 1 ? "y" : "ies") + " on the Razer (" + res + "p ProRes Proxy, in a Proxies folder next to the footage)?";
+  if (bad.length) msg += "\n\n" + (bad.length === 1 ? "This bad proxy goes" : "These " + bad.length + " bad proxies go") + " to the Trash once the new one is attached:\n" +
+    bad.map(function (m) { return path.basename(m.bad); }).join("\n");
+  if (!window.confirm(msg)) return;
+  busy = true;
+  $("make").disabled = true;
+  try {
+    try { await getJobs(base); } catch (e) {
+      note = { t: Date.now(), text: "The Razer isn't answering at " + base + ". Turn it on and try again." };
+      return;
+    }
+    var byDrive = {};
+    list.forEach(function (m) { var d = m.clip.split("/")[2]; (byDrive[d] = byDrive[d] || []).push(m); });
+    var name = ((projName || "project").replace(/[^\w\- ]+/g, "_").trim() || "project") + " (made)";
+    var fp = path.join(DIR, name + ".json"), d = { project: projName, razer: base, res: res, jobs: [] };
+    try { d = JSON.parse(fs.readFileSync(fp, "utf8")); d.razer = base; } catch (e) {}
+    var sent = 0, errs = [];
+    for (var drive in byDrive) {
+      var ms = byDrive[drive];
+      var root = ms.map(function (m) { return path.dirname(m.clip); }).reduce(function (a, b) {
+        while (b !== a && b.indexOf(a + "/") !== 0) a = path.dirname(a);
+        return a;
+      });
+      var body = { path: path.relative("/Volumes", root), res: res, dry: false,
+                   files: ms.map(function (m) { return path.relative(root, m.clip); }) };
+      var reply;
+      try {
+        var r = await fetch(base + "/api/proxy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        reply = await r.json();
+        if (!r.ok || reply.error) throw new Error(reply.error || ("HTTP " + r.status));
+      } catch (e) { errs.push(drive + ": " + (e.message || e)); continue; }
+      var want = {};
+      ms.forEach(function (m) { want[m.clip] = m; });
+      for (var k = 0; k < (reply.jobs || []).length; k++) {
+        var rj = reply.jobs[k], m = want[rj.clip] || want[path.join("/Volumes", rj.clip || "")];
+        if (!m) continue;
+        var o = await probe(m.clip) || {};
+        d.jobs = d.jobs.filter(function (j) { return j.clip !== m.clip; });
+        d.jobs.push({ id: rj.id, clip: m.clip, proxy: rj.proxy_mac || rj.proxy, tc: o.tc || "", fps: o.fps || 24, dur: o.dur || 0, replaces: m.bad || "" });
+        sent++;
+      }
+    }
+    fs.mkdirSync(DIR, { recursive: true });
+    if (sent) fs.writeFileSync(fp, JSON.stringify(d, null, 1));
+    note = { t: Date.now(), text: errs.length ? "The Razer couldn't take " + errs.join("; ") + (/not found|exist|mount/i.test(errs.join(" ")) ? " (it can't see that drive)" : "") :
+      "Sent " + sent + " to the Razer. Each attaches here when it's done." };
+  } finally {
+    busy = false;
+    $("make").disabled = false;
+  }
+  tick();
+}
+$("make").onclick = makeMissing;
 
 $("again").onclick = function () { force = true; tick(); };
 
@@ -286,7 +382,12 @@ async function findOnDrive() {
     var name = ((proj || "project").replace(/[^\w\- ]+/g, "_").trim() || "project") + " (on the drive)";
     if (jobs.length) {
       fs.mkdirSync(DIR, { recursive: true });
-      fs.writeFileSync(path.join(DIR, name + ".json"), JSON.stringify({ project: proj || "This project", made: new Date().toISOString(), jobs: jobs }, null, 1));
+      var fpd = path.join(DIR, name + ".json"), old = [];
+      try { old = JSON.parse(fs.readFileSync(fpd, "utf8")).jobs || []; } catch (e) {}
+      var mine = {};
+      jobs.forEach(function (j) { mine[j.clip] = 1; });
+      jobs = old.filter(function (j) { return !mine[j.clip]; }).concat(jobs);   // adds to the earlier search
+      fs.writeFileSync(fpd, JSON.stringify({ project: proj || "This project", made: new Date().toISOString(), jobs: jobs }, null, 1));
     }
     note = { t: Date.now(), text: "" };
     note.text = $("foot").textContent = jobs.length ? "Found " + n + " matching prox" + (n === 1 ? "y" : "ies") + (jobs.length > n ? ", " + (jobs.length - n) + " that don't match" : "") + "." :
