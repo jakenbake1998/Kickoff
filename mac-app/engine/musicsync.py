@@ -6761,6 +6761,9 @@ def main(argv=None):
                          "bins, Breakups and an empty Edit sequence only (commercials); auto (default): music "
                          "when a song is found and clips line up with it; slop: add a Slop Cut (a rough edit) to "
                          "a finished project XML, given as the path")
+    ap.add_argument("--placements", metavar="CSV",
+                    help="Narrative: take each clip's placement from an earlier run's narrative_report.csv "
+                         "(no listening), so a project can be rebuilt with a newer layout in minutes")
     ap.add_argument("--sync-by", choices=["auto", "timecode", "audio"], default=None,
                     help="auto (default): timecode when the clip and the audio both carry it, else the "
                          "sound; audio: ignore timecode; timecode: only timecode")
@@ -7611,14 +7614,15 @@ def narrative(args, project_name, audio_paths):
 
     # timecode first for every clip; then the rest by scratch audio, one group of sound files at a time
     indexes = {}
-    if args.sync_by != "audio":
+    if args.sync_by != "audio" and not getattr(args, "placements", None):
         event("stage", text="Checking timecode against the sound")
         for c in clips:
             if c.readable:
                 by_tc(c)
         log("%d clips placed by timecode" % sum(tc_tried.values()))
 
-    need_audio = [c for c in clips if c.readable and not by_tc(c)] if args.sync_by != "timecode" else []
+    need_audio = [c for c in clips if c.readable and not by_tc(c)] \
+        if args.sync_by != "timecode" and not getattr(args, "placements", None) else []
     if need_audio and groups:
         log("Listening to %d audio files in %d group%s" % (len(files), len(groups), "s" if len(groups) > 1 else ""))
     done = 0
@@ -7660,6 +7664,26 @@ def narrative(args, project_name, audio_paths):
             indexes.clear()
         for c in need_audio:
             yield finish(c)
+
+    def placements_from(csv_path):
+        """An earlier run's report: placed clips go back where it put them (same audio file, same
+        seconds into it), the rest keep its reason. Nothing is listened to."""
+        rows = {}
+        with open(csv_path, newline="", encoding="utf-8") as fh:
+            for r in csv.DictReader(fh):
+                rows[os.path.abspath(r.get("path") or "")] = r
+        by_audio = {os.path.abspath(f["path"]): f for f in files}
+        for c in clips:
+            c.how = ""
+            r = rows.get(os.path.abspath(c.path))
+            f = by_audio.get(os.path.abspath((r or {}).get("audio_path") or ""))
+            if r and r.get("status") == "placed" and f is not None and r.get("starts_into_audio_s"):
+                c.offset, c.status = f["at"] + float(r["starts_into_audio_s"]), "placed"
+                c.how, c.confidence = r.get("synced_by") or "earlier run", 100.0
+                c.notes.append("placed as in %s" % os.path.basename(csv_path))
+            else:
+                c.reasons.append((r or {}).get("reason") or "not in the earlier run's report")
+            yield c
 
     tries, scores, searched, lock = {}, {}, [0], threading.Lock()
     st_quick = copy.copy(st)
@@ -7712,7 +7736,7 @@ def narrative(args, project_name, audio_paths):
         return c
 
     try:
-        found = list(results())
+        found = list(placements_from(args.placements)) if getattr(args, "placements", None) else list(results())
     except MemoryGuard as e:
         sys.exit("error: %s" % e)
     for c in found:
