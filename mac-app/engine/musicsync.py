@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.63"
+VERSION = "0.5.64"
 
 # ---------------------------------------------------------------- constants
 
@@ -120,6 +120,8 @@ DEFAULT_SETTINGS = {
     "timecode_music": False,        # Music video: sync by timecode (the song file must carry it)
     "razer_proxies": "off",         # "720" / "1080": after the run the Razer makes ProRes proxies and the
     "razer_url": "http://kickoff.local",   # Kickoff panel in Premiere attaches each as it finishes
+    "razer_sync": "off",            # "on": the listening runs on the Razer when it answers, else on this Mac
+    "razer_sync_url": "http://kickoff.local:8010",   # the Razer's Kickoff worker (mac-app/razer)
 }
 SETTINGS = json.loads(json.dumps(DEFAULT_SETTINGS))
 
@@ -162,8 +164,11 @@ def load_settings(path):
             s[k] = user[k]
     if user.get("razer_proxies") in ("off", "720", "1080"):
         s["razer_proxies"] = user["razer_proxies"]
-    if isinstance(user.get("razer_url"), str) and re.match(r"^https?://[\w.\-]+(:\d+)?/?$", user["razer_url"].strip()):
-        s["razer_url"] = user["razer_url"].strip().rstrip("/")
+    for k in ("razer_url", "razer_sync_url"):
+        if isinstance(user.get(k), str) and re.match(r"^https?://[\w.\-]+(:\d+)?/?$", user[k].strip()):
+            s[k] = user[k].strip().rstrip("/")
+    if user.get("razer_sync") in ("off", "on"):
+        s["razer_sync"] = user["razer_sync"]
     if isinstance(user.get("labels"), dict):
         s["labels"] = {k.upper(): v for k, v in user["labels"].items()
                        if isinstance(k, str) and len(k) == 1 and k.isalpha() and v in PREMIERE_LABELS}
@@ -260,6 +265,26 @@ UNSURE_OVER_CHANCE = 2.0   # has this many landmarks and this many times what ch
 
 def log(msg):
     print(msg, file=sys.stderr, flush=True)
+
+
+# On the Razer (its Kickoff worker sets KICKOFF_ON_RAZER) Jake's Mac drives are mounted at
+# /mnt/mac/<DRIVE>: what's saved for the Mac (the project state, the proxy jobs) uses /Volumes paths.
+ON_RAZER = bool(os.environ.get("KICKOFF_ON_RAZER"))
+RAZER_DRIVES = (os.environ.get("KICKOFF_DRIVES") or "/mnt/mac").rstrip("/")
+
+
+def mac_path(p):
+    """A path as the Mac sees it (on the Mac: unchanged)."""
+    if ON_RAZER and p and (p == RAZER_DRIVES or p.startswith(RAZER_DRIVES + "/")):
+        return "/Volumes" + p[len(RAZER_DRIVES):]
+    return p
+
+
+def local_path(p):
+    """A /Volumes path saved by the Mac, as this machine reads it (on the Mac: unchanged)."""
+    if ON_RAZER and p and p.startswith("/Volumes/"):
+        return RAZER_DRIVES + p[len("/Volumes"):]
+    return p
 
 
 EVENTS = False              # --events: progress as JSON lines on stdout, for the Kickoff window
@@ -6654,23 +6679,24 @@ def razer_proxies(clips, project_name):
     if res not in ("720", "1080"):
         return
     import urllib.request
-    vids = [c for c in clips if c.readable and c.width and os.path.abspath(c.path).startswith("/Volumes/")]
+    vids = [c for c in clips if c.readable and c.width and mac_path(os.path.abspath(c.path)).startswith("/Volumes/")]
     if not vids:
         log("Proxies: no footage on an external drive, so nothing was sent to the Razer")
         return
     by_drive = collections.defaultdict(list)
     for c in vids:
-        by_drive[os.path.abspath(c.path).split(os.sep)[2]].append(c)
+        by_drive[mac_path(os.path.abspath(c.path)).split(os.sep)[2]].append(c)
     base = SETTINGS.get("razer_url", "http://kickoff.local")
+    ask = "http://127.0.0.1" if ON_RAZER else base      # a sync running on the Razer asks itself
     out = {"project": project_name, "razer": base, "res": res, "made": time.strftime("%Y-%m-%d %H:%M"), "jobs": []}
     for drive, cl in by_drive.items():
-        root = os.path.commonpath([os.path.dirname(os.path.abspath(c.path)) for c in cl])
+        macs = {mac_path(os.path.abspath(c.path)): c for c in cl}
+        root = os.path.commonpath([os.path.dirname(m) for m in macs])
         rel = os.path.relpath(root, "/Volumes")
-        body = {"path": rel, "res": res, "dry": False,
-                "files": [os.path.relpath(os.path.abspath(c.path), root) for c in cl]}
-        want = {os.path.abspath(c.path): c for c in cl}
+        body = {"path": rel, "res": res, "dry": False, "files": [os.path.relpath(m, root) for m in macs]}
+        want = dict(macs, **{os.path.abspath(c.path): c for c in cl})
         try:
-            req = urllib.request.Request(base + "/api/proxy", data=json.dumps(body).encode(),
+            req = urllib.request.Request(ask + "/api/proxy", data=json.dumps(body).encode(),
                                          headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=20) as r:
                 reply = json.loads(r.read() or b"{}")
@@ -6679,18 +6705,130 @@ def razer_proxies(clips, project_name):
             event("proxies", sent=0, error="The Razer didn't answer, so no proxies were made")
             return
         for j in reply.get("jobs") or []:
-            c = want.get(os.path.abspath(j.get("clip") or ""))
+            c = want.get(os.path.abspath(j.get("clip") or "")) or want.get(mac_path(os.path.abspath(j.get("clip") or "")))
             if c is None:
                 continue
-            out["jobs"].append(dict(id=j.get("id"), clip=os.path.abspath(c.path), proxy=j.get("proxy"),
+            out["jobs"].append(dict(id=j.get("id"), clip=mac_path(os.path.abspath(c.path)), proxy=mac_path(j.get("proxy") or ""),
                                     tc=c.timecode or "", fps=c.fps or 0, dur=round(c.duration or 0, 3)))
         log("Proxies: the Razer is making %s for %s (%s already had one)" % (
             reply.get("todo", len(reply.get("jobs") or [])), rel, reply.get("have", 0)))
-    os.makedirs(PROXY_JOBS_DIR, exist_ok=True)
     name = re.sub(r"[^\w\- ]+", "_", project_name).strip() or "project"
+    if ON_RAZER:                      # the Mac's side of the hand-off writes the file the panel reads
+        print("@@kickoff-proxyjobs " + json.dumps({"name": name, "jobs": out}), flush=True)
+    else:
+        write_proxy_jobs(name, out)
+    event("proxies", sent=len(out["jobs"]), res=res)
+
+
+def write_proxy_jobs(name, out):
+    os.makedirs(PROXY_JOBS_DIR, exist_ok=True)
     with open(os.path.join(PROXY_JOBS_DIR, name + ".json"), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=1)
-    event("proxies", sent=len(out["jobs"]), res=res)
+
+
+def sync_on_razer(argv, args):
+    """Settings > Heavy work on the Razer: hand this whole run to the Kickoff worker on the Razer
+    (mac-app/razer/kickoff_worker.py), which reads the drive at /mnt/mac/<DRIVE> and writes the
+    XML and Kickoff Exports straight onto it. Its progress comes back here line by line, so the
+    window shows the run as if it were local. None (run here instead) when the Razer doesn't
+    answer, doesn't have the drive, or the footage isn't on an external drive."""
+    import signal
+    import urllib.request
+    base = SETTINGS.get("razer_sync_url", "http://kickoff.local:8010")
+
+    def call(path, body=None, timeout=10):
+        req = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+
+    # every path made absolute; all of them must be on an external drive the Razer can mount
+    out, paths, skip = [], [], False
+    path_opts = {"--master", "-o", "--out", "--xml-dir", "--placements"}
+    val_opts = {"--name", "--mode", "--sync-by", "--group-by", "--track-order", "--scratch-audio", "--sync-size",
+                "--to", "--fps", "--max-fps", "--threshold", "--min-landmarks", "--path-map"}
+    for i, a in enumerate(argv):
+        if skip:
+            skip = False
+            continue
+        if a == "--settings":
+            skip = True
+            continue
+        if a.startswith("--settings="):
+            continue
+        prev = argv[i - 1] if i else ""
+        if a == "drive" and prev == "--xml-dir":
+            parts = os.path.abspath(args.paths[0]).split(os.sep)
+            if len(parts) < 3 or parts[1] != "Volumes":
+                return None
+            a = os.sep.join(parts[:3])
+        elif prev in ("-j", "--jobs"):          # the Razer picks its own worker count
+            out.pop()
+            continue
+        elif not a.startswith("-") and (prev in path_opts or (a in args.paths and prev not in val_opts)):
+            a = os.path.abspath(os.path.expanduser(a))
+            paths.append(a)
+        out.append(a)
+    if not paths or not all(p.startswith("/Volumes/") for p in paths) \
+            or not all(os.path.abspath(p).startswith("/Volumes/") for p in args.paths):
+        return None
+    try:
+        hello = call("/api/kickoff/ping", timeout=3)
+    except Exception:
+        log("The Razer isn't answering, so this run is on this Mac")
+        return None
+    try:
+        job = call("/api/kickoff/sync", {"args": out, "settings": SETTINGS})
+    except urllib.error.HTTPError as e:
+        try:
+            why = json.loads(e.read() or b"{}").get("error") or e.reason
+        except ValueError:
+            why = e.reason
+        log("The Razer can't take this run (%s), so it's on this Mac" % why)
+        return None
+    except Exception as e:
+        log("The Razer didn't take this run (%s), so it's on this Mac" % e)
+        return None
+    jid, since, lost = job["id"], 0, None
+    log("Syncing on the Razer (Kickoff %s there), so this Mac stays free" % hello.get("engine", "?"))
+    if job.get("queued", 1) > 1:
+        log("The Razer has %d run%s ahead of this one" % (job["queued"] - 1, "" if job["queued"] == 2 else "s"))
+
+    def stop(*_):
+        try:
+            call("/api/kickoff/jobs/%s/cancel" % jid, {}, timeout=5)
+        except Exception:
+            pass
+        sys.exit(130)
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    while True:
+        try:
+            j = call("/api/kickoff/jobs/%s?since=%d" % (jid, since), timeout=15)
+            lost = None
+        except Exception as e:
+            lost = lost or time.time()
+            if time.time() - lost > 600:
+                log("error: the Razer stopped answering for 10 minutes (%s). The run may still finish there; "
+                    "its XML would land in the usual place" % e)
+                return 1
+            time.sleep(5)
+            continue
+        for line in j.get("lines") or []:
+            if line.startswith("@@kickoff-proxyjobs "):
+                try:
+                    d = json.loads(line.split(" ", 1)[1])
+                    write_proxy_jobs(d["name"], d["jobs"])
+                except (ValueError, KeyError, OSError) as e:
+                    log("Proxies: couldn't save the Razer's proxy list (%s)" % e)
+            elif line.startswith("@@kickoff "):
+                print(line, flush=True)
+            else:
+                log(line)
+        since = j.get("next", since)
+        if j.get("state") in ("done", "failed", "cancelled"):
+            return int(j.get("exit") or (0 if j["state"] == "done" else 1))
+        time.sleep(2)
 
 
 def main(argv=None):
@@ -6795,6 +6933,10 @@ def main(argv=None):
         if "-" in args.mode:
             args.to = args.mode.split("-", 1)[1]
         return convert_main(args)
+    if args.mode in ("auto", "music", "narrative") and SETTINGS.get("razer_sync") == "on" and not ON_RAZER:
+        code = sync_on_razer(argv if argv is not None else sys.argv[1:], args)
+        if code is not None:
+            sys.exit(code)
     if args.sync_size == "first":
         args.sync_size = None
     else:
@@ -8193,7 +8335,7 @@ def load_state(args, out_given):
             return None
     only = getattr(args, "only", None)
     st = read(args.out)
-    if st and (not st.get("shoot") or os.path.abspath(st["shoot"]) == os.path.abspath(args.clips)):
+    if st and (not st.get("shoot") or os.path.abspath(local_path(st["shoot"])) == os.path.abspath(args.clips)):
         return st, only
     if out_given:
         return None, None
@@ -8209,7 +8351,7 @@ def load_state(args, out_given):
         cands = []
     for o in cands:
         st = read(o)
-        root_ = st and st.get("shoot") and os.path.abspath(st["shoot"])
+        root_ = st and st.get("shoot") and os.path.abspath(local_path(st["shoot"]))
         if root_ and root_ != os.path.abspath(args.clips) and inside(args.clips, [root_]):
             restrict = only or [args.clips]
             args.clips, args.out = root_, o
@@ -8241,9 +8383,9 @@ def save_state(args, name, clips, labels, seq_fps, preroll, audio_files, prev=No
     master = args.master
     if master:
         master = os.path.abspath(master)
-        master = rel_key(master, args.clips) if master.startswith(args.clips + os.sep) else master
+        master = rel_key(master, args.clips) if master.startswith(args.clips + os.sep) else mac_path(master)
     st.update(version=1, project=name, mode=args.mode, master=master, seq_fps=seq_fps, preroll=preroll,
-              shoot=os.path.abspath(args.clips),
+              shoot=mac_path(os.path.abspath(args.clips)),
               sync_size=list(args.sync_size) if args.sync_size else None, group_by=args.group_by,
               adds=adds, updated=datetime.datetime.now().isoformat(timespec="seconds"))
     cams = st.setdefault("cameras", {})
@@ -8289,6 +8431,7 @@ def add_cards(args, state, restrict):
     master_path = state.get("master")
     if master_path and not os.path.isabs(master_path):
         master_path = os.path.join(args.clips, master_path)
+    master_path = local_path(master_path)
     if args.mode == "music" and not (master_path and os.path.exists(master_path)):
         sys.exit("error: can't find the song this project was synced to (%s). Put it back, or run with "
                  "--rebuild to start a new project." % state.get("master"))

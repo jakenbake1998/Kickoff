@@ -2368,7 +2368,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
              nested: "{project}_CamsNested", edit: "{project}_Edit",
              slowmo: "{project}_Slow Motion" },
     unsynced: true, unsynced_gap_s: 60, place_repeats: true, skip_folders: [],
-    timecode_narrative: true, timecode_music: false, razer_proxies: "off",
+    timecode_narrative: true, timecode_music: false, razer_proxies: "off", razer_sync: "on",
     templates: [], template: -1          // the project template in use: -1 is Default (locked), else one of templates
   };
   // bins Kickoff fills: they can be renamed and moved, not removed
@@ -2567,6 +2567,10 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       g = group("Proxies", "Once a sync finishes, the Razer renders ProRes proxies next to the footage (in a Proxies folder). The Kickoff panel in Premiere (Window > Extensions > Kickoff) attaches each one as it finishes, after checking its length and timecode.");
       row(g, "Make proxies", select([["off", "Off"], ["720", "On the Razer, 720"], ["1080", "On the Razer, 1080"]],
         settings.razer_proxies || "off", function (v) { settings.razer_proxies = v; }));
+      P.appendChild(g);
+      g = group("Heavy work", "The listening (the slow part of a sync) runs on the Razer, which reads your drive over the network and writes the XML onto it, so this Mac stays free. When the Razer is off or can't see the drive, it runs on this Mac.");
+      row(g, "Sync on", select([["on", "The Razer when it's on, else this Mac"], ["off", "This Mac only"]],
+        settings.razer_sync || "on", function (v) { settings.razer_sync = v; }));
       P.appendChild(g);
     }
   }
