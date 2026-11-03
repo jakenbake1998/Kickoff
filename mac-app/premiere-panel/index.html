@@ -1,27 +1,77 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Kickoff</title>
 <style>
-:root{--bg:#1d1d1f;--fg:#e8e6e3;--muted:#9a968f;--accent:#f0962e;--bad:#e5645a}
-body{margin:0;padding:12px 14px;background:var(--bg);color:var(--fg);font:12px -apple-system,Helvetica,sans-serif}
-h1{font-size:13px;margin:0 0 8px;color:var(--accent);font-weight:600}
-#state{font-size:13px;margin-bottom:6px}
-#detail{color:var(--muted);line-height:1.5}
-#problems{margin-top:8px;color:var(--bad);line-height:1.5}
+:root{
+  --bg:#17191d; --panel:#20242a; --ink:#eef0f3; --muted:#9097a3; --line:#2e333b;
+  --accent:#f0962e; --good:#6fcf97; --warn:#f2c14e; --bad:#ef6b6b;
+  --display:"Bricolage Grotesque",-apple-system,Helvetica,sans-serif;
+  --body:"IBM Plex Sans",-apple-system,Helvetica,sans-serif;
+  --mono:ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.4 var(--body);display:flex;flex-direction:column;padding:14px 16px 12px;overflow:hidden}
+header{display:flex;align-items:center;gap:10px}
+.brand{font:700 15px var(--display);color:var(--accent);letter-spacing:.2px}
+.project{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button{font:600 12px var(--body);color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:7px;padding:5px 10px;cursor:pointer}
+button:hover{border-color:var(--accent);color:var(--accent)}
+.hero{display:flex;align-items:baseline;gap:10px;margin:14px 0 8px}
+.count{font:700 44px/1 var(--display)}
+.count small{font-size:24px;color:var(--muted)}
+.label{color:var(--muted);font-size:14px}
+.bar{height:8px;background:var(--panel);border-radius:4px;overflow:hidden}
+.fill{height:100%;width:0;background:var(--accent);border-radius:4px;transition:width .4s}
+.fill.done{background:var(--good)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.chip{display:flex;align-items:center;gap:6px;background:var(--panel);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.on{background:var(--good)} .run{background:var(--accent)} .wait{background:var(--muted)} .bad{background:var(--bad)}
+.list{flex:1;overflow-y:auto;border-top:1px solid var(--line);margin:0 -4px;padding:4px}
+.row{display:flex;align-items:flex-start;gap:9px;padding:6px 2px;border-bottom:1px solid var(--line)}
+.row .dot{margin-top:5px}
+.name{font:12px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.why{font-size:12px;color:var(--muted)}
+.why.badtext{color:var(--bad)}
+.grow{flex:1;min-width:0}
+.empty{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:var(--muted);gap:6px}
+.empty b{font:700 16px var(--display);color:var(--ink)}
+.foot{color:var(--muted);font-size:11px;margin-top:6px;min-height:14px}
 </style></head>
 <body>
-<h1>Kickoff proxies</h1>
-<div id="state">Looking for proxy jobs…</div>
-<div id="detail"></div>
-<div id="problems"></div>
+<header><span class="brand">Kickoff proxies</span><span class="project" id="project"></span>
+  <button id="again" title="Check every proxy again, e.g. after re-rendering one">Check again</button></header>
+<div id="main" style="display:none;flex:1;min-height:0;flex-direction:column">
+  <div class="hero"><span class="count" id="count">0</span><span class="label" id="label">proxies attached</span></div>
+  <div class="bar"><div class="fill" id="fill"></div></div>
+  <div class="chips" id="chips"></div>
+  <div class="list" id="list"></div>
+</div>
+<div class="empty" id="empty"><b>No proxies yet</b>Turn on Settings &gt; Proxies in Kickoff, then sync a shoot.<br>Each proxy is attached here as the Razer finishes it.</div>
+<div class="foot" id="foot"></div>
 <script>
-// Attaches each proxy the Razer finishes to its clip in the open project, once the proxy's length
-// and timecode match the original (a duplicate or cut-short render is never attached).
-// Kickoff writes the jobs to ~/Library/Application Support/Kickoff/proxy-jobs/<project>.json.
+// Attaches each proxy the Razer finishes to its clip in the open project, once the proxy's length and
+// timecode match the original (a duplicate or cut-short render is never attached). Every 10 s it also
+// puts back any proxy a clip has lost (a re-import, a detach). Kickoff writes the jobs to
+// ~/Library/Application Support/Kickoff/proxy-jobs/<project>.json.
 var fs = require("fs"), path = require("path"), os = require("os"), cp = require("child_process");
-var DIR = path.join(os.homedir(), "Library/Application Support/Kickoff/proxy-jobs");
+var HOME = os.homedir(), DIR = path.join(HOME, "Library/Application Support/Kickoff/proxy-jobs");
+var FONTS = path.join(HOME, "Library/Application Support/Kickoff/ui/fonts");
 var FFPROBE = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"].filter(function (p) { return fs.existsSync(p); })[0];
-var busy = false;
+var busy = false, force = false;
 
+// the window's own fonts, when Kickoff is installed (the panel works without them)
+[["Bricolage Grotesque", "bricolage-700.woff2", "700"], ["IBM Plex Sans", "plex-sans.woff2", "100 700"]].forEach(function (f) {
+  var p = path.join(FONTS, f[1]);
+  if (fs.existsSync(p)) {
+    var st = document.createElement("style");
+    st.textContent = '@font-face{font-family:"' + f[0] + '";font-weight:' + f[2] + ';src:url("file://' + encodeURI(p) + '") format("woff2")}';
+    document.head.appendChild(st);
+  }
+});
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
 function evalHost(code) {
   return new Promise(function (ok) { window.__adobe_cep__.evalScript(code, function (r) { ok(r); }); });
 }
@@ -46,10 +96,10 @@ function frames(tc, fps) {
 function check(job, p) {
   if (!p) return "Kickoff couldn't read the proxy";
   var slack = 0.1 + 1 / (job.fps || 24);
-  if (Math.abs(p.dur - job.dur) > slack) return "the proxy is " + p.dur.toFixed(1) + " s, the clip " + job.dur.toFixed(1) + " s";
+  if (Math.abs(p.dur - job.dur) > slack) return "proxy is " + p.dur.toFixed(1) + " s, the clip " + job.dur.toFixed(1) + " s";
   if (job.tc) {
     var a = frames(job.tc, job.fps), b = frames(p.tc, job.fps);
-    if (b === null || a !== b) return "the proxy's timecode (" + (p.tc || "none") + ") isn't the clip's (" + job.tc + ")";
+    if (b === null || a !== b) return "proxy timecode " + (p.tc || "missing") + ", the clip " + job.tc;
   }
   return "";
 }
@@ -60,56 +110,87 @@ function getJobs(base) {
 async function tick() {
   if (busy) return;
   busy = true;
+  var offline = false;
   try {
     var files = fs.existsSync(DIR) ? fs.readdirSync(DIR).filter(function (f) { return /\.json$/.test(f); }) : [];
-    var total = 0, attached = 0, waiting = 0, problems = [], offline = [], names = [];
+    var sets = [];
     for (var fi = 0; fi < files.length; fi++) {
       var fp = path.join(DIR, files[fi]), d;
       try { d = JSON.parse(fs.readFileSync(fp, "utf8")); } catch (e) { continue; }
-      var open = d.jobs.filter(function (j) { return !j.attached && !j.problem; });
+      if (force) d.jobs.forEach(function (j) { delete j.problem; delete j.verified; });
+      var open = d.jobs.filter(function (j) { return !j.verified && !j.problem; });
       if (open.length) {
         var live = null;
-        try { live = await getJobs(d.razer); } catch (e) { offline.push(d.razer); }
+        try { live = await getJobs(d.razer); } catch (e) { offline = true; }
         if (live) {
           var byId = {};
           live.forEach(function (j) { byId[j.id] = j; });
           for (var k = 0; k < open.length; k++) {
             var job = open[k], lj = byId[job.id];
+            job.razer = lj ? lj.state : "";
             if (!lj) continue;
             if (lj.state === "failed" || lj.state === "cancelled") { job.problem = "the Razer couldn't make it" + (lj.error ? " (" + lj.error + ")" : ""); continue; }
-            if (lj.state !== "done") continue;
-            var proxy = lj.proxy_mac || job.proxy;
-            if (!job.verified) {
-              var why = check(job, await probe(proxy));
-              if (why) { job.problem = why; continue; }
-              job.verified = true;
-            }
-            var n = parseInt(await evalHost("kickoffAttach(" + JSON.stringify(job.clip) + "," + JSON.stringify(proxy) + ")"), 10) || 0;
-            if (n > 0) job.attached = true;
+            if (lj.state !== "done") { job.stage = lj.n && lj.total ? Math.round(100 * lj.n / lj.total) + "%" : ""; continue; }
+            job.proxy = lj.proxy_mac || job.proxy;
+            var why = check(job, await probe(job.proxy));
+            if (why) job.problem = why; else job.verified = true;
           }
-          fs.writeFileSync(fp, JSON.stringify(d, null, 1));
         }
       }
-      if (d.jobs.length) names.push(d.project);
-      d.jobs.forEach(function (j) {
-        total++;
-        if (j.attached) attached++;
-        else if (j.problem) problems.push(path.basename(j.clip) + ": " + j.problem);
-        else waiting++;
-      });
+      fs.writeFileSync(fp, JSON.stringify(d, null, 1));
+      sets.push({ file: fp, d: d, mtime: fs.statSync(fp).mtimeMs });
     }
-    var st = document.getElementById("state"), dt = document.getElementById("detail");
-    if (!total) { st.textContent = "No proxies asked for yet."; dt.textContent = "Turn on Settings > Proxies in Kickoff, then sync a shoot."; }
-    else {
-      st.textContent = attached + " of " + total + " proxies attached";
-      dt.textContent = (waiting ? waiting + " still rendering or waiting for their clip to be imported. " : "") +
-        (offline.length ? "The Razer isn't answering right now. " : "") + names.join(", ");
+    force = false;
+    // one pass over the open project for every checked proxy
+    var ready = [];
+    sets.forEach(function (s) { s.d.jobs.forEach(function (j) { if (j.verified) ready.push({ clip: j.clip, proxy: j.proxy }); }); });
+    var inProj = {};
+    if (ready.length) {
+      try { inProj = JSON.parse(await evalHost("kickoffSync(" + JSON.stringify(JSON.stringify(ready)) + ")")) || {}; } catch (e) { inProj = {}; }
     }
-    document.getElementById("problems").innerHTML = problems.slice(0, 12).map(function (p) {
-      return p.replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; });
-    }).join("<br>") + (problems.length > 12 ? "<br>…and " + (problems.length - 12) + " more" : "");
+    // show the shoots whose clips are in this project, else the newest one
+    var shown = sets.filter(function (s) { return s.d.jobs.some(function (j) { return inProj[j.clip] && inProj[j.clip] !== "missing"; }); });
+    if (!shown.length && sets.length) shown = [sets.sort(function (a, b) { return b.mtime - a.mtime; })[0]];
+    render(shown, inProj, offline);
   } finally { busy = false; }
 }
+
+function render(shown, inProj, offline) {
+  var rows = [], n = { on: 0, run: 0, wait: 0, bad: 0 };
+  shown.forEach(function (s) {
+    s.d.jobs.forEach(function (j) {
+      var st, why;
+      if (j.problem) { st = "bad"; why = j.problem; }
+      else if (j.verified && inProj[j.clip] === "on") { st = "on"; why = "attached"; }
+      else if (j.verified && inProj[j.clip] === "off") { st = "bad"; why = "Premiere wouldn't take this proxy"; }
+      else if (j.verified) { st = "wait"; why = "ready: attaches when you import this clip"; }
+      else { st = "run"; why = j.razer === "running" ? "rendering on the Razer" + (j.stage ? " " + j.stage : "") : "waiting on the Razer"; }
+      n[st]++;
+      rows.push({ st: st, why: why, name: path.basename(j.clip) });
+    });
+  });
+  var total = rows.length;
+  $("main").style.display = total ? "flex" : "none";
+  $("empty").style.display = total ? "none" : "flex";
+  $("project").textContent = shown.map(function (s) { return s.d.project; }).join(", ");
+  $("count").innerHTML = n.on + "<small> / " + total + "</small>";
+  $("label").textContent = n.on === total && total ? "proxies attached, all done" : "proxies attached";
+  $("fill").style.width = total ? (100 * n.on / total) + "%" : "0";
+  $("fill").className = "fill" + (total && n.on === total ? " done" : "");
+  var chips = [["run", n.run, "rendering"], ["wait", n.wait, "waiting for import"], ["bad", n.bad, "refused"]];
+  $("chips").innerHTML = chips.filter(function (c) { return c[1]; }).map(function (c) {
+    return '<span class="chip"><span class="dot ' + c[0] + '"></span>' + c[1] + " " + c[2] + "</span>";
+  }).join("");
+  var order = { bad: 0, run: 1, wait: 2, on: 3 };
+  rows.sort(function (a, b) { return order[a.st] - order[b.st] || a.name.localeCompare(b.name); });
+  $("list").innerHTML = rows.map(function (r) {
+    return '<div class="row"><span class="dot ' + r.st + '"></span><div class="grow"><div class="name">' + esc(r.name) +
+      '</div><div class="why' + (r.st === "bad" ? " badtext" : "") + '">' + esc(r.why) + "</div></div></div>";
+  }).join("");
+  $("foot").textContent = offline ? "The Razer isn't answering. Proxies still rendering will attach once it's back." : "Checks every 10 seconds.";
+}
+
+$("again").onclick = function () { force = true; tick(); };
 tick();
 setInterval(tick, 10000);
 </script>
