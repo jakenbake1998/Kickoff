@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Kickoff worker for the Razer: runs Kickoff's sync engine (musicsync.py) for the Mac, so the hours of
 listening happen here and the Mac stays free. Jake's Mac drives are mounted here at /mnt/mac/<DRIVE>
-(the Razer's connect_mac_drive.sh), so a job reads the footage and writes the project XML straight
+(they open on their own), so a job reads the footage and writes the project XML straight
 onto the drive.
 
     POST /api/kickoff/sync   {"args": [...engine args with /Volumes paths...], "settings": {...}}
