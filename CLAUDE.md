@@ -10,6 +10,10 @@ The Mac app updates itself from `main` at every launch (`mac-app/kickoff-update.
 
 So anything on main is live. **Jake sends notes in batches. Log them, investigate, and don't build or push app changes until he says "go".** Bump `VERSION` in `musicsync.py` for every change that ships.
 
+## The Razer does the heavy lifting (Jake, 2026-11-02)
+
+Jake has a Windows/Linux PC, the Razer, on his network (http://kickoff.local, API on port 80 / razer.local:8000; it reads his Mac drives at /mnt/mac/<DRIVE>). Anything that bogs the Mac down (proxies, sync listening/fingerprinting, transcodes, Slop Cut analysis) should run on the Razer when it's reachable, with the Mac as the fallback. Proxies already work this way (Settings > Proxies, `razer_proxies()` in the engine, the Kickoff panel in Premiere attaches them). Every new heavy feature should be built so it can be sent to the Razer.
+
 ## Layout
 
 - `musicsync.py` is the engine (Python, numpy/scipy, ffmpeg). `mac-app/engine/musicsync.py` is an identical copy used by the installer. Keep them byte-identical (`cmp musicsync.py mac-app/engine/musicsync.py`).
