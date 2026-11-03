@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.65"
+VERSION = "0.5.66"
 
 # ---------------------------------------------------------------- constants
 
@@ -7374,6 +7374,7 @@ def memory_check():
         raise MemoryGuard("Kickoff stopped itself: the Mac was running out of memory (%.0f GB pushed to disk). "
                           "Try fewer sound files or one scene folder at a time." % (swap - _mem["swap0"]))
 NARR_GAP_S = 2.0        # silence between audio files while listening, and between them on the timeline
+SCENE_GAP_S = 60.0      # Narrative Sync sequence: black between one drive folder's takes (one marker) and the next
 
 
 def tc_seconds(tc, fps):
@@ -7911,6 +7912,8 @@ def narrative(args, project_name, audio_paths):
         tail = max([0.0] + [c.offset + c.duration * c.speed - (f["at"] + f["dur"]) for c in mine])
         sc = scene_name(f["path"], args.clips)
         if not scenes or scenes[-1][0] != sc:
+            if scenes:                                 # a new folder: a minute of black before it
+                t += SCENE_GAP_S - NARR_GAP_S
             scenes.append([sc, t, t])
         f["pos"] = t + head
         t = f["pos"] + f["dur"] + tail + NARR_GAP_S
