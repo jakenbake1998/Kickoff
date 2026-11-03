@@ -246,7 +246,7 @@ async function findOnDrive() {
     var proj = "";
     try { proj = (await evalHost("app.project.name")).replace(/\.prproj$/i, ""); } catch (e) {}
     if (!clips.length) { $("foot").textContent = "Every clip in this project already has a proxy."; return; }
-    var cache = { dirs: {}, files: {} }, jobs = [], n = 0;
+    var cache = { dirs: {}, files: {}, probes: {}, used: {} }, jobs = [], n = 0;
     for (var i = 0; i < clips.length; i++) {
       var clip = clips[i], cands = [];
       $("foot").textContent = "Checking " + (i + 1) + " of " + clips.length + ": " + path.basename(clip);
@@ -257,16 +257,28 @@ async function findOnDrive() {
           if (p !== clip && s.indexOf(c) === 0 && !/[0-9a-z]/.test(s.charAt(c.length))) cands.push(p);
         });
       });
-      if (!cands.length) continue;              // nothing named like it: left alone, not refused
       var orig = await probe(clip);
       if (!orig) continue;
+      if (!cands.length) {
+        // nothing named like it (renamed since the proxies were made): any proxy in those folders
+        // with the same timecode and length, not already taken by another clip
+        if (!orig.tc) continue;
+        var tj = { tc: orig.tc, fps: orig.fps || 24, dur: orig.dur }, all = [];
+        proxyFolders(clip, cache).forEach(function (f) { all = all.concat(cache.files[f] || []); });
+        for (var a = 0; a < all.length; a++) {
+          if (cache.used[all[a]]) continue;
+          if (!(all[a] in cache.probes)) cache.probes[all[a]] = await probe(all[a]);
+          if (!check(tj, cache.probes[all[a]])) { cands.push(all[a]); break; }
+        }
+        if (!cands.length) continue;            // no proxy found for it: left alone, not refused
+      }
       var job = { id: "drive:" + clip, clip: clip, proxy: cands[0], tc: orig.tc, fps: orig.fps || 24, dur: orig.dur, local: true };
       // the plainest name first (A001_Proxy.mov before A001_Proxy_1.mov)
       cands.sort(function (a, b) { return a.length - b.length || a.localeCompare(b); });
       var why = "";
       for (var k = 0; k < cands.length; k++) {
         why = check(job, await probe(cands[k]));
-        if (!why) { job.proxy = cands[k]; break; }
+        if (!why) { job.proxy = cands[k]; cache.used[cands[k]] = 1; break; }
       }
       if (why) job.problem = why + " (" + path.basename(cands[0]) + ")"; else { job.verified = true; n++; }
       jobs.push(job);
