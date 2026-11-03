@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.62"
+VERSION = "0.5.63"
 
 # ---------------------------------------------------------------- constants
 
@@ -3667,7 +3667,8 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
     if narr and syncb is not None:
         (w, h) = args.sync_size or (first_format([c for c in clips if c.readable and c.fps and c.width], seq_fps)[0]
                                     if any(c.width for c in clips) else (3840, 2160))
-        xw.sequence(syncb, narr["name"], seq_fps, w, h, start_frames(seq_fps), narr["entries"])
+        xw.sequence(syncb, narr["name"], seq_fps, w, h, start_frames(seq_fps), narr["entries"],
+                    markers=narr.get("markers", ()))
     elif syncb is not None:
         maybe_empty(syncedb, where["synced"][1], bool(nests))
         maybe_empty(condb, where["condensed"][1], bool(nests))
@@ -7315,6 +7316,30 @@ def tc_scale(path):
     return 1.001 if fps and abs(fps - round(fps)) > 0.001 and not drop else 1.0
 
 
+GENERIC_DIR = re.compile(r"^(sound|sounds|audio|wavs?|recorder|boom|lav|media.*|footage|clips?|raw( media)?|"
+                         r"[a-z] ?cam.*|cam(era)? ?[a-z0-9]?|card ?\d*|\d{2,3}_.*|by ?sc(e|n).*)$", re.I)
+
+
+def scene_name(path, root):
+    """The scene a sound file belongs to, named after its folder on the drive: the nearest folder
+    above it that isn't a generic one (Sound, Audio, Media_a, A Cam, 01_bySCN...). A bare number
+    reads "Scene 9"; "" when there's none."""
+    rel = os.path.relpath(os.path.dirname(os.path.abspath(path)), os.path.abspath(root))
+    parts = [p for p in rel.split(os.sep) if p not in ("", ".", "..")] or [os.path.basename(os.path.dirname(path))]
+    folder = ""
+    for p in reversed(parts):
+        if not GENERIC_DIR.match(p.strip()):
+            folder = p.strip()
+            break
+    if re.match(r"^\d+[A-Za-z]?$", folder):
+        return "Scene " + folder
+    if re.search(r"sc(e|n)", folder, re.I):
+        return folder
+    # a sound dump (not a scene folder): the scene the recorder named the file after, SCN_9-3-T001
+    m = re.match(r"^sc(?:e|n)\w*?[ _-]*(\d+[A-Za-z]?)", os.path.basename(path), re.I)
+    return "Scene " + m.group(1) if m else folder
+
+
 def audio_timecode(path):
     """(start in seconds of timecode labels, duration, channels, rate) of an audio file. A BWF
     recorder file carries its start as time_reference (samples since midnight, real time); at a
@@ -7713,12 +7738,17 @@ def narrative(args, project_name, audio_paths):
         c.afile = file_at(c.offset, c.offset + c.duration * c.speed)
     seq_fps = args.fps or seq_rate(placed, clips)
     t = 0.0
+    scenes = []                                        # [name, start s, end s] per folder run, for markers
     for f in files:
         mine = [c for c in placed if c.afile is f]
         head = max([0.0] + [f["at"] - c.offset for c in mine])
         tail = max([0.0] + [c.offset + c.duration * c.speed - (f["at"] + f["dur"]) for c in mine])
+        sc = scene_name(f["path"], args.clips)
+        if not scenes or scenes[-1][0] != sc:
+            scenes.append([sc, t, t])
         f["pos"] = t + head
         t = f["pos"] + f["dur"] + tail + NARR_GAP_S
+        scenes[-1][2] = t - NARR_GAP_S
     for c in placed:
         c.tl = c.afile["pos"] + (c.offset - c.afile["at"])      # timeline seconds of its first frame
         c.in_file = c.offset - c.afile["at"]                     # ... and into its audio file
@@ -7764,7 +7794,9 @@ def narrative(args, project_name, audio_paths):
     for f in files:
         audio_bins["Captured"].append(f["media"])
     sync_name = "%s_Sync" % project_name
-    args.narrative = dict(name=sync_name, entries=entries)
+    marks = [dict(name=sc, comment="takes from the %s folder" % sc, start=fr(a), end=max(fr(a) + 1, fr(b)))
+             for sc, a, b in scenes if sc]
+    args.narrative = dict(name=sync_name, entries=entries, markers=marks)
     event("stage", text="Writing the Premiere project")
     proj_file = re.sub(r"[^\w .-]+", "_", project_name) + ".xml"
     write_xml(build_project(project_name, clips, cams, seq_fps, 0.0, None, audio_bins, args),
