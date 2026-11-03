@@ -326,6 +326,10 @@ button.newrun:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);
 .error p{margin:0;font-family:var(--mono);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
 
 .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:auto;padding-top:4px}
+.pxoffer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--muted, #9097a3);margin-top:8px}
+.pxoffer[hidden]{display:none}
+.pxoffer button{font-size:12px;padding:6px 11px}
+.pxoffer button.pick{border-color:#f0962e;color:#f0962e}
 #btnsStart{flex-direction:column;align-items:center;gap:6px}
 #bResolve{display:inline-flex;align-items:center;gap:8px}
 .rspin{width:13px;height:13px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite;flex:none}
@@ -880,6 +884,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     <button class="pri" id="bStart" disabled>Start</button>
     <button class="linkbtn" id="bRebuild" hidden>or rebuild from scratch</button>
   </div>
+  <div class="pxoffer" id="pxOffer" hidden><span id="pxText">Proxies</span>
+    <button id="pxMac">Make proxies on the Mac (fast)</button><button id="pxRazer">On the Razer (keep editing)</button></div>
   <div class="btns" id="btnsDone" hidden>
     <button class="pri" id="bOpen">Open in Premiere</button>
     <button id="bResolve" hidden><span class="rspin" id="rSpin" hidden></span><span id="bResolveText">Open in Resolve</span></button>
@@ -1430,7 +1436,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     closePop();
     state = { folder: null, paths: [], result: null, total: 0, synced: 0, aside: 0, logLines: [] };
     show("modes", true);
-    ["run", "hero", "stats", "camsWrap", "aside", "todo", "error", "details", "btnsDone", "btnsRun", "btnsErr", "batch"].forEach(function (id) { show(id, false); });
+    ["run", "hero", "stats", "camsWrap", "aside", "todo", "error", "details", "btnsDone", "btnsRun", "btnsErr", "batch", "pxOffer"].forEach(function (id) { show(id, false); });
     show("btnsStart", true);
     $("log").textContent = "";
     setTitle("Kickoff");
@@ -1678,10 +1684,34 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       $("stage").textContent = base(e.file) + (e.status === "placed"
         ? (e.passes > 1 ? " · song restarted, " + e.passes + " plays" : " · synced")
         : " · " + e.reason);
+    } else if (e.event === "proxies" && e.pending) {
+      offerProxies(e);
     } else if (e.event === "done") {
       state.result = e;
       finish(e);
     }
+  }
+
+  // after a sync with Settings > Proxies on: where to make them. The Kickoff panel in Premiere
+  // reads the pick from settings.json and queues them (Media Encoder on this Mac, or the Razer).
+  function offerProxies(e) {
+    var last = settings.proxies_where === "razer" && e.razer ? "razer" : "mac";
+    $("pxText").textContent = plural(e.pending, "clip") + " need proxies:";
+    $("pxRazer").hidden = !e.razer;
+    $("pxMac").hidden = false;
+    $("pxMac").className = last === "mac" ? "pick" : "";
+    $("pxRazer").className = last === "razer" ? "pick" : "";
+    function pick(where) {
+      settings.proxies_where = where;
+      settings.proxies_pick = { project: e.project, where: where, at: Date.now() / 1000 };
+      saveSettings();
+      $("pxMac").hidden = $("pxRazer").hidden = true;
+      $("pxText").textContent = (where === "mac" ? "Making proxies in Media Encoder on this Mac." : "Making proxies on the Razer.") +
+        " The Kickoff panel in Premiere (Window > Extensions > Kickoff) attaches each one as it's done.";
+    }
+    $("pxMac").onclick = function () { pick("mac"); };
+    $("pxRazer").onclick = function () { pick("razer"); };
+    show("pxOffer", true);
   }
 
   // the headline when a run ends: what happened, where the XML went, and how well it synced
@@ -2044,7 +2074,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       : ok + " of " + plural(runs.length, "music video") + " done";
     box.appendChild(hd);
     runs.forEach(function (h) { box.appendChild(entryCard(h)); });
-    ["drop", "run", "hero", "stats", "camsWrap", "aside", "todo", "error", "btnsDone", "btnsErr"].forEach(function (id) { show(id, false); });
+    ["drop", "run", "hero", "stats", "camsWrap", "aside", "todo", "error", "btnsDone", "btnsErr", "pxOffer"].forEach(function (id) { show(id, false); });
     $("details").open = false;
     show("batch", true);
     show("btnsErr", true);
@@ -2564,8 +2594,8 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       row(g, "Music video", select([["0", "By the song's sound"], ["1", "By timecode, when the song file carries it"]],
         settings.timecode_music ? "1" : "0", function (v) { settings.timecode_music = v === "1"; }));
       P.appendChild(g);
-      g = group("Proxies", "Once a sync finishes, the Razer renders ProRes proxies next to the footage (in a Proxies folder). The Kickoff panel in Premiere (Window > Extensions > Kickoff) attaches each one as it finishes, after checking its length and timecode.");
-      row(g, "Make proxies", select([["off", "Off"], ["720", "On the Razer, 720"], ["1080", "On the Razer, 1080"]],
+      g = group("Proxies", "When a sync finishes, Kickoff asks where to make ProRes proxies: in Media Encoder on this Mac (fast) or on the Razer (keep editing). The Kickoff panel in Premiere (Window > Extensions > Kickoff) attaches each one as it finishes, after checking its length and timecode.");
+      row(g, "Offer proxies", select([["off", "Off"], ["720", "Yes, 720"], ["1080", "Yes, 1080"]],
         settings.razer_proxies || "off", function (v) { settings.razer_proxies = v; }));
       P.appendChild(g);
       g = group("Heavy work", "The listening (the slow part of a sync) runs on the Razer, which reads your drive over the network and writes the XML onto it, so this Mac stays free. When the Razer is off or can't see the drive, it runs on this Mac.");

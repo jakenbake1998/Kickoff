@@ -38,15 +38,19 @@ button:hover{border-color:var(--accent);color:var(--accent)}
 .show{flex:none;font-size:11px;padding:3px 8px;align-self:center}
 button.make{border-color:var(--accent);color:var(--accent)}
 button:disabled{opacity:.5;cursor:default}
+.choose{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px;padding:8px 10px;background:var(--panel);border-radius:8px;font-size:12px}
+.choose span{flex:1 1 100%;color:var(--ink)}
 .empty{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:var(--muted);gap:6px}
 .empty b{font:700 16px var(--display);color:var(--ink)}
 .foot{color:var(--muted);font-size:11px;margin-top:6px;min-height:14px}
 </style></head>
 <body>
 <header><span class="brand">Kickoff proxies</span><span class="project" id="project"></span>
-  <button id="make" class="make" style="display:none" title="Renders on the Razer, then attaches here.">Make missing proxies</button>
+  <button id="make" class="make" style="display:none" title="Renders the missing ones on this Mac or the Razer, then attaches them here.">Make missing proxies</button>
   <button id="find" title="Look for proxies already on the drive (Proxies folders near the footage) and attach the ones that match">Find on drive</button>
   <button id="again" title="Check every proxy again, e.g. after re-rendering one">Check again</button></header>
+<div class="choose" id="choose" style="display:none"><span id="chooseText"></span>
+  <button id="chMac">On the Mac (fast)</button><button id="chRazer">On the Razer (keep editing)</button><button id="chNo">Cancel</button></div>
 <div id="main" style="display:none;flex:1;min-height:0;flex-direction:column">
   <div class="hero"><span class="count" id="count">0</span><span class="label" id="label">proxies attached</span></div>
   <div class="bar"><div class="fill" id="fill"></div></div>
@@ -129,7 +133,12 @@ async function tick() {
       var fp = path.join(DIR, files[fi]), d;
       try { d = JSON.parse(fs.readFileSync(fp, "utf8")); } catch (e) { continue; }
       if (force && !d.jobs.some(function (j) { return j.local; })) d.jobs.forEach(function (j) { delete j.problem; delete j.verified; });
-      var open = d.jobs.filter(function (j) { return !j.verified && !j.problem && !j.local; });
+      if (d.pending) await startPending(d);
+      for (var mi = 0; mi < d.jobs.length; mi++) {
+        var mj = d.jobs[mi];
+        if (mj.where === "mac" && !mj.verified && !mj.problem) await checkMac(mj);
+      }
+      var open = d.jobs.filter(function (j) { return j.id && !j.verified && !j.problem && !j.local && j.where !== "mac"; });
       if (open.length) {
         var live = null;
         try { live = await getJobs(d.razer); } catch (e) { offline = true; }
@@ -186,7 +195,8 @@ function render(all, byClip, offline) {
     if (px) { st = "on"; why = "attached"; file = px === "?" ? "" : px; }
     else if (j && j.problem) { st = "bad"; why = j.problem; file = j.proxy || ""; }
     else if (j && j.verified) { st = "bad"; why = "Premiere wouldn't take this proxy"; file = j.proxy || ""; }
-    else if (j && !j.local && !j.problem) { st = "run"; why = j.razer === "running" ? "rendering on the Razer" + (j.stage ? " " + j.stage : "") : "waiting on the Razer"; }
+    else if (j && j.where === "mac") { st = "run"; why = "rendering in Media Encoder on this Mac"; file = j.proxy || ""; }
+    else if (j && j.id && !j.local) { st = "run"; why = j.razer === "running" ? "rendering on the Razer" + (j.stage ? " " + j.stage : "") : "waiting on the Razer"; }
     else { st = "none"; why = "no proxy"; }
     if (st === "bad" || st === "none") missing.push({ clip: clip, bad: st === "bad" ? file : "" });
     n[st]++;
@@ -231,66 +241,156 @@ function kickoffSettings() {
   try { return JSON.parse(fs.readFileSync(path.join(HOME, "Library/Application Support/Kickoff/settings.json"), "utf8")) || {}; } catch (e) { return {}; }
 }
 
-// ---- Make missing proxies: the clips with no proxy (or a refused one) go to the Razer ----
+// ---- Making proxies: in Media Encoder on this Mac (fast) or on the Razer (keep editing) ----
+var lastChoice = null;
+function razerBase() { return (kickoffSettings().razer_url || "http://kickoff.local").replace(/\/$/, ""); }
+function resFor(d) { var r = (d && d.res) || kickoffSettings().razer_proxies; return r === "1080" ? "1080" : "720"; }
+async function razerUp(base) { try { await getJobs(base); return true; } catch (e) { return false; } }
+
+// Premiere's own proxy presets (the ones Create Proxies lists), for Media Encoder
+var presetCache;
+function macPreset(res) {
+  if (presetCache === undefined) {
+    presetCache = [];
+    ls("/Applications").forEach(function (a) {
+      if (!/^Adobe Premiere Pro/i.test(a.name)) return;
+      (function walk(d, depth) {
+        ls(d).forEach(function (e) {
+          var p = path.join(d, e.name);
+          if (e.isDirectory() && depth < 7 && !/\.(lproj|framework|bundle)$/.test(e.name)) walk(p, depth + 1);
+          else if (/\.epr$/i.test(e.name) && /prores/i.test(e.name) && /proxy/i.test(e.name) && /ingestpresets/i.test(p)) presetCache.push(p);
+        });
+      })(path.join("/Applications", a.name), 0);
+    });
+    presetCache.sort(function (a, b) { return b.localeCompare(a); });          // the newest Premiere first
+  }
+  var want = res === "1080" ? [/1080/, /half/i] : [/720/, /quarter/i];
+  for (var i = 0; i < want.length; i++) {
+    var hit = presetCache.filter(function (p) { return want[i].test(path.basename(p)); })[0];
+    if (hit) return hit;
+  }
+  return presetCache[0] || "";
+}
+
+async function queueMac(list, d) {
+  var preset = macPreset(resFor(d));
+  if (!preset) return "Kickoff couldn't find Premiere's ProRes proxy presets, so nothing was queued.";
+  var q = [];
+  for (var i = 0; i < list.length; i++) {
+    var m = list[i], dir = path.join(path.dirname(m.clip), "Proxies"), stem = path.basename(m.clip).replace(/\.[^.]+$/, "");
+    var out = path.join(dir, stem + "_Proxy.mov"), k = 1;
+    while (fs.existsSync(out)) out = path.join(dir, stem + "_Proxy_" + (++k) + ".mov");
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { continue; }
+    var o = m.tc !== undefined ? m : (await probe(m.clip) || {});
+    q.push({ clip: m.clip, out: out });
+    d.jobs = d.jobs.filter(function (j) { return j.clip !== m.clip; });
+    d.jobs.push({ where: "mac", clip: m.clip, proxy: out, tc: o.tc || "", fps: o.fps || 24, dur: o.dur || 0,
+                  replaces: m.bad || "", queued: Date.now() });
+  }
+  var n = +(await evalHost("kickoffEncode(" + JSON.stringify(JSON.stringify(q)) + "," + JSON.stringify(preset) + ")")) || 0;
+  if (!n) {
+    d.jobs = d.jobs.filter(function (j) { return !(j.where === "mac" && q.some(function (x) { return x.clip === j.clip; })); });
+    return "Media Encoder didn't take the clips. Is it installed?";
+  }
+  return "Queued " + n + " in Media Encoder (" + path.basename(preset, ".epr") + "). Each attaches here when it's done.";
+}
+
+async function sendRazer(list, d) {
+  var base = d.razer || razerBase(), res = resFor(d);
+  d.razer = base;
+  if (!(await razerUp(base))) return "The Razer isn't answering at " + base + ". Turn it on, or make them on the Mac.";
+  list = list.filter(function (m) { return /^\/Volumes\/[^/]+\//.test(m.clip); });
+  if (!list.length) return "These clips aren't on an external drive, so the Razer can't reach them.";
+  var byDrive = {}, sent = 0, errs = [];
+  list.forEach(function (m) { var dr = m.clip.split("/")[2]; (byDrive[dr] = byDrive[dr] || []).push(m); });
+  for (var drive in byDrive) {
+    var ms = byDrive[drive];
+    var root = ms.map(function (m) { return path.dirname(m.clip); }).reduce(function (a, b) {
+      while (b !== a && b.indexOf(a + "/") !== 0) a = path.dirname(a);
+      return a;
+    });
+    var body = { path: path.relative("/Volumes", root), res: res, dry: false,
+                 files: ms.map(function (m) { return path.relative(root, m.clip); }) };
+    var reply;
+    try {
+      var r = await fetch(base + "/api/proxy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      reply = await r.json();
+      if (!r.ok || reply.error) throw new Error(reply.error || ("HTTP " + r.status));
+    } catch (e) { errs.push(drive + ": " + (e.message || e)); continue; }
+    var want = {};
+    ms.forEach(function (m) { want[m.clip] = m; });
+    for (var k = 0; k < (reply.jobs || []).length; k++) {
+      var rj = reply.jobs[k], m = want[rj.clip] || want[path.join("/Volumes", rj.clip || "")];
+      if (!m) continue;
+      var o = m.tc !== undefined ? m : (await probe(m.clip) || {});
+      d.jobs = d.jobs.filter(function (j) { return j.clip !== m.clip; });
+      d.jobs.push({ id: rj.id, clip: m.clip, proxy: rj.proxy_mac || rj.proxy, tc: o.tc || "", fps: o.fps || 24, dur: o.dur || 0, replaces: m.bad || "" });
+      sent++;
+    }
+  }
+  return errs.length ? "The Razer couldn't take " + errs.join("; ") + (/not found|exist|mount/i.test(errs.join(" ")) ? " (it can't see that drive)" : "") :
+    "Sent " + sent + " to the Razer. Each attaches here when it's done.";
+}
+
+// a Media Encoder proxy is done once the file is there and matches its clip
+async function checkMac(j) {
+  if (!fs.existsSync(j.proxy)) {
+    if (Date.now() - (j.queued || 0) > 6 * 3600 * 1000) j.problem = "Media Encoder never made it";
+    return;
+  }
+  var why = check(j, await probe(j.proxy));
+  if (!why) { j.verified = true; return; }
+  var age = Date.now() - fs.statSync(j.proxy).mtimeMs;
+  if (age > 180000) j.problem = "Media Encoder stopped early: " + why;      // not growing any more
+}
+
+// the end screen in Kickoff asked where: do it for the shoot it asked about
+async function startPending(d) {
+  var pk = kickoffSettings().proxies_pick;
+  if (!pk || pk.project !== d.project || pk.at < (d.made_ts || 0) - 5) return;
+  d.pending = false;
+  var list = d.jobs.filter(function (j) { return !j.id && !j.where; });
+  d.jobs = d.jobs.filter(function (j) { return j.id || j.where; });
+  note = { t: Date.now(), text: "" };
+  note.text = pk.where === "razer" ? await sendRazer(list, d) : await queueMac(list, d);
+}
+
 async function makeMissing() {
   if (!missing.length || busy) return;
-  var set = kickoffSettings(), base = (set.razer_url || "http://kickoff.local").replace(/\/$/, "");
-  var res = set.razer_proxies === "1080" ? "1080" : "720";
-  var list = missing.filter(function (m) { return /^\/Volumes\/[^/]+\//.test(m.clip); });
-  if (!list.length) { note = { t: Date.now(), text: "These clips aren't on an external drive, so the Razer can't reach them." }; return tick(); }
-  var bad = list.filter(function (m) { return m.bad; });
-  var msg = "Make " + list.length + " prox" + (list.length === 1 ? "y" : "ies") + " on the Razer (" + res + "p ProRes Proxy, in a Proxies folder next to the footage)?";
-  if (bad.length) msg += "\n\n" + (bad.length === 1 ? "This bad proxy goes" : "These " + bad.length + " bad proxies go") + " to the Trash once the new one is attached:\n" +
-    bad.map(function (m) { return path.basename(m.bad); }).join("\n");
-  if (!window.confirm(msg)) return;
+  var up = await razerUp(razerBase());
+  var bad = missing.filter(function (m) { return m.bad; });
+  $("chooseText").textContent = "Make " + missing.length + " prox" + (missing.length === 1 ? "y" : "ies") + " (" + resFor() + "p ProRes Proxy, in a Proxies folder next to the footage)?" +
+    (bad.length ? " " + (bad.length === 1 ? "The bad one goes" : "The " + bad.length + " bad ones go") + " to the Trash once its replacement is attached: " +
+      bad.map(function (m) { return path.basename(m.bad); }).join(", ") + "." : "");
+  $("chRazer").style.display = up ? "" : "none";
+  $("chMac").className = lastChoice === "razer" && up ? "" : "make";
+  $("chRazer").className = lastChoice === "razer" && up ? "make" : "";
+  $("choose").style.display = "flex";
+}
+async function doMake(where) {
+  $("choose").style.display = "none";
+  lastChoice = where;
+  if (busy) return setTimeout(function () { doMake(where); }, 500);
   busy = true;
   $("make").disabled = true;
   try {
-    try { await getJobs(base); } catch (e) {
-      note = { t: Date.now(), text: "The Razer isn't answering at " + base + ". Turn it on and try again." };
-      return;
-    }
-    var byDrive = {};
-    list.forEach(function (m) { var d = m.clip.split("/")[2]; (byDrive[d] = byDrive[d] || []).push(m); });
     var name = ((projName || "project").replace(/[^\w\- ]+/g, "_").trim() || "project") + " (made)";
-    var fp = path.join(DIR, name + ".json"), d = { project: projName, razer: base, res: res, jobs: [] };
-    try { d = JSON.parse(fs.readFileSync(fp, "utf8")); d.razer = base; } catch (e) {}
-    var sent = 0, errs = [];
-    for (var drive in byDrive) {
-      var ms = byDrive[drive];
-      var root = ms.map(function (m) { return path.dirname(m.clip); }).reduce(function (a, b) {
-        while (b !== a && b.indexOf(a + "/") !== 0) a = path.dirname(a);
-        return a;
-      });
-      var body = { path: path.relative("/Volumes", root), res: res, dry: false,
-                   files: ms.map(function (m) { return path.relative(root, m.clip); }) };
-      var reply;
-      try {
-        var r = await fetch(base + "/api/proxy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        reply = await r.json();
-        if (!r.ok || reply.error) throw new Error(reply.error || ("HTTP " + r.status));
-      } catch (e) { errs.push(drive + ": " + (e.message || e)); continue; }
-      var want = {};
-      ms.forEach(function (m) { want[m.clip] = m; });
-      for (var k = 0; k < (reply.jobs || []).length; k++) {
-        var rj = reply.jobs[k], m = want[rj.clip] || want[path.join("/Volumes", rj.clip || "")];
-        if (!m) continue;
-        var o = await probe(m.clip) || {};
-        d.jobs = d.jobs.filter(function (j) { return j.clip !== m.clip; });
-        d.jobs.push({ id: rj.id, clip: m.clip, proxy: rj.proxy_mac || rj.proxy, tc: o.tc || "", fps: o.fps || 24, dur: o.dur || 0, replaces: m.bad || "" });
-        sent++;
-      }
-    }
+    var fp = path.join(DIR, name + ".json"), d = { project: projName, razer: razerBase(), res: resFor(), jobs: [] };
+    try { d = JSON.parse(fs.readFileSync(fp, "utf8")); } catch (e) {}
+    var list = missing.slice();
+    note = { t: Date.now(), text: "" };
+    note.text = where === "razer" ? await sendRazer(list, d) : await queueMac(list, d);
     fs.mkdirSync(DIR, { recursive: true });
-    if (sent) fs.writeFileSync(fp, JSON.stringify(d, null, 1));
-    note = { t: Date.now(), text: errs.length ? "The Razer couldn't take " + errs.join("; ") + (/not found|exist|mount/i.test(errs.join(" ")) ? " (it can't see that drive)" : "") :
-      "Sent " + sent + " to the Razer. Each attaches here when it's done." };
+    fs.writeFileSync(fp, JSON.stringify(d, null, 1));
   } finally {
     busy = false;
     $("make").disabled = false;
   }
   tick();
 }
+$("chMac").onclick = function () { doMake("mac"); };
+$("chRazer").onclick = function () { doMake("razer"); };
+$("chNo").onclick = function () { $("choose").style.display = "none"; };
 $("make").onclick = makeMissing;
 
 $("again").onclick = function () { force = true; tick(); };

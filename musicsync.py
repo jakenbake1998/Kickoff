@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.68"
+VERSION = "0.5.69"
 
 # ---------------------------------------------------------------- constants
 
@@ -6670,54 +6670,35 @@ PROXY_JOBS_DIR = os.path.expanduser("~/Library/Application Support/Kickoff/proxy
 
 
 def razer_proxies(clips, project_name):
-    """Settings > Proxies on: hand the shoot's video files to the Razer, which renders ProRes proxies
-    next to them (<folder>/Proxies/<same subfolders>/<name>.mov, never overwriting one). The jobs
-    are written to proxy-jobs/<project>.json with each original's timecode and length, so the
-    Kickoff panel in Premiere attaches a proxy only once it's done AND matches its clip. Never stops
-    the run: when the Razer can't be reached, the log says so."""
+    """Settings > Proxies on: list the shoot's video files (with each original's timecode and
+    length) in proxy-jobs/<project>.json for the Kickoff panel in Premiere. The window's end screen
+    then asks where to make them: on the Mac (Media Encoder, queued by the panel) or on the Razer
+    (POST /api/proxy, sent by the panel). Either way the panel attaches a proxy only once it's done
+    AND matches its clip. Tells the window whether the Razer answers, so it can offer it."""
     res = SETTINGS.get("razer_proxies", "off")
     if res not in ("720", "1080"):
         return
     import urllib.request
-    vids = [c for c in clips if c.readable and c.width and mac_path(os.path.abspath(c.path)).startswith("/Volumes/")]
+    vids = [c for c in clips if c.readable and c.width]
     if not vids:
-        log("Proxies: no footage on an external drive, so nothing was sent to the Razer")
         return
-    by_drive = collections.defaultdict(list)
-    for c in vids:
-        by_drive[mac_path(os.path.abspath(c.path)).split(os.sep)[2]].append(c)
     base = SETTINGS.get("razer_url", "http://kickoff.local")
-    ask = "http://127.0.0.1" if ON_RAZER else base      # a sync running on the Razer asks itself
-    out = {"project": project_name, "razer": base, "res": res, "made": time.strftime("%Y-%m-%d %H:%M"), "jobs": []}
-    for drive, cl in by_drive.items():
-        macs = {mac_path(os.path.abspath(c.path)): c for c in cl}
-        root = os.path.commonpath([os.path.dirname(m) for m in macs])
-        rel = os.path.relpath(root, "/Volumes")
-        body = {"path": rel, "res": res, "dry": False, "files": [os.path.relpath(m, root) for m in macs]}
-        want = dict(macs, **{os.path.abspath(c.path): c for c in cl})
-        try:
-            req = urllib.request.Request(ask + "/api/proxy", data=json.dumps(body).encode(),
-                                         headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=20) as r:
-                reply = json.loads(r.read() or b"{}")
-        except Exception as e:
-            log("Proxies: couldn't reach the Razer at %s (%s); no proxies were asked for" % (base, e))
-            event("proxies", sent=0, error="The Razer didn't answer, so no proxies were made")
-            return
-        for j in reply.get("jobs") or []:
-            c = want.get(os.path.abspath(j.get("clip") or "")) or want.get(mac_path(os.path.abspath(j.get("clip") or "")))
-            if c is None:
-                continue
-            out["jobs"].append(dict(id=j.get("id"), clip=mac_path(os.path.abspath(c.path)), proxy=mac_path(j.get("proxy") or ""),
-                                    tc=c.timecode or "", fps=c.fps or 0, dur=round(c.duration or 0, 3)))
-        log("Proxies: the Razer is making %s for %s (%s already had one)" % (
-            reply.get("todo", len(reply.get("jobs") or [])), rel, reply.get("have", 0)))
+    try:
+        with urllib.request.urlopen(("http://127.0.0.1" if ON_RAZER else base) + "/api/jobs", timeout=3) as r:
+            razer = r.status == 200
+    except Exception:
+        razer = False
+    out = {"project": project_name, "razer": base, "res": res, "made": time.strftime("%Y-%m-%d %H:%M"),
+           "made_ts": time.time(), "pending": True,
+           "jobs": [dict(clip=mac_path(os.path.abspath(c.path)), tc=c.timecode or "", fps=c.fps or 0,
+                         dur=round(c.duration or 0, 3)) for c in vids]}
     name = re.sub(r"[^\w\- ]+", "_", project_name).strip() or "project"
     if ON_RAZER:                      # the Mac's side of the hand-off writes the file the panel reads
         print("@@kickoff-proxyjobs " + json.dumps({"name": name, "jobs": out}), flush=True)
     else:
         write_proxy_jobs(name, out)
-    event("proxies", sent=len(out["jobs"]), res=res)
+    log("Proxies: %d clips ready to make proxies for (%s)" % (len(vids), "Mac or Razer" if razer else "the Razer isn't answering, so on the Mac"))
+    event("proxies", pending=len(vids), res=res, razer=razer, project=project_name)
 
 
 def write_proxy_jobs(name, out):

@@ -73,3 +73,18 @@ function kickoffAll() {
     for (var i = 0; i < s.length; i++) out.push("[" + q(s[i][0]) + "," + q(s[i][1]) + "]");
     return "[" + out.join(",") + "]";
 }
+
+// Queues each [{clip, out}] in Media Encoder with the given preset (.epr) and starts the queue.
+// Returns how many were queued.
+function kickoffEncode(json, preset) {
+    var jobs = eval("(" + json + ")"), n = 0;
+    try { app.encoder.launchEncoder(); } catch (e) {}
+    for (var i = 0; i < jobs.length; i++) {
+        try {
+            var id = app.encoder.encodeFile(jobs[i].clip, jobs[i].out, preset, 1);
+            if (id) n++;
+        } catch (e) {}
+    }
+    try { app.encoder.startBatch(); } catch (e) {}
+    return String(n);
+}
