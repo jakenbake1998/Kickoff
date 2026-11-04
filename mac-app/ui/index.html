@@ -1693,7 +1693,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
   }
 
   // after a sync with Settings > Proxies on: where to make them. The Kickoff panel in Premiere
-  // reads the pick from settings.json and queues them (Media Encoder on this Mac, or the Razer).
+  // reads the pick from settings.json and queues them (on this Mac, or the Razer).
   function offerProxies(e) {
     var last = settings.proxies_where === "razer" && e.razer ? "razer" : "mac";
     $("pxText").textContent = plural(e.pending, "clip") + " need proxies:";
@@ -1706,7 +1706,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       settings.proxies_pick = { project: e.project, where: where, at: Date.now() / 1000 };
       saveSettings();
       $("pxMac").hidden = $("pxRazer").hidden = true;
-      $("pxText").textContent = (where === "mac" ? "Making proxies in Media Encoder on this Mac." : "Making proxies on the Razer.") +
+      $("pxText").textContent = (where === "mac" ? "Making proxies on this Mac." : "Making proxies on the Razer.") +
         " The Kickoff panel in Premiere (Window > Extensions > Kickoff) attaches each one as it's done.";
     }
     $("pxMac").onclick = function () { pick("mac"); };
@@ -2594,7 +2594,7 @@ button:disabled{opacity:.45;cursor:default;filter:none}
       row(g, "Music video", select([["0", "By the song's sound"], ["1", "By timecode, when the song file carries it"]],
         settings.timecode_music ? "1" : "0", function (v) { settings.timecode_music = v === "1"; }));
       P.appendChild(g);
-      g = group("Proxies", "When a sync finishes, Kickoff asks where to make ProRes proxies: in Media Encoder on this Mac (fast) or on the Razer (keep editing). The Kickoff panel in Premiere (Window > Extensions > Kickoff) attaches each one as it finishes, after checking its length and timecode.");
+      g = group("Proxies", "When a sync finishes, Kickoff asks where to make ProRes proxies (with the camera's audio channels as they are): on this Mac (fast) or on the Razer (keep editing). The Kickoff panel in Premiere (Window > Extensions > Kickoff) attaches each one as it finishes, after checking its length and timecode.");
       row(g, "Offer proxies", select([["off", "Off"], ["720", "Yes, 720"], ["1080", "Yes, 1080"]],
         settings.razer_proxies || "off", function (v) { settings.razer_proxies = v; }));
       P.appendChild(g);

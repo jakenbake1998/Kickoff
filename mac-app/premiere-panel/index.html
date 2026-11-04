@@ -99,7 +99,10 @@ function probe(file) {
               var r = s.avg_frame_rate.split("/"); fps = +r[1] ? r[0] / r[1] : 0;
             }
           });
-          ok({ dur: parseFloat(f.duration || 0), tc: tc, fps: fps, video: (j.streams || []).some(function (s) { return s.codec_type === "video"; }) });
+          var au = (j.streams || []).filter(function (s) { return s.codec_type === "audio"; });
+          ok({ dur: parseFloat(f.duration || 0), tc: tc, fps: fps, video: (j.streams || []).some(function (s) { return s.codec_type === "video"; }),
+               aud: { ch: au.reduce(function (n, s) { return n + (s.channels || 0); }, 0),
+                      pairs: au.filter(function (s) { return s.channels === 2 && /stereo/.test(s.channel_layout || ""); }).length } });
         } catch (e) { ok(null); }
       });
   });
@@ -116,6 +119,14 @@ function check(job, p) {
     var a = frames(job.tc, job.fps), b = frames(p.tc, job.fps);
     if (b === null || a !== b) return "proxy timecode " + (p.tc || "missing") + ", the clip " + job.tc;
   }
+  return "";
+}
+// a proxy's audio against its clip's: the same number of channels, and a stereo pair only where
+// the clip has one (Premiere won't relink a proxy whose audio layout differs from the clip's)
+function audWhy(job, p) {
+  if (!job.aud || !p || !p.aud) return "";
+  if (p.aud.ch !== job.aud.ch) return "proxy has " + p.aud.ch + " audio channels, the clip " + job.aud.ch;
+  if (p.aud.pairs > job.aud.pairs) return "proxy audio is a stereo pair, the clip has " + job.aud.ch + " separate channels";
   return "";
 }
 function getJobs(base) {
@@ -136,9 +147,9 @@ async function tick() {
       if (d.pending) await startPending(d);
       for (var mi = 0; mi < d.jobs.length; mi++) {
         var mj = d.jobs[mi];
-        if (mj.where === "mac" && !mj.verified && !mj.problem) await checkMac(mj);
+        if ((mj.where === "mac" || mj.where === "rzw") && !mj.verified && !mj.problem) await checkFile(mj);
       }
-      var open = d.jobs.filter(function (j) { return j.id && !j.verified && !j.problem && !j.local && j.where !== "mac"; });
+      var open = d.jobs.filter(function (j) { return j.id && !j.verified && !j.problem && !j.local && !j.where; });
       if (open.length) {
         var live = null;
         try { live = await getJobs(d.razer); } catch (e) { offline = true; }
@@ -192,10 +203,11 @@ function render(all, byClip, offline) {
   missing = [];
   all.forEach(function (c) {
     var clip = c[0], px = c[1], j = byClip[clip], st, why, file = "";
-    if (px) { st = "on"; why = "attached"; file = px === "?" ? "" : px; }
+    if (px) { st = "on"; why = "attached" + (j && j.warn && j.proxy === px ? " (relinking by hand won't work: " + j.warn + ")" : ""); file = px === "?" ? "" : px; }
     else if (j && j.problem) { st = "bad"; why = j.problem; file = j.proxy || ""; }
     else if (j && j.verified) { st = "bad"; why = "Premiere wouldn't take this proxy"; file = j.proxy || ""; }
-    else if (j && j.where === "mac") { st = "run"; why = "rendering in Media Encoder on this Mac"; file = j.proxy || ""; }
+    else if (j && j.where === "mac") { st = "run"; why = "rendering on this Mac"; }
+    else if (j && j.where === "rzw") { st = "run"; why = "rendering on the Razer"; }
     else if (j && j.id && !j.local) { st = "run"; why = j.razer === "running" ? "rendering on the Razer" + (j.stage ? " " + j.stage : "") : "waiting on the Razer"; }
     else { st = "none"; why = "no proxy"; }
     if (st === "bad" || st === "none") missing.push({ clip: clip, bad: st === "bad" ? file : "" });
@@ -242,61 +254,66 @@ function kickoffSettings() {
   try { return JSON.parse(fs.readFileSync(path.join(HOME, "Library/Application Support/Kickoff/settings.json"), "utf8")) || {}; } catch (e) { return {}; }
 }
 
-// ---- Making proxies: in Media Encoder on this Mac (fast) or on the Razer (keep editing) ----
+// ---- Making proxies: on this Mac (fast) or on the Razer (keep editing) ----
 var lastChoice = null;
 function razerBase() { return (kickoffSettings().razer_url || "http://kickoff.local").replace(/\/$/, ""); }
 function resFor(d) { var r = (d && d.res) || kickoffSettings().razer_proxies; return r === "1080" ? "1080" : "720"; }
 async function razerUp(base) { try { await getJobs(base); return true; } catch (e) { return false; } }
 
-// Premiere's own proxy presets (the ones Create Proxies lists), for Media Encoder
-var presetCache;
-function macPreset(res) {
-  if (presetCache === undefined) {
-    presetCache = [];
-    ls("/Applications").forEach(function (a) {
-      if (!/^Adobe Premiere Pro/i.test(a.name)) return;
-      (function walk(d, depth) {
-        ls(d).forEach(function (e) {
-          var p = path.join(d, e.name);
-          if (e.isDirectory() && depth < 7 && !/\.(lproj|framework|bundle)$/.test(e.name)) walk(p, depth + 1);
-          else if (/\.epr$/i.test(e.name) && /prores/i.test(e.name) && /proxy/i.test(e.name) && /ingestpresets/i.test(p)) presetCache.push(p);
-        });
-      })(path.join("/Applications", a.name), 0);
-    });
-    presetCache.sort(function (a, b) { return b.localeCompare(a); });          // the newest Premiere first
-  }
-  var want = res === "1080" ? [/1080/, /half/i] : [/720/, /quarter/i];
-  for (var i = 0; i < want.length; i++) {
-    var hit = presetCache.filter(function (p) { return want[i].test(path.basename(p)); })[0];
-    if (hit) return hit;
-  }
-  return presetCache[0] || "";
-}
-
-async function queueMac(list, d) {
-  var preset = macPreset(resFor(d));
-  if (!preset) return "Kickoff couldn't find Premiere's ProRes proxy presets, so nothing was queued.";
-  var q = [];
+// Kickoff's engine makes the proxies (ffmpeg, ProRes Proxy, the clip's timecode, its audio channels
+// exactly as the camera recorded them), one at a time; each file appears only when it's complete
+var SUPPORT = path.join(HOME, "Library/Application Support/Kickoff");
+async function plan(list, d, where) {
+  var pairs = [], jobs = [];
   for (var i = 0; i < list.length; i++) {
     var m = list[i], dir = path.join(path.dirname(m.clip), "Proxies"), stem = path.basename(m.clip).replace(/\.[^.]+$/, "");
     var out = path.join(dir, stem + "_Proxy.mov"), k = 1;
-    while (fs.existsSync(out)) out = path.join(dir, stem + "_Proxy_" + (++k) + ".mov");
-    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { continue; }
-    var o = m.tc !== undefined ? m : (await probe(m.clip) || {});
-    q.push({ clip: m.clip, out: out });
-    d.jobs = d.jobs.filter(function (j) { return j.clip !== m.clip; });
-    d.jobs.push({ where: "mac", clip: m.clip, proxy: out, tc: o.tc || "", fps: o.fps || 24, dur: o.dur || 0,
-                  replaces: m.bad || "", queued: Date.now() });
+    while (fs.existsSync(out) || fs.existsSync(out + ".failed.txt")) out = path.join(dir, stem + "_Proxy_" + (++k) + ".mov");
+    var o = await probe(m.clip) || {};
+    pairs.push(m.clip, out);
+    jobs.push({ where: where, clip: m.clip, proxy: out, tc: o.tc || m.tc || "", fps: o.fps || m.fps || 24, dur: o.dur || m.dur || 0,
+                aud: o.aud, replaces: m.bad || "", queued: Date.now() });
   }
-  var n = +(await evalHost("kickoffEncode(" + JSON.stringify(JSON.stringify(q)) + "," + JSON.stringify(preset) + ")")) || 0;
-  if (!n) {
-    d.jobs = d.jobs.filter(function (j) { return !(j.where === "mac" && q.some(function (x) { return x.clip === j.clip; })); });
-    return "Media Encoder didn't take the clips. Is it installed?";
-  }
-  return "Queued " + n + " in Media Encoder (" + path.basename(preset, ".epr") + "). Each attaches here when it's done.";
+  return { pairs: pairs, jobs: jobs };
+}
+function adopt(d, jobs) {
+  var mine = {};
+  jobs.forEach(function (j) { mine[j.clip] = 1; });
+  d.jobs = d.jobs.filter(function (j) { return !mine[j.clip]; }).concat(jobs);
+}
+async function queueMac(list, d) {
+  var py = [path.join(SUPPORT, "venv/bin/python3"), "/usr/bin/python3"].filter(function (p) { return fs.existsSync(p); })[0];
+  var engine = path.join(SUPPORT, "musicsync.py");
+  if (!py || !fs.existsSync(engine)) return "Kickoff isn't installed on this Mac, so it can't make proxies here.";
+  var pl = await plan(list, d, "mac");
+  if (!pl.pairs.length) return "Nothing to make.";
+  var log = fs.openSync(path.join(DIR, "mac-proxies.log"), "a");
+  var env = Object.assign({}, process.env, { PATH: "/opt/homebrew/bin:/usr/local/bin:" + (process.env.PATH || "/usr/bin:/bin") });
+  var child = cp.spawn("/usr/bin/nice", ["-n", "10", py, engine, "--mode", "proxy", "--res", resFor(d), "--"].concat(pl.pairs),
+                       { detached: true, stdio: ["ignore", log, log], env: env });
+  child.unref();
+  adopt(d, pl.jobs);
+  return "Making " + pl.jobs.length + " prox" + (pl.jobs.length === 1 ? "y" : "ies") + " on this Mac. Each attaches here when it's done.";
 }
 
 async function sendRazer(list, d) {
+  // the Razer's Kickoff worker runs the same engine, so its proxies match the Mac's
+  var wbase = (kickoffSettings().razer_sync_url || "http://kickoff.local:8010").replace(/\/$/, "");
+  var onDrive = list.filter(function (m) { return /^\/Volumes\/[^/]+\//.test(m.clip); });
+  if (!onDrive.length) return "These clips aren't on an external drive, so the Razer can't reach them.";
+  var ping = null;
+  try { ping = await (await fetch(wbase + "/api/kickoff/ping")).json(); } catch (e) {}
+  if (ping && ping.ok) {
+    var pl = await plan(onDrive, d, "rzw");
+    try {
+      var rr = await fetch(wbase + "/api/kickoff/sync", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ args: ["--mode", "proxy", "--res", resFor(d), "--"].concat(pl.pairs), settings: {} }) });
+      var rj = await rr.json();
+      if (!rr.ok || rj.error) return "The Razer couldn't take them: " + (rj.error || "HTTP " + rr.status);
+    } catch (e) { return "The Razer couldn't take them: " + (e.message || e); }
+    adopt(d, pl.jobs);
+    return "Sent " + pl.jobs.length + " to the Razer. Each attaches here when it's done.";
+  }
   var base = d.razer || razerBase(), res = resFor(d);
   d.razer = base;
   if (!(await razerUp(base))) return "The Razer isn't answering at " + base + ". Turn it on, or make them on the Mac.";
@@ -333,16 +350,20 @@ async function sendRazer(list, d) {
     "Sent " + sent + " to the Razer. Each attaches here when it's done.";
 }
 
-// a Media Encoder proxy is done once the file is there and matches its clip
-async function checkMac(j) {
-  if (!fs.existsSync(j.proxy)) {
-    if (Date.now() - (j.queued || 0) > 6 * 3600 * 1000) j.problem = "Media Encoder never made it";
+// a proxy Kickoff is making is done once its file is there (it appears only when complete) and
+// matches its clip, audio included; a failure leaves <proxy>.failed.txt with the reason
+async function checkFile(j) {
+  var failed = j.proxy + ".failed.txt";
+  if (fs.existsSync(failed)) {
+    try { j.problem = "couldn't make it: " + fs.readFileSync(failed, "utf8").trim(); } catch (e) { j.problem = "couldn't make it"; }
     return;
   }
-  var why = check(j, await probe(j.proxy));
-  if (!why) { j.verified = true; return; }
-  var age = Date.now() - fs.statSync(j.proxy).mtimeMs;
-  if (age > 180000) j.problem = "Media Encoder stopped early: " + why;      // not growing any more
+  if (!fs.existsSync(j.proxy)) {
+    if (Date.now() - (j.queued || 0) > 12 * 3600 * 1000) j.problem = "it was never made";
+    return;
+  }
+  var p = await probe(j.proxy), why = check(j, p) || audWhy(j, p);
+  if (why) j.problem = why; else j.verified = true;
 }
 
 // the end screen in Kickoff asked where: do it for the shoot it asked about
@@ -470,13 +491,14 @@ async function findOnDrive() {
         }
         if (!cands.length) continue;            // no proxy found for it: left alone, not refused
       }
-      var job = { id: "drive:" + clip, clip: clip, proxy: cands[0], tc: orig.tc, fps: orig.fps || 24, dur: orig.dur, local: true };
+      var job = { id: "drive:" + clip, clip: clip, proxy: cands[0], tc: orig.tc, fps: orig.fps || 24, dur: orig.dur, local: true, aud: orig.aud };
       // the plainest name first (A001_Proxy.mov before A001_Proxy_1.mov)
       cands.sort(function (a, b) { return a.length - b.length || a.localeCompare(b); });
       var why = "";
       for (var k = 0; k < cands.length; k++) {
-        why = check(job, await probe(cands[k]));
-        if (!why) { job.proxy = cands[k]; cache.used[cands[k]] = 1; break; }
+        var pp = await probe(cands[k]);
+        why = check(job, pp);
+        if (!why) { job.proxy = cands[k]; cache.used[cands[k]] = 1; job.warn = audWhy(job, pp); break; }
       }
       if (why) job.problem = why + " (" + path.basename(cands[0]) + ")"; else { job.verified = true; n++; }
       jobs.push(job);

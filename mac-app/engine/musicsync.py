@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.70"
+VERSION = "0.5.71"
 
 # ---------------------------------------------------------------- constants
 
@@ -6701,6 +6701,113 @@ def razer_proxies(clips, project_name):
     event("proxies", pending=len(vids), res=res, razer=razer, project=project_name)
 
 
+_PRORES_HW = None
+
+
+def ffprobe_json(path):
+    r = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path])
+    try:
+        return json.loads(r.stdout or b"{}") if r.returncode == 0 else None
+    except ValueError:
+        return None
+
+
+def make_proxy(src, out, res="720"):
+    """One ProRes Proxy for src at out (720 or 1080 lines high, the clip's own aspect), with the
+    clip's timecode and its audio exactly as the camera recorded it: the same streams with the same
+    channels, never folded into a stereo pair (Premiere won't relink a proxy whose audio layout
+    differs from the clip's). Written to a temporary name and renamed when complete, so a file at
+    out is always a finished proxy. Returns "" or why it failed."""
+    global _PRORES_HW
+    info = ffprobe_json(src)
+    if not info:
+        return "ffmpeg can't read the clip"
+    streams = info.get("streams") or []
+    v = next((s for s in streams if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
+    if v is None:
+        return "the clip has no picture"
+    auds = [s for s in streams if s.get("codec_type") == "audio"]
+    tc = ((info.get("format") or {}).get("tags") or {}).get("timecode") or next(
+        (s["tags"]["timecode"] for s in streams if (s.get("tags") or {}).get("timecode")), "")
+    if _PRORES_HW is None:
+        enc = run(["ffmpeg", "-hide_banner", "-encoders"]).stdout.decode("utf-8", "replace")
+        _PRORES_HW = sys.platform == "darwin" and "prores_videotoolbox" in enc
+    h = int(res)
+    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-y"]
+    if _PRORES_HW:
+        cmd += ["-hwaccel", "videotoolbox"]
+    cmd += ["-i", src, "-map", "0:%d" % v["index"]]
+    # audio: a stream with a real layout (stereo, 5.1) is kept as it is; a stream whose channels
+    # have no layout (Sony, ARRI, RED: separate mono channels) becomes one mono track per channel,
+    # which is how Premiere reads the clip itself
+    graph, outs = [], []
+    for a in auds:
+        ch = int(a.get("channels") or 1)
+        lay = a.get("channel_layout") or ""
+        if ch > 1 and (not lay or lay.startswith("unknown") or re.match(r"^\d+ channels?$", lay)):
+            for k in range(ch):
+                graph.append("[0:%d]pan=mono|c0=c%d[m%d_%d]" % (a["index"], k, a["index"], k))
+                outs.append(("[m%d_%d]" % (a["index"], k), a))
+        else:
+            outs.append(("0:%d" % a["index"], a))
+    if graph:
+        cmd += ["-filter_complex", ";".join(graph)]
+    for lab, _ in outs:
+        cmd += ["-map", lab]
+    cmd += ["-vf", "scale=-2:%d:flags=bicubic" % h] if not graph else []
+    if graph:          # -vf can't sit beside -filter_complex: scale the picture in the graph
+        cmd[cmd.index("-filter_complex") + 1] = "[0:%d]scale=-2:%d:flags=bicubic[v];" % (v["index"], h) + \
+            cmd[cmd.index("-filter_complex") + 1]
+        cmd[cmd.index("0:%d" % v["index"])] = "[v]"
+    cmd += (["-c:v", "prores_videotoolbox", "-profile:v", "proxy"] if _PRORES_HW else
+            ["-c:v", "prores_ks", "-profile:v", "0", "-vendor", "apl0", "-pix_fmt", "yuv422p10le"])
+    for i, (_, a) in enumerate(outs):
+        bits = int(a.get("bits_per_raw_sample") or a.get("bits_per_sample") or 16)
+        cmd += ["-c:a:%d" % i, "pcm_s24le" if bits > 16 else "pcm_s16le"]
+    if tc:
+        cmd += ["-timecode", tc]
+    cmd += ["-map_metadata", "-1", "-movflags", "+write_colr"]
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = out[:-4] + ".kickoff-part.mov"
+    r = run(cmd + [tmp])
+    if r.returncode != 0 or not os.path.exists(tmp):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        err = r.stderr.decode("utf-8", "replace").strip().splitlines()
+        return "ffmpeg stopped: %s" % (err[-1] if err else "no reason given")
+    os.replace(tmp, out)
+    return ""
+
+
+def proxy_main(args):
+    """--mode proxy CLIP OUT [CLIP OUT ...]: make each proxy (make_proxy), one at a time. The
+    Kickoff panel in Premiere starts this on the Mac, or through the Razer's worker, and attaches
+    each proxy once it's there and matches its clip. A clip that fails gets OUT.failed.txt with
+    the reason, so the panel can show it."""
+    pairs = list(zip(args.paths[0::2], args.paths[1::2]))
+    for n, (src, out) in enumerate(pairs, 1):
+        event("stage", text="Making proxy %d of %d: %s" % (n, len(pairs), os.path.basename(src)))
+        if os.path.exists(out):
+            log("Proxy %s is already there" % out)
+            continue
+        why = make_proxy(src, out, args.res)
+        if why:
+            log("Proxy for %s failed: %s" % (src, why))
+            try:
+                with open(out + ".failed.txt", "w", encoding="utf-8") as fh:
+                    fh.write(why + "\n")
+            except OSError:
+                pass
+        else:
+            log("Made %s" % out)
+        event("clip", done=n, total=len(pairs), file=os.path.basename(src), status="failed" if why else "placed",
+              reason=why)
+    event("done", proxies=len(pairs))
+    return 0
+
+
 def write_proxy_jobs(name, out):
     os.makedirs(PROXY_JOBS_DIR, exist_ok=True)
     with open(os.path.join(PROXY_JOBS_DIR, name + ".json"), "w", encoding="utf-8") as fh:
@@ -6873,7 +6980,7 @@ def main(argv=None):
     ap.add_argument("--to", choices=["xml", "fcpxml", "drp", "prproj", "syncaudio"],
                     help="--mode convert: the format to turn the file into")
     ap.add_argument("--mode", choices=["auto", "music", "setup", "narrative", "cameras", "slop", "slopimport", "resolve", "convert", "convert-xml", "convert-fcpxml",
-                             "convert-drp", "convert-prproj", "convert-syncaudio"], default="auto",
+                             "convert-drp", "convert-prproj", "convert-syncaudio", "proxy"], default="auto",
                     help="music: sync to the song (music video); narrative: sync each clip to the sound "
                          "recordist's audio files (timecode, else scratch audio) in one Sync sequence; cameras: "
                          "narrative with no sound files, the cameras synced to each other; setup: "
@@ -6894,6 +7001,7 @@ def main(argv=None):
     ap.add_argument("--events", action="store_true", help=argparse.SUPPRESS)   # for the Kickoff window
     ap.set_defaults(sync_size=SETTINGS["sync_size"], track_order=SETTINGS["track_order"],
                     place_repeats=SETTINGS["place_repeats"])
+    ap.add_argument("--res", choices=["720", "1080"], default="720", help=argparse.SUPPRESS)   # --mode proxy
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args(argv)
     if args.no_cache:
@@ -6908,6 +7016,8 @@ def main(argv=None):
     EVENTS = args.events
     if args.mode in ("slop", "slopimport"):
         return slop_main(args)
+    if args.mode == "proxy":
+        return proxy_main(args)
     if args.mode == "resolve":
         return resolve_main(args)
     if args.mode.startswith("convert"):          # the window passes convert-<format> (its runner takes a mode only)
