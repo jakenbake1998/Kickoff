@@ -215,6 +215,7 @@ function render(all, byClip, offline) {
     return '<span class="chip"><span class="dot ' + c[0] + '"></span>' + c[1] + " " + c[2] + "</span>";
   }).join("");
   $("make").style.display = missing.length ? "" : "none";
+  if (!missing.length) $("choose").style.display = "none";     // nothing left to make: drop an open question
   $("make").textContent = "Make missing proxies (" + missing.length + ")";
   var order = { bad: 0, none: 1, run: 2, on: 3 };
   rows.sort(function (a, b) { return order[a.st] - order[b.st] || a.name.localeCompare(b.name); });
@@ -369,6 +370,7 @@ async function makeMissing() {
 }
 async function doMake(where) {
   $("choose").style.display = "none";
+  if (!missing.length) return;
   lastChoice = where;
   if (busy) return setTimeout(function () { doMake(where); }, 500);
   busy = true;
