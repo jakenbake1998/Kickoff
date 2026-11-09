@@ -751,7 +751,7 @@ function pickFor(target, row) {
     xml: "Choose your synced sequence XML", convert: "Choose an XML, FCPXML, DaVinci project or Premiere project" }[target] ||
     "Choose the shoot folder or cards";
   var multi = target === "footage" || target === "any";
-  var r = window.cep.fs.showOpenDialogEx(multi, !files, title, "", types || undefined);
+  var r = window.cep.fs.showOpenDialogEx(multi, !files, title, "", types || []);
   var picked = (r && r.data) || [];
   if (!picked.length) return;
   if (target === "template") return appCall("folderTree", path.basename(picked[0]), folderTree(picked[0], 0));
@@ -789,7 +789,14 @@ async function runSync(m) {
   sync.runMode = sync.mode;
   sync.stopped = false;
   var name = (m.xmlName || "").trim();
-  if (!/^(slop|slopimport|resolve|convert-)/.test(sync.runMode)) name = String(await evalHost("kickoffProjectName()") || "") || name;
+  if (!/^(slop|slopimport|resolve|convert-)/.test(sync.runMode)) {
+    var pn = String(await evalHost("kickoffProjectName()") || "");
+    if (pn && !/^EvalScript error/.test(pn)) {
+      // the next song of the same Start (it begins right after the last one ends) gets its own XML
+      var next = sync.lastEnd && Date.now() - sync.lastEnd < 60000 && sync.lastPaths !== paths.join("|");
+      name = next ? pn + " - " + path.basename(paths.filter(function (q) { return !AUDIO_X.test(q); })[0] || paths[0]).replace(/\.[^.]+$/, "") : pn;
+    }
+  }
   appCall("started", paths);
   var env = Object.assign({}, process.env, {
     PATH: "/opt/homebrew/bin:/usr/local/bin:" + (process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"),
@@ -801,6 +808,7 @@ async function runSync(m) {
     appCall("log", "error: can't start the engine: " + e.message); appCall("exit", 1); return;
   }
   sync.proc = p;
+  sync.lastPaths = paths.join("|");
   // the Mac stays awake while it runs (the engine already runs at low priority)
   try { cp.spawn("/usr/bin/caffeinate", ["-dimsu", "-w", String(p.pid)], { detached: true, stdio: "ignore" }).unref(); } catch (e) {}
   lines(p.stdout, function (line) {
@@ -816,6 +824,7 @@ async function runSync(m) {
     setTimeout(function () {
       appCall("exit", sync.stopped ? -15 : (code == null ? 1 : code));
       sync.proc = null;
+      sync.lastEnd = Date.now();
     }, 400);
   });
 }
@@ -861,6 +870,9 @@ window.addEventListener("message", function (ev) {
     case "copy": var pb = cp.spawn("/usr/bin/pbcopy"); pb.stdin.end(m.text || ""); break;
   }
 });
+// a file dropped outside the window doesn't open in the panel in its place
+document.addEventListener("dragover", function (e) { e.preventDefault(); });
+document.addEventListener("drop", function (e) { e.preventDefault(); });
 loadApp();
 tick();
 setInterval(tick, 10000);

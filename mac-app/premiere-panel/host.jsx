@@ -128,7 +128,7 @@ function kickoffFindAdj(want) {
         var adj = false;
         try { adj = it.isAdjustmentLayer ? it.isAdjustmentLayer() : false; } catch (e) {}
         if (!adj) {
-            try { adj = /adjustment layer/i.test(it.name) && !it.getMediaPath() && !it.isSequence(); } catch (e) {}
+            try { adj = (it.name === want || /adjustment layer/i.test(it.name)) && !it.getMediaPath() && !it.isSequence(); } catch (e) {}
         }
         if (!adj) return;
         if (it.name === want) named = it;
