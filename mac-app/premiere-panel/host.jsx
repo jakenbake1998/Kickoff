@@ -88,3 +88,75 @@ function kickoffEncode(json, preset) {
     try { app.encoder.startBatch(); } catch (e) {}
     return String(n);
 }
+
+// ---- Kickoff Adjustment Layer ----
+// kickoffTracks(): the active sequence's video tracks (V1 first) and how many clips each holds.
+// kickoffClips(json [track numbers]): every enabled clip on those tracks, times in ticks.
+// kickoffPlace(json {seq, target, pieces:[[startTicks, endTicks]...]}): puts one adjustment layer
+// piece per [start, end] on the target track, which must be empty. The panel works out the pieces.
+function kickoffQ(x) { return '"' + String(x).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'; }
+function kickoffTracks() {
+    var seq = app.project ? app.project.activeSequence : null;
+    if (!seq) return '{"err":"Open a sequence first."}';
+    var t = [];
+    for (var i = 0; i < seq.videoTracks.numTracks; i++) t.push(seq.videoTracks[i].clips.numItems);
+    return '{"seq":' + kickoffQ(seq.sequenceID) + ',"name":' + kickoffQ(seq.name) + ',"fr":' + kickoffQ(seq.timebase) + ',"tracks":[' + t.join(",") + ']}';
+}
+function kickoffClips(json) {
+    var want = eval("(" + json + ")"), seq = app.project.activeSequence, out = [];
+    for (var w = 0; w < want.length; w++) {
+        var tr = seq.videoTracks[want[w] - 1], cl = [];
+        for (var c = 0; tr && c < tr.clips.numItems; c++) {
+            var ti = tr.clips[c];
+            try { if (ti.disabled) continue; } catch (e) {}
+            var path = "", sp = 1, rev = 0;
+            try { path = ti.projectItem ? (ti.projectItem.getMediaPath() || ti.projectItem.nodeId) : ""; } catch (e) {}
+            try { sp = ti.getSpeed(); } catch (e) {}
+            try { rev = ti.isSpeedReversed() ? 1 : 0; } catch (e) {}
+            cl.push('{"s":' + ti.start.ticks + ',"e":' + ti.end.ticks + ',"i":' + ti.inPoint.ticks + ',"o":' + ti.outPoint.ticks +
+                    ',"sp":' + sp + ',"rev":' + rev + ',"src":' + kickoffQ(path) + '}');
+        }
+        out.push("[" + cl.join(",") + "]");
+    }
+    return "[" + out.join(",") + "]";
+}
+// The adjustment layer to use: one named "Kickoff Adjustment Layer", else any adjustment layer.
+function kickoffFindAdj() {
+    var named = null, any = null;
+    kickoffWalk(app.project.rootItem, function (it) {
+        if (named) return;
+        var adj = false;
+        try { adj = it.isAdjustmentLayer ? it.isAdjustmentLayer() : false; } catch (e) {}
+        if (!adj) {
+            try { adj = /adjustment layer/i.test(it.name) && !it.getMediaPath() && !it.isSequence(); } catch (e) {}
+        }
+        if (!adj) return;
+        if (it.name === "Kickoff Adjustment Layer") named = it;
+        else if (!any) any = it;
+    });
+    return named || any;
+}
+function kickoffTime(ticks) { var t = new Time(); t.ticks = String(ticks); return t; }
+function kickoffPlace(json) {
+    var job = eval("(" + json + ")"), seq = app.project.activeSequence;
+    if (!seq || seq.sequenceID !== job.seq) return '{"err":"The sequence changed. Press the button again."}';
+    var tr = seq.videoTracks[job.target - 1];
+    if (!tr) return '{"err":"V' + job.target + ' does not exist."}';
+    if (tr.clips.numItems) return '{"err":"V' + job.target + ' is not empty. Clear it or pick an empty track."}';
+    var adj = kickoffFindAdj();
+    if (!adj) return '{"err":"noadj"}';
+    var placed = 0, off = 0;
+    for (var p = 0; p < job.pieces.length; p++) {
+        var s = job.pieces[p][0], e = job.pieces[p][1], ti = null;
+        try { tr.overwriteClip(adj, kickoffTime(s)); } catch (x) {}
+        // pieces go left to right on an empty track, so the new one is clip number p (else look for it)
+        if (tr.clips.numItems > p && String(tr.clips[p].start.ticks) === String(s)) ti = tr.clips[p];
+        for (var c = 0; !ti && c < tr.clips.numItems; c++) if (String(tr.clips[c].start.ticks) === String(s)) ti = tr.clips[c];
+        if (!ti) continue;
+        try { ti.end = kickoffTime(e); } catch (x) {}
+        try { ti.name = "Kickoff Adjustment Layer"; } catch (x) {}
+        placed++;
+        if (String(ti.end.ticks) !== String(e)) off++;
+    }
+    return '{"placed":' + placed + ',"off":' + off + ',"total":' + job.pieces.length + ',"adj":' + kickoffQ(adj.name) + '}';
+}

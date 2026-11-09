@@ -42,13 +42,18 @@ button:disabled{opacity:.5;cursor:default}
 .choose span{flex:1 1 100%;color:var(--ink)}
 .empty{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:var(--muted);gap:6px}
 .empty b{font:700 16px var(--display);color:var(--ink)}
+select{font:600 12px var(--body);color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 4px}
+#adjFrom label{margin-right:8px;white-space:nowrap}
 .foot{color:var(--muted);font-size:11px;margin-top:6px;min-height:14px}
 </style></head>
 <body>
 <header><span class="brand">Kickoff proxies</span><span class="project" id="project"></span>
   <button id="make" class="make" style="display:none" title="Renders the missing ones on this Mac or the Razer, then attaches them here.">Make missing proxies</button>
   <button id="find" title="Look for proxies already on the drive (Proxies folders near the footage) and attach the ones that match">Find on drive</button>
-  <button id="again" title="Check every proxy again, e.g. after re-rendering one">Check again</button></header>
+  <button id="again" title="Check every proxy again, e.g. after re-rendering one">Check again</button>
+  <button id="adjBtn" title="Lays an adjustment layer over the cut, split at every edit of the tracks you pick, ready for color">Adjustment layer</button></header>
+<div class="choose" id="adj" style="display:none"><span>Kickoff Adjustment Layer on <select id="adjTo"></select> cut at the edits of <span id="adjFrom" style="flex:none"></span></span>
+  <button id="adjGo" class="make">Make it</button><button id="adjNo">Cancel</button></div>
 <div class="choose" id="choose" style="display:none"><span id="chooseText"></span>
   <button id="chMac">On the Mac (fast)</button><button id="chRazer">On the Razer (keep editing)</button><button id="chNo">Cancel</button></div>
 <div id="main" style="display:none;flex:1;min-height:0;flex-direction:column">
@@ -523,6 +528,78 @@ async function findOnDrive() {
   tick();
 }
 $("find").onclick = findOnDrive;
+
+// ---- Kickoff Adjustment Layer ----
+// adjPieces(tracks, frameTicks): tracks are the picked source tracks, bottom first, each a list of
+// clips {s, e, i, o, sp, rev, src} in ticks. Returns [[start, end]...] for the adjustment layer: at
+// each moment the top track with footage owns the picture, a new piece starts wherever the owning
+// clip changes, nothing goes where no track has footage, and no piece is dropped however short. A
+// through-edit (same track, the clips touch, same file, same speed and direction, and the second
+// picks up on the frame where the first stopped) is not a cut, so it doesn't split the layer.
+function adjPieces(tracks, frameTicks) {
+  var half = (frameTicks || 10584000000) / 2, cuts = {};
+  tracks.forEach(function (t) { t.forEach(function (c) { cuts[c.s] = 1; cuts[c.e] = 1; }); });
+  var b = Object.keys(cuts).map(Number).sort(function (x, y) { return x - y; });
+  var ptr = tracks.map(function () { return 0; }), out = [], cur = null, own = null;
+  for (var k = 0; k + 1 < b.length; k++) {
+    var a = b[k], z = b[k + 1], o = null;
+    for (var t = tracks.length - 1; t >= 0 && !o; t--) {
+      var cl = tracks[t];
+      while (ptr[t] < cl.length && cl[ptr[t]].e <= a) ptr[t]++;
+      var c = cl[ptr[t]];
+      if (c && c.s <= a && c.e >= z) o = { t: t, c: c };
+    }
+    if (!o) { cur = own = null; continue; }
+    var same = cur && cur[1] === a && own && (own.c === o.c || (own.t === o.t && thru(own.c, o.c, half)));
+    if (same) cur[1] = z; else { cur = [a, z]; out.push(cur); }
+    own = o;
+  }
+  return out;
+}
+function thru(p, n, half) {
+  return p.e === n.s && p.src && p.src === n.src && Math.abs(p.sp - n.sp) < 1e-6 && p.rev === n.rev &&
+         Math.abs(n.i - p.o) <= half;
+}
+// end adjPieces
+var adjInfo = null;
+$("adjBtn").onclick = async function () {
+  if ($("adj").style.display !== "none") { $("adj").style.display = "none"; return; }
+  adjInfo = JSON.parse(await evalHost("kickoffTracks()") || "{}");
+  if (adjInfo.err || !adjInfo.tracks) { $("foot").textContent = adjInfo.err || "Open a sequence first."; return; }
+  var n = adjInfo.tracks.length, saved = {};
+  try { saved = JSON.parse(localStorage.adj || "{}"); } catch (e) {}
+  var top = 0; adjInfo.tracks.forEach(function (c, i) { if (c) top = i + 1; });
+  var to = saved.to && saved.to <= n && !adjInfo.tracks[saved.to - 1] ? saved.to : Math.min(top + 1, n);
+  var opts = ""; for (var i = 1; i <= n; i++) opts += '<option value="' + i + '"' + (i === to ? " selected" : "") + ">V" + i + (adjInfo.tracks[i - 1] ? " (not empty)" : "") + "</option>";
+  $("adjTo").innerHTML = opts;
+  var from = saved.from || adjInfo.tracks.map(function (c, i) { return c && i + 1 < to ? i + 1 : 0; }).filter(Boolean);
+  var boxes = ""; for (i = 1; i <= n; i++) if (adjInfo.tracks[i - 1]) boxes += '<label><input type="checkbox" value="' + i + '"' + (from.indexOf(i) >= 0 ? " checked" : "") + ">V" + i + "</label>";
+  $("adjFrom").innerHTML = boxes || "(no clips in this sequence)";
+  $("adj").style.display = "flex";
+};
+$("adjNo").onclick = function () { $("adj").style.display = "none"; };
+$("adjGo").onclick = async function () {
+  var to = +$("adjTo").value, from = [].slice.call($("adjFrom").querySelectorAll("input:checked")).map(function (x) { return +x.value; }).sort(function (a, b) { return a - b; });
+  if (!from.length) { $("foot").textContent = "Pick at least one track to cut from."; return; }
+  if (from.indexOf(to) >= 0) { $("foot").textContent = "The layer can't go on a track it cuts from."; return; }
+  localStorage.adj = JSON.stringify({ to: to, from: from });
+  $("adjGo").disabled = true; $("foot").textContent = "Reading the cut...";
+  try {
+    var tracks = JSON.parse(await evalHost("kickoffClips(" + JSON.stringify(JSON.stringify(from)) + ")"));
+    var pieces = adjPieces(tracks, +adjInfo.fr);
+    if (!pieces.length) { $("foot").textContent = "No clips on those tracks."; return; }
+    $("foot").textContent = "Laying " + pieces.length + " pieces on V" + to + "...";
+    var job = JSON.stringify({ seq: adjInfo.seq, target: to, pieces: pieces });
+    var r = JSON.parse(await evalHost("kickoffPlace(" + JSON.stringify(job) + ")") || "{}");
+    if (r.err === "noadj") $("foot").textContent = "No adjustment layer in this project yet: File > New > Adjustment Layer, then press Make it again.";
+    else if (r.err) $("foot").textContent = r.err;
+    else {
+      $("foot").textContent = r.placed + " of " + r.total + " pieces on V" + to + (r.off ? " (" + r.off + " didn't take the right length, check them)" : "") + ".";
+      if (r.placed) $("adj").style.display = "none";
+    }
+  } catch (e) { $("foot").textContent = "Something went wrong: " + e; }
+  finally { $("adjGo").disabled = false; }
+};
 tick();
 setInterval(tick, 10000);
 </script>
