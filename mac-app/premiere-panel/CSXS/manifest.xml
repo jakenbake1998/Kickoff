@@ -26,7 +26,7 @@
         <UI>
           <Type>Panel</Type>
           <Menu>Kickoff</Menu>
-          <Geometry><Size><Height>540</Height><Width>860</Width></Size><MinSize><Height>300</Height><Width>420</Width></MinSize></Geometry>
+          <Geometry><Size><Height>560</Height><Width>860</Width></Size><MinSize><Height>300</Height><Width>420</Width></MinSize></Geometry>
         </UI>
       </DispatchInfo>
     </Extension>

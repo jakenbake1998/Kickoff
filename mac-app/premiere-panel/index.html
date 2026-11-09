@@ -67,14 +67,19 @@ input[type=text]:focus{outline:none;border-color:var(--accent)}
 button.big{font:700 14px var(--display);background:var(--accent);border-color:var(--accent);color:#17191d;padding:10px 22px;border-radius:9px}
 button.big:hover{color:#17191d;filter:brightness(1.08)}
 .i{width:18px;height:18px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font:600 11px/16px var(--body);text-align:center;cursor:help}
+#vSync{margin:10px -16px -12px}
+#app{flex:1;border:0;width:100%;background:var(--bg)}
 .foot{color:var(--muted);font-size:11px;margin-top:6px;min-height:14px}
 </style></head>
 <body>
 <header><span class="brand">Kickoff</span>
-  <nav class="tabs"><button class="tab sel" data-v="vProxies">Proxies</button><button class="tab" data-v="vAdj">Adjustment Layer</button></nav>
+  <nav class="tabs"><button class="tab sel" data-v="vSync">Sync</button><button class="tab" data-v="vProxies">Proxies</button><button class="tab" data-v="vAdj">Adjustment Layer</button></nav>
   <span class="project" id="project"></span></header>
 
-<section class="view" id="vProxies">
+<section class="view" id="vSync"><iframe id="app" title="Kickoff"></iframe>
+  <div class="empty" id="noApp" style="display:none"><b>Kickoff isn't installed on this Mac</b>Run the Kickoff installer, then reopen this panel.</div></section>
+
+<section class="view" id="vProxies" style="display:none">
   <div class="tools">
     <button id="make" class="make" style="display:none" title="Renders the missing ones on this Mac or the Razer, then attaches them here.">Create missing proxies</button>
     <button id="find" title="Looks for proxies already on the drive (Proxies folders near the footage), checks every proxy again, and attaches the ones that match">Find &amp; attach</button>
@@ -686,6 +691,177 @@ $("adjGo").onclick = async function () {
   } catch (e) { adjMsg("Something went wrong: " + e); }
   finally { $("adjGo").disabled = false; }
 };
+// ---- Sync tab: the Kickoff window itself, inside the panel ----
+// The window Kickoff's updater keeps in ~/Library/Application Support/Kickoff/ui is copied to
+// ui/panel.html with a small bridge added, and shown in the frame. The bridge stands in for the Mac
+// app (Kickoff.swift): every message the window sends ({cmd: ...}) is handled here with Node, and the
+// answers go back by calling window.Kickoff.<fn>(...) in the frame. Differences from the app: the XML
+// is named after the open Premiere project and imports into it when a run ends, so the window's
+// "XML name" and "Premiere project saves to" are hidden.
+var SUPPORT = path.join(HOME, "Library/Application Support/Kickoff");
+var UI = path.join(SUPPORT, "ui"), HISTORY = path.join(SUPPORT, "history.json"), SETTINGS = path.join(SUPPORT, "settings.json");
+var AUDIO_X = /\.(wav|aif|aiff|bwf|mp3|m4a|flac|aac|caf)$/i, VIDEO_X = /\.(mov|mp4|mxf|m4v|mts|m2ts|avi|mkv|r3d|braw|insv|360|wmv|webm)$/i;
+var EDIT_X = /\.(xml|fcpxml|fcpxmld|drp|prproj)$/i;
+var sync = { proc: null, stopped: false, mode: "auto", rebuild: false, runMode: "", imported: {} };
+var BRIDGE = '<script>(function(){' +
+  'window.webkit={messageHandlers:{kickoff:{postMessage:function(m){parent.postMessage({kickoff:m},"*");}}}};' +
+  'window.addEventListener("message",function(ev){var d=ev.data;if(d&&d.call&&window.Kickoff&&window.Kickoff[d.call])window.Kickoff[d.call].apply(null,d.args||[]);});' +
+  'function paths(e){var p=[],u=e.dataTransfer.getData("text/uri-list")||"";u.split(/\\r?\\n/).forEach(function(l){if(/^file:/.test(l))p.push(decodeURIComponent(l.replace(/^file:\\/\\/(localhost)?/,"")).replace(/\\/$/,""));});' +
+  'if(!p.length)[].forEach.call(e.dataTransfer.files||[],function(f){if(f.path)p.push(f.path);});return p;}' +
+  'document.addEventListener("dragover",function(e){e.preventDefault();parent.postMessage({drag:[true,e.clientX,e.clientY]},"*");});' +
+  'document.addEventListener("dragleave",function(e){if(!e.relatedTarget)parent.postMessage({drag:[false]},"*");});' +
+  'document.addEventListener("drop",function(e){e.preventDefault();parent.postMessage({drop:[paths(e),e.clientX,e.clientY]},"*");});' +
+  '})();<\/script><style>.xname,#destPr,.brand,#intro,.titlebar,main>.foot{display:none!important}.top{justify-content:flex-end!important}main{height:100%!important;padding:8px 24px 6px!important;gap:10px!important}#bStart{padding:11px 20px!important}</style>';
+function appCall(fn) {
+  var f = $("app").contentWindow;
+  if (f) f.postMessage({ call: fn, args: [].slice.call(arguments, 1) }, "*");
+}
+function readJSON(p, d) { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) { return d; } }
+function isUsable(p) {
+  try { return fs.statSync(p).isDirectory() || AUDIO_X.test(p) || VIDEO_X.test(p); } catch (e) { return false; }
+}
+function loadApp() {
+  var src = path.join(UI, "index.html");
+  if (!fs.existsSync(src)) { $("app").style.display = "none"; $("noApp").style.display = "flex"; return; }
+  var html = fs.readFileSync(src, "utf8").replace(/<head>/i, "<head>" + BRIDGE);
+  fs.writeFileSync(path.join(UI, "panel.html"), html);
+  $("app").src = "file://" + encodeURI(path.join(UI, "panel.html")) + "?t=" + Date.now();
+}
+function folderTree(dir, depth) {
+  if (depth >= 4) return [];
+  var out = [];
+  ls(dir).filter(function (e) { return e.isDirectory() && e.name[0] !== "." && !/\.(app|fcpbundle|fcpxmld|bundle|pkg)$/i.test(e.name); })
+    .sort(function (a, b) { return a.name.localeCompare(b.name, undefined, { numeric: true }); })
+    .slice(0, 60).forEach(function (e) {
+      var bin = { name: e.name }, kids = folderTree(path.join(dir, e.name), depth + 1);
+      if (kids.length) bin.children = kids;
+      out.push(bin);
+    });
+  return out;
+}
+function pickFor(target, row) {
+  if (sync.proc) return;
+  var folderOnly = target === "export" || target === "prproj" || target === "template";
+  var files = target === "song" || target === "xml" || target === "convert";
+  var types = target === "song" ? ["wav", "aif", "aiff", "bwf", "mp3", "m4a", "flac", "aac", "caf"]
+    : target === "xml" ? ["xml"] : target === "convert" ? ["xml", "fcpxml", "drp", "prproj"] : null;
+  var title = { song: "Choose the song", footage: "Choose the footage: the shoot folder, a day, cards or clips",
+    export: "Choose the folder the XML goes in", prproj: "Choose the folder the Premiere project goes in",
+    template: "Choose a project folder. Kickoff makes a template from its folders",
+    xml: "Choose your synced sequence XML", convert: "Choose an XML, FCPXML, DaVinci project or Premiere project" }[target] ||
+    "Choose the shoot folder or cards";
+  var multi = target === "footage" || target === "any";
+  var r = window.cep.fs.showOpenDialogEx(multi, !files, title, "", types || undefined);
+  var picked = (r && r.data) || [];
+  if (!picked.length) return;
+  if (target === "template") return appCall("folderTree", path.basename(picked[0]), folderTree(picked[0], 0));
+  if (target === "convert" || target === "xml") return appCall("picked", [picked[0]], target, -1);
+  if (folderOnly) return appCall("picked", [picked[0]], target, row == null ? -1 : row);
+  picked = picked.filter(isUsable);
+  if (target === "any") appCall("add", picked); else appCall("picked", picked, target, row == null ? -1 : row);
+}
+function lines(stream, fn) {
+  var buf = "";
+  stream.setEncoding("utf8");
+  stream.on("data", function (d) {
+    buf += d;
+    var i;
+    while ((i = buf.indexOf("\n")) >= 0) { fn(buf.slice(0, i)); buf = buf.slice(i + 1); }
+  });
+  stream.on("end", function () { if (buf) fn(buf); buf = ""; });
+}
+// a finished main run (not a Slop Cut, Resolve build or Convert): its XML goes into the open project
+async function importXml(xml) {
+  if (!xml || sync.imported[xml] || !fs.existsSync(xml)) return;
+  sync.imported[xml] = 1;
+  await evalHost("kickoffImport(" + JSON.stringify(xml) + ")");
+}
+function setPausedSync(on) {
+  if (!sync.proc) return;
+  try { process.kill(sync.proc.pid, on ? "SIGSTOP" : "SIGCONT"); } catch (e) {}
+  cp.execFile("/usr/bin/pkill", [on ? "-STOP" : "-CONT", "-P", String(sync.proc.pid)], function () {});
+}
+async function runSync(m) {
+  if (sync.proc) return;
+  var paths = m.paths || (m.folder ? [m.folder] : []);
+  if (!paths.length) return;
+  if (m.mode) sync.mode = m.mode;
+  sync.runMode = sync.mode;
+  sync.stopped = false;
+  var name = (m.xmlName || "").trim();
+  if (!/^(slop|slopimport|resolve|convert-)/.test(sync.runMode)) name = String(await evalHost("kickoffProjectName()") || "") || name;
+  appCall("started", paths);
+  var env = Object.assign({}, process.env, {
+    PATH: "/opt/homebrew/bin:/usr/local/bin:" + (process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"),
+    PYTHONUNBUFFERED: "1", KICKOFF_XML_DIR: m.xmlDir || "drive", KICKOFF_NAME: name, KICKOFF_SETTINGS: SETTINGS });
+  var p;
+  try {
+    p = cp.spawn("/bin/bash", [path.join(SUPPORT, "kickoff-gui-run.sh"), "--", sync.mode, sync.rebuild ? "rebuild" : "add"].concat(paths), { env: env });
+  } catch (e) {
+    appCall("log", "error: can't start the engine: " + e.message); appCall("exit", 1); return;
+  }
+  sync.proc = p;
+  // the Mac stays awake while it runs (the engine already runs at low priority)
+  try { cp.spawn("/usr/bin/caffeinate", ["-dimsu", "-w", String(p.pid)], { detached: true, stdio: "ignore" }).unref(); } catch (e) {}
+  lines(p.stdout, function (line) {
+    if (line.indexOf("@@kickoff ") === 0) {
+      var e; try { e = JSON.parse(line.slice(10)); } catch (x) { return; }
+      appCall("event", e);
+      if (e.event === "done" && e.xml && !/^(slop|slopimport|resolve|convert-)/.test(sync.runMode)) importXml(e.xml);
+    } else appCall("log", line);
+  });
+  lines(p.stderr, function (line) { appCall("log", line); });
+  p.on("error", function (e) { appCall("log", "error: can't start the engine: " + e.message); });
+  p.on("close", function (code) {
+    setTimeout(function () {
+      appCall("exit", sync.stopped ? -15 : (code == null ? 1 : code));
+      sync.proc = null;
+    }, 400);
+  });
+}
+window.addEventListener("message", function (ev) {
+  var d = ev.data || {};
+  if (d.drag) return appCall("dragging", d.drag[0], d.drag[1], d.drag[2]);
+  if (d.drop) {
+    var ps = d.drop[0].filter(function (p) { return isUsable(p) || EDIT_X.test(p); });
+    return ps.length && appCall("drop", ps, d.drop[1], d.drop[2]);
+  }
+  var m = d.kickoff;
+  if (!m || !m.cmd) return;
+  switch (m.cmd) {
+    case "ready":
+      appCall("history", readJSON(HISTORY, []));
+      var st = readJSON(SETTINGS, null);
+      if (st) appCall("settings", st);
+      break;
+    case "mode": sync.mode = m.mode || "auto"; break;
+    case "rebuild": sync.rebuild = !!m.on; break;
+    case "pick": pickFor(m.target || "any", m.row); break;
+    case "run": runSync(m); break;
+    case "history-add":
+      if (m.entry) { var h = readJSON(HISTORY, []); h.unshift(m.entry); fs.writeFileSync(HISTORY, JSON.stringify(h.slice(0, 300), null, 1)); }
+      break;
+    case "history-remove":
+      fs.writeFileSync(HISTORY, JSON.stringify(readJSON(HISTORY, []).filter(function (x) { return x.id !== m.id; }), null, 1));
+      appCall("history", readJSON(HISTORY, []));
+      break;
+    case "history-clear": fs.writeFileSync(HISTORY, "[]"); appCall("history", []); break;
+    case "settings":
+      if (m.settings) fs.writeFileSync(SETTINGS, JSON.stringify(m.settings, null, 1));
+      else try { fs.unlinkSync(SETTINGS); } catch (e) {}
+      break;
+    case "stop": sync.stopped = true; setPausedSync(false); if (sync.proc) sync.proc.kill("SIGTERM"); break;
+    case "pause": setPausedSync(true); break;
+    case "resume": setPausedSync(false); break;
+    case "premiere": importXml(m.path); break;              // already in the open project after the run
+    case "makeProject": break;                             // the open project is the project
+    case "revealProject": case "reveal": if (m.path) cp.execFile("/usr/bin/open", ["-R", m.path]); break;
+    case "report": if (m.path) cp.execFile("/usr/bin/open", [m.path], function (err) { if (err) cp.execFile("/usr/bin/open", ["-t", m.path]); }); break;
+    case "scanFolder": if (m.path) appCall("folderTree", path.basename(m.path), folderTree(m.path, 0)); break;
+    case "copy": var pb = cp.spawn("/usr/bin/pbcopy"); pb.stdin.end(m.text || ""); break;
+  }
+});
+loadApp();
 tick();
 setInterval(tick, 10000);
 </script>

@@ -165,3 +165,12 @@ function kickoffPlace(json) {
     }
     return '{"placed":' + placed + ',"color":' + (colored ? 1 : 0) + ',"off":' + off + ',"total":' + job.pieces.length + ',"adj":' + kickoffQ(adj.name) + '}';
 }
+
+// ---- Sync tab (the Kickoff window inside the panel) ----
+// The open project's name (no .prproj), so the XML is named after it, and importing an XML into it.
+function kickoffProjectName() {
+    try { return String(app.project.name).replace(/\.prproj$/i, ""); } catch (e) { return ""; }
+}
+function kickoffImport(path) {
+    try { return app.project.importFiles([path], true, app.project.rootItem, false) ? "1" : "0"; } catch (e) { return "0"; }
+}
