@@ -92,7 +92,7 @@ function kickoffEncode(json, preset) {
 // ---- Kickoff Adjustment Layer ----
 // kickoffTracks(): the active sequence's video tracks (V1 first) and how many clips each holds.
 // kickoffClips(json [track numbers]): every enabled clip on those tracks, times in ticks.
-// kickoffPlace(json {seq, target, pieces:[[startTicks, endTicks]...]}): puts one adjustment layer
+// kickoffPlace(json {seq, target, name, color, pieces:[[startTicks, endTicks]...]}): puts one adjustment layer
 // piece per [start, end] on the target track, which must be empty. The panel works out the pieces.
 function kickoffQ(x) { return '"' + String(x).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'; }
 function kickoffTracks() {
@@ -120,8 +120,8 @@ function kickoffClips(json) {
     }
     return "[" + out.join(",") + "]";
 }
-// The adjustment layer to use: one named "Kickoff Adjustment Layer", else any adjustment layer.
-function kickoffFindAdj() {
+// The adjustment layer to use: one with the chosen name, else any adjustment layer.
+function kickoffFindAdj(want) {
     var named = null, any = null;
     kickoffWalk(app.project.rootItem, function (it) {
         if (named) return;
@@ -131,7 +131,7 @@ function kickoffFindAdj() {
             try { adj = /adjustment layer/i.test(it.name) && !it.getMediaPath() && !it.isSequence(); } catch (e) {}
         }
         if (!adj) return;
-        if (it.name === "Kickoff Adjustment Layer") named = it;
+        if (it.name === want) named = it;
         else if (!any) any = it;
     });
     return named || any;
@@ -143,8 +143,11 @@ function kickoffPlace(json) {
     var tr = seq.videoTracks[job.target - 1];
     if (!tr) return '{"err":"V' + job.target + ' does not exist."}';
     if (tr.clips.numItems) return '{"err":"V' + job.target + ' is not empty. Clear it or pick an empty track."}';
-    var adj = kickoffFindAdj();
+    var name = job.name || "Kickoff Adjustment Layer", adj = kickoffFindAdj(name), colored = 0;
     if (!adj) return '{"err":"noadj"}';
+    // the layer's own project item takes the label first (only when it's the one with this name, so
+    // another adjustment layer isn't recolored); new clips start with their item's label
+    if (adj.name === name) { try { adj.setColorLabel(job.color); colored = 1; } catch (x) {} }
     var placed = 0, off = 0;
     for (var p = 0; p < job.pieces.length; p++) {
         var s = job.pieces[p][0], e = job.pieces[p][1], ti = null;
@@ -154,9 +157,11 @@ function kickoffPlace(json) {
         for (var c = 0; !ti && c < tr.clips.numItems; c++) if (String(tr.clips[c].start.ticks) === String(s)) ti = tr.clips[c];
         if (!ti) continue;
         try { ti.end = kickoffTime(e); } catch (x) {}
-        try { ti.name = "Kickoff Adjustment Layer"; } catch (x) {}
+        try { ti.name = name; } catch (x) {}
+        // and on the clip itself, where this Premiere allows it
+        try { if (ti.setColorLabel) { ti.setColorLabel(job.color); colored++; } } catch (x) {}
         placed++;
         if (String(ti.end.ticks) !== String(e)) off++;
     }
-    return '{"placed":' + placed + ',"off":' + off + ',"total":' + job.pieces.length + ',"adj":' + kickoffQ(adj.name) + '}';
+    return '{"placed":' + placed + ',"color":' + (colored ? 1 : 0) + ',"off":' + off + ',"total":' + job.pieces.length + ',"adj":' + kickoffQ(adj.name) + '}';
 }

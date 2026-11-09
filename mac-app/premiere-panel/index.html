@@ -42,28 +42,67 @@ button:disabled{opacity:.5;cursor:default}
 .choose span{flex:1 1 100%;color:var(--ink)}
 .empty{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:var(--muted);gap:6px}
 .empty b{font:700 16px var(--display);color:var(--ink)}
-select{font:600 12px var(--body);color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 4px}
-#adjFrom label{margin-right:8px;white-space:nowrap}
+.tabs{display:flex;gap:2px;background:var(--panel);border-radius:9px;padding:3px}
+.tab{border:0;border-radius:7px;padding:5px 12px;color:var(--muted)}
+.tab:hover{color:var(--ink)}
+.tab.sel{background:var(--bg);color:var(--accent)}
+.project{text-align:right}
+.view{flex:1;min-height:0;display:flex;flex-direction:column;margin-top:12px}
+.tools{display:flex;gap:8px}
+button.link{border:0;padding:4px 0;color:var(--muted);align-self:flex-start;font-weight:500}
+button.link:hover{color:var(--accent)}
+.form{display:grid;grid-template-columns:auto 1fr;gap:12px 16px;align-items:center;margin-top:4px}
+.field{display:contents}
+.field>label{color:var(--muted);font-size:12px;white-space:nowrap}
+input[type=text]{font:13px var(--body);color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:6px 9px;width:100%;max-width:340px}
+input[type=text]:focus{outline:none;border-color:var(--accent)}
+.swatches{display:flex;flex-wrap:wrap;gap:6px}
+.sw{width:20px;height:20px;border-radius:50%;border:2px solid transparent;padding:0;cursor:pointer}
+.sw.sel{border-color:var(--ink);box-shadow:0 0 0 2px var(--bg) inset}
+.pills{display:flex;flex-wrap:wrap;gap:6px}
+.pill{min-width:40px;padding:5px 9px}
+.pill.sel{background:var(--accent);border-color:var(--accent);color:#17191d}
+.pill.full{opacity:.45}
+.go{display:flex;align-items:center;gap:10px;margin-top:18px}
+button.big{font:700 14px var(--display);background:var(--accent);border-color:var(--accent);color:#17191d;padding:10px 22px;border-radius:9px}
+button.big:hover{color:#17191d;filter:brightness(1.08)}
+.i{width:18px;height:18px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font:600 11px/16px var(--body);text-align:center;cursor:help}
 .foot{color:var(--muted);font-size:11px;margin-top:6px;min-height:14px}
 </style></head>
 <body>
-<header><span class="brand">Kickoff proxies</span><span class="project" id="project"></span>
-  <button id="make" class="make" style="display:none" title="Renders the missing ones on this Mac or the Razer, then attaches them here.">Make missing proxies</button>
-  <button id="find" title="Look for proxies already on the drive (Proxies folders near the footage) and attach the ones that match">Find on drive</button>
-  <button id="again" title="Check every proxy again, e.g. after re-rendering one">Check again</button>
-  <button id="adjBtn" title="Lays an adjustment layer over the cut, split at every edit of the tracks you pick, ready for color">Adjustment layer</button></header>
-<div class="choose" id="adj" style="display:none"><span>Kickoff Adjustment Layer on <select id="adjTo"></select> cut at the edits of <span id="adjFrom" style="flex:none"></span></span>
-  <button id="adjGo" class="make">Make it</button><button id="adjNo">Cancel</button></div>
-<div class="choose" id="choose" style="display:none"><span id="chooseText"></span>
-  <button id="chMac">On the Mac (fast)</button><button id="chRazer">On the Razer (keep editing)</button><button id="chNo">Cancel</button></div>
-<div id="main" style="display:none;flex:1;min-height:0;flex-direction:column">
-  <div class="hero"><span class="count" id="count">0</span><span class="label" id="label">proxies attached</span></div>
-  <div class="bar"><div class="fill" id="fill"></div></div>
-  <div class="chips" id="chips"></div>
-  <div class="list" id="list"></div>
-</div>
-<div class="empty" id="empty"><b>No proxies yet</b>Proxies already on the drive: press Find on drive.<br>New ones: turn on Settings &gt; Proxies in Kickoff, and each is attached as the Razer finishes it.</div>
-<div class="foot" id="foot"></div>
+<header><span class="brand">Kickoff</span>
+  <nav class="tabs"><button class="tab sel" data-v="vProxies">Proxies</button><button class="tab" data-v="vAdj">Adjustment Layer</button></nav>
+  <span class="project" id="project"></span></header>
+
+<section class="view" id="vProxies">
+  <div class="tools">
+    <button id="make" class="make" style="display:none" title="Renders the missing ones on this Mac or the Razer, then attaches them here.">Create missing proxies</button>
+    <button id="find" title="Looks for proxies already on the drive (Proxies folders near the footage), checks every proxy again, and attaches the ones that match">Find &amp; attach</button>
+  </div>
+  <div class="choose" id="choose" style="display:none"><span id="chooseText"></span>
+    <button id="chMac">On the Mac (fast)</button><button id="chRazer">On the Razer (keep editing)</button><button id="chNo">Cancel</button></div>
+  <div id="main" style="display:none;flex:1;min-height:0;flex-direction:column">
+    <div class="hero"><span class="count" id="count">0</span><span class="label" id="label">proxies attached</span></div>
+    <div class="bar"><div class="fill" id="fill"></div></div>
+    <div class="chips" id="chips"></div>
+    <button id="showList" class="link">Show every clip</button>
+    <div class="list" id="list" style="display:none"></div>
+  </div>
+  <div class="empty" id="empty"><b>No proxies yet</b>Proxies already on the drive: press Find &amp; attach.<br>New ones: turn on Settings &gt; Proxies in Kickoff, and each is attached as it finishes.</div>
+  <div class="foot" id="foot"></div>
+</section>
+
+<section class="view" id="vAdj" style="display:none">
+  <div class="form">
+    <div class="field"><label>Name</label><input id="adjName" type="text" spellcheck="false"></div>
+    <div class="field"><label>Label color</label><div class="swatches" id="adjColor"></div></div>
+    <div class="field"><label>Goes on</label><div class="pills" id="adjTo"></div></div>
+    <div class="field"><label>Cuts at the edits of</label><div class="pills" id="adjFrom"></div></div>
+  </div>
+  <div class="go"><button id="adjGo" class="big">Create adjustment layer</button>
+    <span class="i" title="One piece per shot. The top track wins where clips overlap, gaps stay empty, and through-edits are not cut. The track it goes on must be empty.">i</span></div>
+  <div class="foot" id="adjMsg"></div>
+</section>
 <script>
 // Attaches each proxy the Razer finishes to its clip in the open project, once the proxy's length and
 // timecode match the original (a duplicate or cut-short render is never attached). Every 10 s it also
@@ -165,7 +204,7 @@ async function tick() {
             var job = open[k], lj = byId[job.id];
             job.razer = lj ? lj.state : "";
             if (!lj) continue;
-            if (lj.state === "failed" || lj.state === "cancelled") { job.problem = "the Razer couldn't make it" + (lj.error ? " (" + lj.error + ")" : ""); continue; }
+            if (lj.state === "failed" || lj.state === "cancelled") { job.problem = "the Razer couldn't create it" + (lj.error ? " (" + lj.error + ")" : ""); continue; }
             if (lj.state !== "done") { job.stage = lj.n && lj.total ? Math.round(100 * lj.n / lj.total) + "%" : ""; continue; }
             job.proxy = lj.proxy_mac || job.proxy;
             var why = check(job, await probe(job.proxy));
@@ -233,7 +272,7 @@ function render(all, byClip, offline) {
   }).join("");
   $("make").style.display = missing.length ? "" : "none";
   if (!missing.length) $("choose").style.display = "none";     // nothing left to make: drop an open question
-  $("make").textContent = "Make missing proxies (" + missing.length + ")";
+  $("make").textContent = "Create missing proxies (" + missing.length + ")";
   var order = { bad: 0, none: 1, run: 2, on: 3 };
   rows.sort(function (a, b) { return order[a.st] - order[b.st] || a.name.localeCompare(b.name); });
   $("list").innerHTML = rows.map(function (r) {
@@ -360,7 +399,7 @@ async function sendRazer(list, d) {
 async function checkFile(j) {
   var failed = j.proxy + ".failed.txt";
   if (fs.existsSync(failed)) {
-    try { j.problem = "couldn't make it: " + fs.readFileSync(failed, "utf8").trim(); } catch (e) { j.problem = "couldn't make it"; }
+    try { j.problem = "couldn't create it: " + fs.readFileSync(failed, "utf8").trim(); } catch (e) { j.problem = "couldn't create it"; }
     return;
   }
   if (!fs.existsSync(j.proxy)) {
@@ -386,7 +425,7 @@ async function makeMissing() {
   if (!missing.length || busy) return;
   var up = await razerUp(razerBase());
   var bad = missing.filter(function (m) { return m.bad; });
-  $("chooseText").textContent = "Make " + missing.length + " prox" + (missing.length === 1 ? "y" : "ies") + " (" + resFor() + "p ProRes Proxy, in a Proxies folder next to the footage)?" +
+  $("chooseText").textContent = "Create " + missing.length + " prox" + (missing.length === 1 ? "y" : "ies") + " (" + resFor() + "p ProRes Proxy, in a Proxies folder next to the footage)?" +
     (bad.length ? " " + (bad.length === 1 ? "The bad one goes" : "The " + bad.length + " bad ones go") + " to the Trash once its replacement is attached: " +
       bad.map(function (m) { return path.basename(m.bad); }).join(", ") + "." : "");
   $("chRazer").style.display = up ? "" : "none";
@@ -421,7 +460,11 @@ $("chRazer").onclick = function () { doMake("razer"); };
 $("chNo").onclick = function () { $("choose").style.display = "none"; };
 $("make").onclick = makeMissing;
 
-$("again").onclick = function () { force = true; tick(); };
+$("showList").onclick = function () {
+  var open = $("list").style.display === "none";
+  $("list").style.display = open ? "" : "none";
+  this.textContent = open ? "Hide the clips" : "Show every clip";
+};
 
 // ---- proxies that are already on the drive (Media Encoder, an earlier Kickoff, a DIT) ----
 // For every clip in the project with no proxy: look in the Proxies folders near it (a Proxies*
@@ -527,7 +570,7 @@ async function findOnDrive() {
   }
   tick();
 }
-$("find").onclick = findOnDrive;
+$("find").onclick = function () { force = true; findOnDrive(); };
 
 // ---- Kickoff Adjustment Layer ----
 // adjPieces(tracks, frameTicks): tracks are the picked source tracks, bottom first, each a list of
@@ -561,43 +604,86 @@ function thru(p, n, half) {
          Math.abs(n.i - p.o) <= half;
 }
 // end adjPieces
-var adjInfo = null;
-$("adjBtn").onclick = async function () {
-  if ($("adj").style.display !== "none") { $("adj").style.display = "none"; return; }
-  adjInfo = JSON.parse(await evalHost("kickoffTracks()") || "{}");
-  if (adjInfo.err || !adjInfo.tracks) { $("foot").textContent = adjInfo.err || "Open a sequence first."; return; }
-  var n = adjInfo.tracks.length, saved = {};
-  try { saved = JSON.parse(localStorage.adj || "{}"); } catch (e) {}
-  var top = 0; adjInfo.tracks.forEach(function (c, i) { if (c) top = i + 1; });
-  var to = saved.to && saved.to <= n && !adjInfo.tracks[saved.to - 1] ? saved.to : Math.min(top + 1, n);
-  var opts = ""; for (var i = 1; i <= n; i++) opts += '<option value="' + i + '"' + (i === to ? " selected" : "") + ">V" + i + (adjInfo.tracks[i - 1] ? " (not empty)" : "") + "</option>";
-  $("adjTo").innerHTML = opts;
-  var from = saved.from || adjInfo.tracks.map(function (c, i) { return c && i + 1 < to ? i + 1 : 0; }).filter(Boolean);
-  var boxes = ""; for (i = 1; i <= n; i++) if (adjInfo.tracks[i - 1]) boxes += '<label><input type="checkbox" value="' + i + '"' + (from.indexOf(i) >= 0 ? " checked" : "") + ">V" + i + "</label>";
-  $("adjFrom").innerHTML = boxes || "(no clips in this sequence)";
-  $("adj").style.display = "flex";
+// Premiere's label colors, in its own order (setColorLabel index)
+var LABELS = [["Violet","#a593e0"],["Iris","#7a8ce6"],["Caribbean","#2fbfa7"],["Lavender","#e384e3"],["Cerulean","#4fa8e0"],
+  ["Forest","#7fa83a"],["Rose","#f0709a"],["Mango","#f0a14b"],["Purple","#9d4fd9"],["Blue","#3d64d9"],["Teal","#2e9b9b"],
+  ["Magenta","#d9409f"],["Tan","#c9a77b"],["Green","#47b347"],["Brown","#9a6a3c"],["Yellow","#e3d23b"]];
+var adjInfo = null, adj = { name: "Kickoff Adjustment Layer", color: 4, to: 0, from: [] };
+try { Object.assign(adj, JSON.parse(localStorage.adj || "{}")); } catch (e) {}
+function adjSave() { localStorage.adj = JSON.stringify(adj); }
+function adjMsg(t) { $("adjMsg").textContent = t || ""; }
+// tabs: clicking the tab you're on does nothing; the Adjustment Layer tab re-reads the sequence when shown
+[].forEach.call(document.querySelectorAll(".tab"), function (t) {
+  t.onclick = function () {
+    if (t.classList.contains("sel")) return;
+    [].forEach.call(document.querySelectorAll(".tab"), function (x) { x.classList.toggle("sel", x === t); });
+    [].forEach.call(document.querySelectorAll(".view"), function (v) { v.style.display = v.id === t.dataset.v ? "flex" : "none"; });
+    if (t.dataset.v === "vAdj") adjLoad();
+  };
+});
+$("adjName").value = adj.name;
+$("adjName").oninput = function () { adj.name = this.value; adjSave(); };
+$("adjColor").innerHTML = LABELS.map(function (l, i) {
+  return '<button class="sw' + (i === adj.color ? " sel" : "") + '" data-i="' + i + '" title="' + l[0] + '" style="background:' + l[1] + '"></button>';
+}).join("");
+$("adjColor").onclick = function (e) {
+  var b = e.target.closest(".sw"); if (!b) return;
+  adj.color = +b.dataset.i; adjSave();
+  [].forEach.call(this.children, function (x) { x.classList.toggle("sel", x === b); });
 };
-$("adjNo").onclick = function () { $("adj").style.display = "none"; };
+async function adjLoad() {
+  try { adjInfo = JSON.parse(await evalHost("kickoffTracks()") || "{}"); } catch (e) { adjInfo = {}; }
+  if (adjInfo.err || !adjInfo.tracks) { $("adjTo").innerHTML = $("adjFrom").innerHTML = ""; adjMsg(adjInfo.err || "Open a sequence first."); return; }
+  var tr = adjInfo.tracks, n = tr.length, top = 0;
+  tr.forEach(function (c, i) { if (c) top = i + 1; });
+  // the last pick if it still fits this sequence, else the first empty track above the footage
+  if (!(adj.to >= 1 && adj.to <= n && !tr[adj.to - 1])) { adj.to = 0; for (var i = top + 1; i <= n && !adj.to; i++) if (!tr[i - 1]) adj.to = i; }
+  if (!adj.to) for (i = n; i >= 1 && !adj.to; i--) if (!tr[i - 1]) adj.to = i;
+  adj.from = (adj.from || []).filter(function (v) { return v <= n && tr[v - 1] && v !== adj.to; });
+  if (!adj.from.length) adj.from = tr.map(function (c, i) { return c && i + 1 < adj.to ? i + 1 : 0; }).filter(Boolean);
+  adjPills();
+  adjMsg("Sequence: " + adjInfo.name);
+}
+function adjPills() {
+  var tr = adjInfo.tracks, to = "", from = "";
+  for (var i = 1; i <= tr.length; i++) {
+    to += '<button class="pill' + (i === adj.to ? " sel" : "") + (tr[i - 1] ? " full" : "") + '" data-i="' + i + '"' + (tr[i - 1] ? ' disabled title="Has clips on it"' : "") + ">V" + i + "</button>";
+    if (tr[i - 1] && i !== adj.to) from += '<button class="pill' + (adj.from.indexOf(i) >= 0 ? " sel" : "") + '" data-i="' + i + '">V' + i + "</button>";
+  }
+  $("adjTo").innerHTML = to;
+  $("adjFrom").innerHTML = from || '<span class="why">No clips in this sequence.</span>';
+}
+$("adjTo").onclick = function (e) {
+  var b = e.target.closest(".pill"); if (!b || b.disabled) return;
+  adj.to = +b.dataset.i; adj.from = adj.from.filter(function (v) { return v !== adj.to; }); adjSave(); adjPills();
+};
+$("adjFrom").onclick = function (e) {
+  var b = e.target.closest(".pill"); if (!b) return;
+  var v = +b.dataset.i, k = adj.from.indexOf(v);
+  if (k >= 0) adj.from.splice(k, 1); else adj.from.push(v);
+  adjSave(); adjPills();
+};
 $("adjGo").onclick = async function () {
-  var to = +$("adjTo").value, from = [].slice.call($("adjFrom").querySelectorAll("input:checked")).map(function (x) { return +x.value; }).sort(function (a, b) { return a - b; });
-  if (!from.length) { $("foot").textContent = "Pick at least one track to cut from."; return; }
-  if (from.indexOf(to) >= 0) { $("foot").textContent = "The layer can't go on a track it cuts from."; return; }
-  localStorage.adj = JSON.stringify({ to: to, from: from });
-  $("adjGo").disabled = true; $("foot").textContent = "Reading the cut...";
+  if (!adjInfo || !adjInfo.tracks) return adjLoad();
+  var name = (adj.name || "").trim() || "Kickoff Adjustment Layer", from = adj.from.slice().sort(function (a, b) { return a - b; });
+  if (!adj.to) return adjMsg("Pick a track for it to go on.");
+  if (!from.length) return adjMsg("Pick at least one track to cut from.");
+  $("adjGo").disabled = true; adjMsg("Reading the cut...");
   try {
     var tracks = JSON.parse(await evalHost("kickoffClips(" + JSON.stringify(JSON.stringify(from)) + ")"));
     var pieces = adjPieces(tracks, +adjInfo.fr);
-    if (!pieces.length) { $("foot").textContent = "No clips on those tracks."; return; }
-    $("foot").textContent = "Laying " + pieces.length + " pieces on V" + to + "...";
-    var job = JSON.stringify({ seq: adjInfo.seq, target: to, pieces: pieces });
+    if (!pieces.length) return adjMsg("No clips on those tracks.");
+    adjMsg("Laying " + pieces.length + " pieces on V" + adj.to + "...");
+    var job = JSON.stringify({ seq: adjInfo.seq, target: adj.to, pieces: pieces, name: name, color: adj.color });
     var r = JSON.parse(await evalHost("kickoffPlace(" + JSON.stringify(job) + ")") || "{}");
-    if (r.err === "noadj") $("foot").textContent = "No adjustment layer in this project yet: File > New > Adjustment Layer, then press Make it again.";
-    else if (r.err) $("foot").textContent = r.err;
+    if (r.err === "noadj") adjMsg("No adjustment layer in this project yet: File > New > Adjustment Layer, then press Create again.");
+    else if (r.err) adjMsg(r.err);
     else {
-      $("foot").textContent = r.placed + " of " + r.total + " pieces on V" + to + (r.off ? " (" + r.off + " didn't take the right length, check them)" : "") + ".";
-      if (r.placed) $("adj").style.display = "none";
+      var m = (r.placed + " of " + r.total + " pieces on V" + adj.to + "." + (r.off ? " " + r.off + " didn't take the right length, check them." : "") +
+             (r.color ? "" : " The label color didn't take: make a new adjustment layer named “" + name + "” and press Create again."));
+      adjLoad().then(function () { adjMsg(m); });
     }
-  } catch (e) { $("foot").textContent = "Something went wrong: " + e; }
+  } catch (e) { adjMsg("Something went wrong: " + e); }
   finally { $("adjGo").disabled = false; }
 };
 tick();
