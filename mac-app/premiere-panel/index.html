@@ -69,7 +69,9 @@ input[type=text]:focus{outline:none;border-color:var(--accent)}
 .go{display:flex;align-items:center;gap:10px;margin-top:18px}
 button.big{font:700 14px var(--display);background:var(--accent);border-color:var(--accent);color:#17191d;padding:10px 22px;border-radius:9px}
 button.big:hover{color:#17191d;filter:brightness(1.08)}
-.i{width:18px;height:18px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font:600 11px/16px var(--body);text-align:center;cursor:help}
+.i{position:relative;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font:italic 600 11px/16px var(--body);text-align:center;cursor:default;flex:none}
+.i:hover,.i:focus{color:var(--ink);border-color:var(--muted);outline:none}
+.i:hover::after,.i:focus::after{content:attr(data-tip);position:absolute;left:26px;top:50%;transform:translateY(-50%);width:300px;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:9px;color:var(--ink);font:400 12px/1.45 var(--body);text-align:left;z-index:20;box-shadow:0 8px 24px rgba(0,0,0,.4)}
 #vSync{margin:10px -16px -12px}
 #app{flex:1;border:0;width:100%;background:var(--bg)}
 .foot{color:var(--muted);font-size:11px;margin-top:6px;min-height:14px}
@@ -109,7 +111,7 @@ button.big:hover{color:#17191d;filter:brightness(1.08)}
     <div class="field"><label>Cuts at the edits of</label><div class="pills" id="adjFrom"></div></div>
   </div>
   <div class="go"><button id="adjGo" class="big">Create adjustment layer</button>
-    <span class="i" title="One piece per shot. The top track wins where clips overlap, gaps stay empty, and through-edits are not cut. The track it goes on must be empty.">i</span></div>
+    <span class="i" tabindex="0" data-tip="One piece per shot. The top track wins where clips overlap, gaps stay empty, and through-edits are not cut. The track it goes on must be empty.">i</span></div>
   <div class="foot" id="adjMsg"></div>
 </section>
 <script>
@@ -705,6 +707,8 @@ $("adjFrom").onclick = function (e) {
   if (k >= 0) adj.from.splice(k, 1); else adj.from.push(v);
   adjSave(); adjPills();
 };
+// a small project holding one adjustment layer, brought in when the open project has none
+var ADJ_SAVED = path.join(HOME, "Library/Application Support/Kickoff/Adjustment Layer.prproj");
 $("adjGo").onclick = async function () {
   if (!adjInfo || !adjInfo.tracks) return adjLoad();
   var name = (adj.name || "").trim() || "Kickoff Adjustment Layer", from = adj.from.slice().sort(function (a, b) { return a - b; });
@@ -716,13 +720,14 @@ $("adjGo").onclick = async function () {
     var pieces = adjPieces(tracks, +adjInfo.fr);
     if (!pieces.length) return adjMsg("No clips on those tracks.");
     adjMsg("Laying " + pieces.length + " pieces on V" + adj.to + "...");
-    var job = JSON.stringify({ seq: adjInfo.seq, target: adj.to, pieces: pieces, name: name, color: adj.color });
+    var job = JSON.stringify({ seq: adjInfo.seq, target: adj.to, pieces: pieces, name: name, color: adj.color, saved: ADJ_SAVED });
     var r = JSON.parse(await evalHost("kickoffPlace(" + JSON.stringify(job) + ")") || "{}");
-    if (r.err === "noadj") adjMsg("No adjustment layer in this project yet: File > New > Adjustment Layer, then press Create again.");
+    if (r.err === "noadj") adjMsg("No adjustment layer in this project yet: File > New > Adjustment Layer, then press Create again." +
+      " (Once, to skip this for good: make one in a new empty project and save it as " + ADJ_SAVED.replace(HOME, "~") + ".)");
     else if (r.err) adjMsg(r.err);
     else {
       var m = (r.placed + " of " + r.total + " pieces on V" + adj.to + "." + (r.off ? " " + r.off + " didn't take the right length, check them." : "") +
-             (r.color ? "" : " The label color didn't take: make a new adjustment layer named “" + name + "” and press Create again."));
+             (r.color ? "" : " This Premiere wouldn't change the label color."));
       adjLoad().then(function () { adjMsg(m); });
     }
   } catch (e) { adjMsg("Something went wrong: " + e); }
@@ -748,7 +753,22 @@ var BRIDGE = '<script>(function(){' +
   'document.addEventListener("dragover",function(e){e.preventDefault();parent.postMessage({drag:[true,e.clientX,e.clientY]},"*");});' +
   'document.addEventListener("dragleave",function(e){if(!e.relatedTarget)parent.postMessage({drag:[false]},"*");});' +
   'document.addEventListener("drop",function(e){e.preventDefault();parent.postMessage({drop:[paths(e),e.clientX,e.clientY]},"*");});' +
-  '})();<\/script><style>.xname,#destPr,.brand,#intro,.titlebar,main>.foot{display:none!important}.top{justify-content:flex-end!important}main{height:100%!important;padding:8px 24px 6px!important;gap:10px!important}#bStart{padding:11px 20px!important}</style>';
+  '})();<\/script><style>.xname,#destPr,.brand,#intro,.titlebar,main>.foot{display:none!important}.top{justify-content:flex-end!important}main{height:100%!important;padding:8px 24px 6px!important;gap:10px!important}#bStart{padding:11px 20px!important}' +
+  // the panel is short: smaller drop boxes and template rows, so nothing slides under Start
+  '.box{min-height:0!important;padding:14px 16px!important;gap:3px!important}.box .big{display:none!important}.box .t{font-size:17px!important}' +
+  // Premiere\'s browser has no color-mix(): plain colours so the boxes and buttons still show
+  '.box:not(.filled){border-color:rgba(240,150,46,.6);background:rgba(240,150,46,.07)}.box:not(.filled):hover,.box.over{border-color:#f0962e;background:rgba(240,150,46,.15)}' +
+  '#vRun>#hints{flex:none!important;overflow:visible!important}' +
+  '#hints{gap:6px!important}#hints .td{display:none!important}#hints .trow{padding-block:7px!important}#hints .tico{width:28px!important;height:28px!important}' +
+  // Premiere's browser has no popovers, so the info text showed all the time: hidden until the i is hovered or clicked
+  '[popover]{display:none!important;position:fixed!important;z-index:90!important}[popover].kshow{display:block!important}</style>' +
+  '<script>document.addEventListener("DOMContentLoaded",function(){[].forEach.call(document.querySelectorAll("[popovertarget]"),function(b){' +
+  'var t=document.getElementById(b.getAttribute("popovertarget"));if(!t)return;b.removeAttribute("popovertarget");' +
+  'function show(on){t.classList.toggle("kshow",on);b.classList.toggle("on",on);if(!on)return;var r=b.getBoundingClientRect(),w=t.offsetWidth,h=t.offsetHeight;' +
+  't.style.left=Math.max(8,Math.min(innerWidth-w-8,r.right-w))+"px";t.style.top=(r.top-h-8>8?r.top-h-8:Math.min(innerHeight-h-8,r.bottom+8))+"px";}' +
+  'b.addEventListener("mouseenter",function(){show(true);});b.addEventListener("mouseleave",function(){show(false);});' +
+  'b.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();show(!t.classList.contains("kshow"));});' +
+  'document.addEventListener("click",function(){show(false);});});});<\/script>';
 function appCall(fn) {
   var f = $("app").contentWindow;
   if (f) f.postMessage({ call: fn, args: [].slice.call(arguments, 1) }, "*");

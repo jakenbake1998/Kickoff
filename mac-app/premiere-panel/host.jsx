@@ -136,6 +136,38 @@ function kickoffFindAdj(want) {
     });
     return named || any;
 }
+// No adjustment layer in the project: Premiere's scripting can't make one, so bring in the one saved in a
+// small Kickoff project (path), put it in the Adjustment Layers bin (or the top of the project) and drop
+// the bin the import made.
+function kickoffBringAdj(path) {
+    var f = new File(path);
+    if (!f.exists) return null;
+    var root = app.project.rootItem, before = {};
+    for (var i = 0; i < root.children.numItems; i++) before[root.children[i].nodeId] = 1;
+    try { app.project.importFiles([f.fsName], true, root, false); } catch (e) { return null; }
+    var added = [], found = null;
+    for (var j = 0; j < root.children.numItems; j++) if (!before[root.children[j].nodeId]) added.push(root.children[j]);
+    for (var a = 0; a < added.length && !found; a++) {
+        kickoffWalk(added[a], function (it) {
+            if (found) return;
+            var adj = false;
+            try { adj = it.isAdjustmentLayer ? it.isAdjustmentLayer() : false; } catch (e) {}
+            if (!adj) { try { adj = /adjustment layer/i.test(it.name) && !it.getMediaPath() && !it.isSequence(); } catch (e) {} }
+            if (adj) found = it;
+        });
+    }
+    if (!found) return null;
+    var home = null;
+    for (var k = 0; k < root.children.numItems && !home; k++) {
+        var c = root.children[k];
+        if (c.type === ProjectItemType.BIN && /^adjustment layers?$/i.test(c.name)) home = c;
+    }
+    try { found.moveBin(home || root); } catch (e) {}
+    for (var b = 0; b < added.length; b++) {
+        if (added[b].type === ProjectItemType.BIN && added[b].nodeId !== found.nodeId) { try { added[b].deleteBin(); } catch (e) {} }
+    }
+    return found;
+}
 function kickoffTime(ticks) { var t = new Time(); t.ticks = String(ticks); return t; }
 function kickoffPlace(json) {
     var job = eval("(" + json + ")"), seq = app.project.activeSequence;
@@ -143,11 +175,13 @@ function kickoffPlace(json) {
     var tr = seq.videoTracks[job.target - 1];
     if (!tr) return '{"err":"V' + job.target + ' does not exist."}';
     if (tr.clips.numItems) return '{"err":"V' + job.target + ' is not empty. Clear it or pick an empty track."}';
-    var name = job.name || "Kickoff Adjustment Layer", adj = kickoffFindAdj(name), colored = 0;
+    var name = job.name || "Kickoff Adjustment Layer", adj = kickoffFindAdj(name), colored = 0, oldLabel = null;
+    if (!adj && job.saved) adj = kickoffBringAdj(job.saved);
     if (!adj) return '{"err":"noadj"}';
-    // the layer's own project item takes the label first (only when it's the one with this name, so
-    // another adjustment layer isn't recolored); new clips start with their item's label
-    if (adj.name === name) { try { adj.setColorLabel(job.color); colored = 1; } catch (x) {} }
+    // new clips take their project item's label when they're placed, so the item wears the picked
+    // label while the pieces go down, then gets its own label back
+    try { oldLabel = adj.getColorLabel(); } catch (x) {}
+    try { adj.setColorLabel(job.color); colored = 1; } catch (x) {}
     var placed = 0, off = 0;
     for (var p = 0; p < job.pieces.length; p++) {
         var s = job.pieces[p][0], e = job.pieces[p][1], ti = null;
@@ -163,6 +197,7 @@ function kickoffPlace(json) {
         placed++;
         if (String(ti.end.ticks) !== String(e)) off++;
     }
+    if (oldLabel !== null && oldLabel !== job.color) { try { adj.setColorLabel(oldLabel); } catch (x) {} }
     return '{"placed":' + placed + ',"color":' + (colored ? 1 : 0) + ',"off":' + off + ',"total":' + job.pieces.length + ',"adj":' + kickoffQ(adj.name) + '}';
 }
 
