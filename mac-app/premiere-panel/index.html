@@ -48,7 +48,10 @@ button:disabled{opacity:.5;cursor:default}
 .tab.sel{background:var(--bg);color:var(--accent)}
 .project{text-align:right}
 .view{flex:1;min-height:0;display:flex;flex-direction:column;margin-top:12px}
-.tools{display:flex;gap:8px}
+.tools{display:flex;gap:8px;align-items:center}
+.scope{margin-left:auto;display:flex;gap:2px;background:var(--panel);border-radius:8px;padding:2px}
+.scope button{border:0;border-radius:6px;padding:4px 9px;color:var(--muted);font-weight:500}
+.scope button.sel{background:var(--bg);color:var(--accent)}
 button.link{border:0;padding:4px 0;color:var(--muted);align-self:flex-start;font-weight:500}
 button.link:hover{color:var(--accent)}
 .form{display:grid;grid-template-columns:auto 1fr;gap:12px 16px;align-items:center;margin-top:4px}
@@ -83,6 +86,7 @@ button.big:hover{color:#17191d;filter:brightness(1.08)}
   <div class="tools">
     <button id="make" class="make" style="display:none" title="Renders the missing ones on this Mac or the Razer, then attaches them here.">Create missing proxies</button>
     <button id="find" title="Looks for proxies already on the drive (Proxies folders near the footage), checks every proxy again, and attaches the ones that match">Find &amp; attach</button>
+    <span class="scope" id="scope" title="This sequence counts only the clips the open sequence uses, including every angle inside its multicams and nests."><button data-s="seq">This sequence</button><button data-s="all">Whole project</button></span>
   </div>
   <div class="choose" id="choose" style="display:none"><span id="chooseText"></span>
     <button id="chMac">On the Mac (fast)</button><button id="chRazer">On the Razer (keep editing)</button><button id="chNo">Cancel</button></div>
@@ -118,6 +122,18 @@ var HOME = os.homedir(), DIR = path.join(HOME, "Library/Application Support/Kick
 var FONTS = path.join(HOME, "Library/Application Support/Kickoff/ui/fonts");
 var FFPROBE = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"].filter(function (p) { return fs.existsSync(p); })[0];
 var busy = false, force = false, note = null;
+// Proxies tab scope: "seq" = only the clips the open sequence uses (multicam angles and nests included)
+var scope = localStorage.proxyScope === "all" ? "all" : "seq", seqInfo = null;
+function scopeUI() { [].forEach.call($("scope").children, function (b) { b.classList.toggle("sel", b.dataset.s === scope); }); }
+// the set of media paths in scope, or null for the whole project; seqInfo.err when no sequence is open
+async function scopePaths() {
+  seqInfo = null;
+  if (scope !== "seq") return null;
+  try { seqInfo = JSON.parse(await evalHost("kickoffSeqPaths()")); } catch (e) { seqInfo = { err: "noseq" }; }
+  var set = {};
+  (seqInfo.paths || []).forEach(function (p) { set[p] = 1; });
+  return set;
+}
 
 // the window's own fonts, when Kickoff is installed (the panel works without them)
 [["Bricolage Grotesque", "bricolage-700.woff2", "700"], ["IBM Plex Sans", "plex-sans.woff2", "100 700"]].forEach(function (f) {
@@ -238,6 +254,8 @@ async function tick() {
     }
     var all = [];
     try { all = JSON.parse(await evalHost("kickoffAll()")) || []; } catch (e) { all = []; }
+    var only = await scopePaths();
+    if (only) all = all.filter(function (c) { return only[c[0]]; });
     var byClip = {};
     sets.sort(function (a, b) { return a.mtime - b.mtime; }).forEach(function (s) {
       s.d.jobs.forEach(function (j) { byClip[j.clip] = j; });     // the newest set's job wins
@@ -264,11 +282,15 @@ function render(all, byClip, offline) {
     rows.push({ st: st, why: why, name: path.basename(clip), file: file });
   });
   var total = rows.length;
+  var noSeq = scope === "seq" && seqInfo && seqInfo.err;
   $("main").style.display = total ? "flex" : "none";
   $("empty").style.display = total ? "none" : "flex";
+  $("empty").innerHTML = noSeq ? "<b>Open a sequence</b>Click in a timeline, or switch to Whole project." :
+    scope === "seq" && seqInfo ? "<b>No video clips in " + esc(seqInfo.name) + "</b>Switch to Whole project to see every clip." : EMPTY;
   $("project").textContent = projName;
   $("count").innerHTML = n.on + "<small> / " + total + "</small>";
-  $("label").textContent = n.on === total && total ? "proxies attached, all done" : "proxies attached";
+  $("label").textContent = "proxies attached" + (scope === "seq" && seqInfo && seqInfo.name ? " in " + seqInfo.name : "") +
+    (n.on === total && total ? ", all done" : "");
   $("fill").style.width = total ? (100 * n.on / total) + "%" : "0";
   $("fill").className = "fill" + (total && n.on === total ? " done" : "");
   var chips = [["run", n.run, "rendering"], ["bad", n.bad, "refused"], ["wait", n.none, "no proxy"]];
@@ -464,6 +486,16 @@ $("chMac").onclick = function () { doMake("mac"); };
 $("chRazer").onclick = function () { doMake("razer"); };
 $("chNo").onclick = function () { $("choose").style.display = "none"; };
 $("make").onclick = makeMissing;
+var EMPTY = $("empty").innerHTML;
+scopeUI();
+$("scope").onclick = function (e) {
+  var b = e.target.closest ? e.target.closest("button") : null;
+  if (!b || b.dataset.s === scope) return;
+  scope = localStorage.proxyScope = b.dataset.s;
+  $("choose").style.display = "none";            // its count was for the other scope
+  scopeUI();
+  tick();
+};
 
 $("showList").onclick = function () {
   var open = $("list").style.display === "none";
@@ -515,9 +547,14 @@ async function findOnDrive() {
     $("foot").textContent = "Looking for proxies on the drive...";
     var clips = [];
     try { clips = JSON.parse(await evalHost("kickoffNoProxy()")) || []; } catch (e) { clips = []; }
+    var only = await scopePaths();
+    if (only) {
+      if (seqInfo && seqInfo.err) { $("foot").textContent = "Open a sequence first, or switch to Whole project."; return; }
+      clips = clips.filter(function (c) { return only[c]; });
+    }
     var proj = "";
     try { proj = (await evalHost("app.project.name")).replace(/\.prproj$/i, ""); } catch (e) {}
-    if (!clips.length) { $("foot").textContent = "Every clip in this project already has a proxy."; return; }
+    if (!clips.length) { $("foot").textContent = "Every clip in this " + (only ? "sequence" : "project") + " already has a proxy."; return; }
     var cache = { dirs: {}, files: {}, probes: {}, used: {} }, jobs = [], n = 0;
     for (var i = 0; i < clips.length; i++) {
       var clip = clips[i], cands = [];

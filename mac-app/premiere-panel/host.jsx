@@ -174,3 +174,40 @@ function kickoffProjectName() {
 function kickoffImport(path) {
     try { return app.project.importFiles([path], true, app.project.rootItem, false) ? "1" : "0"; } catch (e) { return "0"; }
 }
+
+// ---- Proxies for the open sequence ----
+// kickoffSeqPaths(): the media path of every clip the active sequence uses, looking inside multicams
+// and nests (any clip whose item is itself a sequence is opened too, every angle, enabled or not).
+function kickoffSeqPaths() {
+    var seq = app.project ? app.project.activeSequence : null;
+    if (!seq) return '{"err":"noseq"}';
+    var bySeqItem = {}, seen = {}, done = {}, out = [];
+    for (var i = 0; i < app.project.sequences.numSequences; i++) {
+        var s = app.project.sequences[i];
+        try { bySeqItem[s.projectItem.nodeId] = s; } catch (e) {}
+    }
+    function walk(sq) {
+        if (!sq || done[sq.sequenceID]) return;
+        done[sq.sequenceID] = 1;
+        var groups = [sq.videoTracks, sq.audioTracks];
+        for (var g = 0; g < groups.length; g++) {
+            for (var t = 0; t < groups[g].numTracks; t++) {
+                var cl = groups[g][t].clips;
+                for (var c = 0; c < cl.numItems; c++) {
+                    var pi = null;
+                    try { pi = cl[c].projectItem; } catch (e) {}
+                    if (!pi) continue;
+                    var nested = null;
+                    try { nested = bySeqItem[pi.nodeId] || null; } catch (e) {}
+                    if (!nested) { try { if (pi.isSequence()) nested = bySeqItem[pi.nodeId]; } catch (e) {} }
+                    if (nested) { walk(nested); continue; }
+                    var p = "";
+                    try { p = pi.getMediaPath() || ""; } catch (e) {}
+                    if (p && !seen[p]) { seen[p] = 1; out.push(kickoffQ(p)); }
+                }
+            }
+        }
+    }
+    walk(seq);
+    return '{"id":' + kickoffQ(seq.sequenceID) + ',"name":' + kickoffQ(seq.name) + ',"paths":[' + out.join(",") + ']}';
+}
