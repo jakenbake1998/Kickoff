@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 from scipy import ndimage, signal
 
-VERSION = "0.5.76"
+VERSION = "0.5.77"
 
 # ---------------------------------------------------------------- constants
 
@@ -92,6 +92,22 @@ DEFAULT_BINS = [
     {"name": "Adjustment Layers", "role": "adjustment"},
     {"name": "Footage", "role": "footage"},
     {"name": "Sequence", "children": [
+        {"name": "1. Breakup", "role": "breakup"},
+        {"name": "2. Sync", "role": "sync", "children": [
+            {"name": "Synced", "role": "synced"},
+            {"name": "Synced Condensed", "role": "condensed"}]},
+        {"name": "3. Selects"},
+        {"name": "4. Edit", "role": "edit", "children": [
+            {"name": "1. Past"}, {"name": "2. Working"}, {"name": "3. Final"}]}]},
+    {"name": "Audio", "children": [
+        {"name": "Music", "role": "music"},
+        {"name": "SFX", "role": "sfx"},
+        {"name": "Captured", "role": "captured"}]},
+]
+OLD_DEFAULT_BINS = [
+    {"name": "Adjustment Layers", "role": "adjustment"},
+    {"name": "Footage", "role": "footage"},
+    {"name": "Sequence", "children": [
         {"name": "Breakup", "role": "breakup"},
         {"name": "Sync", "role": "sync", "children": [
             {"name": "Synced", "role": "synced"},
@@ -110,7 +126,7 @@ DEFAULT_SETTINGS = {
     "labels": {},                   # camera letter -> Premiere label name (unset: CAMERA_LABELS)
     "bins": DEFAULT_BINS,
     "names": {"breakup": "{cam}_Breakup", "synced": "{cam}_Synced", "condensed": "{cam}_Synced_Condensed",
-              "nested": "{project}_CamsNested", "edit": "{project}_Edit", "slowmo": "{project}_Slow Motion",
+              "nested": "{project}_CamsNested", "final": "{project}_Final", "edit": "{project}_Edit", "slowmo": "{project}_Slow Motion",
               "broll": "B Roll_Breakup"},
     "unsynced": True,               # clips that didn't sync go on V1 after the song
     "unsynced_gap_s": 60,
@@ -191,7 +207,8 @@ def load_settings(path):
         roles = bin_roles(cb)
         if all(r in roles for r in REQUIRED_ROLES) and \
                 sum(1 for _ in _walk(cb) if _.get("role")) == len(roles):       # each role once
-            s["bins"] = cb
+            # the Default bins before 0.5.77 (no numbers): a settings file saved with them gets today's Default
+            s["bins"] = DEFAULT_BINS if cb == OLD_DEFAULT_BINS else cb
         else:
             log("Settings: the bin list is missing a bin Kickoff fills, so the default bins are used")
     if isinstance(user.get("names"), dict):
@@ -3699,8 +3716,9 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
         maybe_empty(condb, where["condensed"][1], bool(nests))
 
     edit = where["edit"][0]
-    # the _Edit sequence goes in Edit > Working when that bin is there (else in Edit itself)
-    working = next((ch for ch, here in empty_ok if here == where["edit"][1] + ["Working"]), edit)
+    # the _Edit sequence goes in Edit > Working ("2. Working" counts) when that bin is there (else in Edit)
+    working = next((ch for ch, here in empty_ok if here[:-1] == where["edit"][1]
+                    and re.sub(r"^\d+\.\s*", "", here[-1]).lower() == "working"), edit)
     if nests:
         # every camera's condensed sync sequence nested on its own track (A on V1, B on V2...), song on A1:
         # "<name>_CamsNested" in the Sync bin, and the same again as the Edit sequence Jake
@@ -3717,6 +3735,8 @@ def build_project(name, clips, cams, seq_fps, preroll, master_media, audio_bins,
             return entries
         xw.sequence(condb if condb is not None else syncb, seq_name("nested", project=name), seq_fps, w, h, tc,
                     all_cams())
+        # "<name>_Final" in the Sync bin itself: the same nest of every camera, the sync Jake signs off on
+        xw.sequence(syncb, seq_name("final", project=name), seq_fps, w, h, tc, all_cams())
         xw.sequence(working, seq_name("edit", project=name), seq_fps, w, h, tc, all_cams())
     elif setup_only or narr:
         # an empty sequence to cut in, at the delivery size, starting at 01:00:00:00
