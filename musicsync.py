@@ -7098,7 +7098,10 @@ def main(argv=None):
     args.xml_out = xml_folder(args)
     args.out = os.path.abspath(args.out or exports_dir(args.xml_out, args.clips,
                                                        args.name or os.path.basename(args.clips.rstrip("/\\"))))
-    state, restrict = (None, None) if args.rebuild or args.mode == "narrative" else load_state(args, out_given)
+    # Other projects (setup) never uses a song: it always builds the whole project fresh (it only reads
+    # each clip once, so that's quick), never "adding" to an earlier music video run's song (Jake, 2026-11-16)
+    state, restrict = (None, None) if args.rebuild or args.mode in ("narrative", "setup") \
+        else load_state(args, out_given)
     mark_exports(args.out, args.clips)
     project_name = args.name or (state or {}).get("project") or os.path.basename(args.clips.rstrip("/\\")) or "Sync"
 
