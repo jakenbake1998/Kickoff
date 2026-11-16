@@ -1201,18 +1201,16 @@ button:disabled{opacity:.45;cursor:default;filter:none}
     }
     renderStage();
   }
-  // "Name the XML": what the Premiere project file is called (empty: the footage folder's name)
+  // "Project file name": what the Premiere project (and its XML) is called (empty: the footage folder's name)
   function nameField(value, set, dflt) {
     var l = document.createElement("label");
     l.className = "xname";
     var k = document.createElement("span");
-    k.textContent = "XML name";
+    k.textContent = "Project file name";
     var i = document.createElement("input");
     i.type = "text"; i.value = value; i.placeholder = dflt; i.spellcheck = false;
     i.addEventListener("input", function () { set(i.value); });
-    var x = document.createElement("span");
-    x.className = "ext"; x.textContent = ".xml";
-    l.append(k, i, x);
+    l.append(k, i);
     return l;
   }
   var setupName = "";
