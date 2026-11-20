@@ -5701,7 +5701,12 @@ n, proj = 1, None
 while proj is None and n < 50:
     pn = name if n == 1 else "%s %d" % (name, n)
     if pn not in names:
+        # Resolve won't hand back a new project while the open one has unsaved changes (it may make it
+        # anyway): save the open one first, and pick up a project it made without returning
+        pm.SaveProject()
         proj = pm.CreateProject(pn)
+        if proj is None and pn in set(pm.GetProjectListInCurrentFolder() or []):
+            proj = pm.LoadProject(pn)
         if proj is None:
             break
     n += 1
