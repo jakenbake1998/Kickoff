@@ -5632,7 +5632,7 @@ RESOLVE_HEAD = r'''
 import json, os, subprocess, sys, time
 
 def say(**k):
-    sys.stdout.write(json.dumps(k, default=plain) + "\n"); sys.stdout.flush()
+    sys.stdout.write(json.dumps(k, default=str) + "\n"); sys.stdout.flush()
 
 def bye(code):
     sys.stdout.flush(); sys.stderr.flush(); os._exit(code)
