@@ -6100,7 +6100,10 @@ def run_driver(driver, plan, work):
                 err = msg["error"]
             elif "result" in msg:
                 result = msg["result"]
+        tail = [l.strip() for l in pr.stderr.read().splitlines() if l.strip()]
         pr.wait()
+        if result is None and err is None and not nolib and tail:
+            err = "Resolve stopped with: %s" % tail[-1]
         if not nolib:
             break
     if result is None:
